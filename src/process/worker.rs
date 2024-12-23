@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
-use std::os::unix::net::UnixDatagram;
 use std::path::Path;
+use std::{os::unix::net::UnixDatagram, sync::RwLock};
 
 use super::{GpuProcess, GpuResources, ProcessState};
 
@@ -41,6 +41,7 @@ pub struct TensorFusionWorker {
     id: String,
     socket_path: String,
     requested: GpuResources,
+    state: RwLock<ProcessState>,
 }
 
 impl TensorFusionWorker {
@@ -49,6 +50,7 @@ impl TensorFusionWorker {
             id,
             socket_path,
             requested,
+            state: RwLock::new(ProcessState::Running),
         }
     }
 
@@ -71,7 +73,7 @@ impl GpuProcess for TensorFusionWorker {
     }
 
     fn state(&self) -> ProcessState {
-        todo!()
+        self.state.read().expect("poisoned").clone()
     }
 
     fn requested_resources(&self) -> GpuResources {
@@ -82,15 +84,21 @@ impl GpuProcess for TensorFusionWorker {
         todo!()
     }
 
-    fn pause(&mut self) -> Result<()> {
-        Self::send_message(ControlMessageType::Suspend, &self.socket_path)
+    fn pause(&self) -> Result<()> {
+        Self::send_message(ControlMessageType::Suspend, &self.socket_path)?;
+        *self.state.write().expect("poisoned") = ProcessState::Paused;
+        Ok(())
     }
 
-    fn release(&mut self) -> Result<()> {
-        Self::send_message(ControlMessageType::SuspendAndVramReclaim, &self.socket_path)
+    fn release(&self) -> Result<()> {
+        Self::send_message(ControlMessageType::SuspendAndVramReclaim, &self.socket_path)?;
+        *self.state.write().expect("poisoned") = ProcessState::Released;
+        Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
-        Self::send_message(ControlMessageType::Resume, &self.socket_path)
+    fn resume(&self) -> Result<()> {
+        Self::send_message(ControlMessageType::Resume, &self.socket_path)?;
+        *self.state.write().expect("poisoned") = ProcessState::Running;
+        Ok(())
     }
 }

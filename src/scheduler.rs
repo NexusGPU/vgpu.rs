@@ -1,15 +1,13 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::process::{GpuProcess, GpuResources};
+use crate::process::GpuProcess;
 
 pub mod fifo;
 
 /// Scheduling decisions
 #[derive(Debug, Clone)]
 pub enum SchedulingDecision {
-    /// Continue current state
-    Continue,
     /// Pause specified process
     Pause(String),
     /// Pause and release memory of specified process
@@ -25,6 +23,9 @@ pub trait GpuScheduler: Send + Sync {
 
     /// Remove a process from the scheduler
     fn remove_process(&mut self, process_id: &str) -> Result<()>;
+
+    /// Get a process from the scheduler
+    fn get_process(&self, process_id: &str) -> Option<Arc<dyn GpuProcess>>;
 
     /// Execute scheduling decisions
     /// Returns a series of scheduling operations to be executed

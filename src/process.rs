@@ -37,23 +37,25 @@ pub trait GpuProcess: Send + Sync {
     fn current_resources(&self) -> Result<GpuResources>;
 
     /// Pause process (retain memory)
-    fn pause(&mut self) -> Result<()>;
+    fn pause(&self) -> Result<()>;
 
     /// Pause process and release memory
-    fn release(&mut self) -> Result<()>;
+    fn release(&self) -> Result<()>;
 
     /// Resume process execution
-    fn resume(&mut self) -> Result<()>;
+    fn resume(&self) -> Result<()>;
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::sync::RwLock;
+
     use super::*;
 
     // Mock implementation of GpuProcess for testing
     pub(crate) struct MockGpuProcess {
         id: String,
-        state: ProcessState,
+        state: RwLock<ProcessState>,
         requested: GpuResources,
     }
 
@@ -61,7 +63,7 @@ pub(crate) mod tests {
         pub(crate) fn new(id: &str, memory: u64, compute: u32) -> Self {
             Self {
                 id: id.to_string(),
-                state: ProcessState::Running,
+                state: RwLock::new(ProcessState::Running),
                 requested: GpuResources {
                     memory_bytes: memory,
                     compute_percentage: compute,
@@ -76,7 +78,7 @@ pub(crate) mod tests {
         }
 
         fn state(&self) -> ProcessState {
-            self.state.clone()
+            self.state.read().expect("poisoned").clone()
         }
 
         fn requested_resources(&self) -> GpuResources {
@@ -87,18 +89,18 @@ pub(crate) mod tests {
             Ok(self.requested.clone())
         }
 
-        fn pause(&mut self) -> Result<()> {
-            self.state = ProcessState::Paused;
+        fn pause(&self) -> Result<()> {
+            *self.state.write().expect("poisoned") = ProcessState::Paused;
             Ok(())
         }
 
-        fn release(&mut self) -> Result<()> {
-            self.state = ProcessState::Released;
+        fn release(&self) -> Result<()> {
+            *self.state.write().expect("poisoned") = ProcessState::Released;
             Ok(())
         }
 
-        fn resume(&mut self) -> Result<()> {
-            self.state = ProcessState::Running;
+        fn resume(&self) -> Result<()> {
+            *self.state.write().expect("poisoned") = ProcessState::Running;
             Ok(())
         }
     }
@@ -134,7 +136,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_mock_gpu_process_state_transitions() -> Result<()> {
-        let mut process = MockGpuProcess::new("test2", 1024, 50);
+        let process = MockGpuProcess::new("test2", 1024, 50);
 
         // Test pause
         process.pause()?;

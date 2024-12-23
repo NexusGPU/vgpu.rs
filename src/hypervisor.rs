@@ -1,5 +1,12 @@
 use anyhow::Result;
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
 
 use crate::process::GpuProcess;
 use crate::scheduler::{GpuScheduler, SchedulingDecision};
@@ -43,18 +50,23 @@ impl Hypervisor {
             // Apply scheduling decisions
             for decision in decisions {
                 match decision {
-                    SchedulingDecision::Continue => continue,
                     SchedulingDecision::Pause(id) => {
-                        tracing::info!("Pausing process {}", id);
-                        // Actual pause logic to be implemented here
+                        tracing::info!("pausing process {}", id);
+                        if let Some(process) = self.scheduler.get_process(&id) {
+                            process.pause()?;
+                        }
                     }
                     SchedulingDecision::Release(id) => {
-                        tracing::info!("Releasing process {}", id);
-                        // Actual release logic to be implemented here
+                        tracing::info!("releasing process {}", id);
+                        if let Some(process) = self.scheduler.get_process(&id) {
+                            process.release()?;
+                        }
                     }
                     SchedulingDecision::Resume(id) => {
-                        tracing::info!("Resuming process {}", id);
-                        // Actual resume logic to be implemented here
+                        tracing::info!("resuming process {}", id);
+                        if let Some(process) = self.scheduler.get_process(&id) {
+                            process.resume()?;
+                        }
                     }
                 }
             }
@@ -69,12 +81,12 @@ impl Hypervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use crate::process::tests::MockGpuProcess as MockProcess;
+    use std::{collections::HashMap, sync::Mutex};
 
     // Mock scheduler for testing
     struct MockScheduler {
-        processes: Vec<Arc<dyn GpuProcess>>,
+        processes: HashMap<String, Arc<dyn GpuProcess>>,
         schedule_calls: Arc<Mutex<u32>>,
         next_decisions: Arc<Mutex<Vec<Vec<SchedulingDecision>>>>,
     }
@@ -82,14 +94,10 @@ mod tests {
     impl MockScheduler {
         fn new() -> Self {
             Self {
-                processes: Vec::new(),
+                processes: HashMap::new(),
                 schedule_calls: Arc::new(Mutex::new(0)),
                 next_decisions: Arc::new(Mutex::new(Vec::new())),
             }
-        }
-
-        fn get_schedule_calls(&self) -> u32 {
-            *self.schedule_calls.lock().unwrap()
         }
 
         fn set_next_decisions(&self, decisions: Vec<SchedulingDecision>) {
@@ -99,35 +107,36 @@ mod tests {
 
     impl GpuScheduler for MockScheduler {
         fn add_process(&mut self, process: Arc<dyn GpuProcess>) -> Result<()> {
-            self.processes.push(process);
+            self.processes.insert(process.id(), process.clone());
             Ok(())
         }
 
         fn remove_process(&mut self, process_id: &str) -> Result<()> {
-            self.processes.retain(|p| p.id() != process_id);
+            self.processes.remove(process_id);
             Ok(())
         }
 
         fn schedule(&mut self) -> Result<Vec<SchedulingDecision>> {
             let mut calls = self.schedule_calls.lock().unwrap();
             *calls += 1;
-            
+
             let mut decisions = self.next_decisions.lock().unwrap();
             if decisions.is_empty() {
-                Ok(vec![SchedulingDecision::Continue])
+                Ok(vec![])
             } else {
                 Ok(decisions.remove(0))
             }
+        }
+
+        fn get_process(&self, process_id: &str) -> Option<Arc<dyn GpuProcess>> {
+            self.processes.get(process_id).cloned()
         }
     }
 
     #[test]
     fn test_hypervisor_process_management() -> Result<()> {
         let scheduler = MockScheduler::new();
-        let mut hypervisor = Hypervisor::new(
-            Box::new(scheduler),
-            Duration::from_millis(100),
-        );
+        let mut hypervisor = Hypervisor::new(Box::new(scheduler), Duration::from_millis(100));
 
         // Test adding process
         let process = Arc::new(MockProcess::new("test1", 2048, 75));
@@ -143,7 +152,7 @@ mod tests {
     fn test_hypervisor_scheduling_decisions() {
         let scheduler = MockScheduler::new();
         let schedule_calls = scheduler.schedule_calls.clone();
-        
+
         // Create test decisions
         let decisions = vec![
             SchedulingDecision::Pause("test1".to_string()),
@@ -152,13 +161,10 @@ mod tests {
         ];
         scheduler.set_next_decisions(decisions.clone());
 
-        let mut hypervisor = Hypervisor::new(
-            Box::new(scheduler),
-            Duration::from_millis(10),
-        );
+        let mut hypervisor = Hypervisor::new(Box::new(scheduler), Duration::from_millis(10));
 
         let running = hypervisor.running();
-        
+
         // Run hypervisor for a short duration to test scheduling
         let _handle = thread::spawn(move || {
             hypervisor.run().unwrap();
@@ -180,10 +186,7 @@ mod tests {
         let schedule_calls = scheduler.schedule_calls.clone();
 
         let interval = Duration::from_millis(10);
-        let mut hypervisor = Hypervisor::new(
-            Box::new(scheduler),
-            interval,
-        );
+        let mut hypervisor = Hypervisor::new(Box::new(scheduler), interval);
 
         let running = hypervisor.running();
 
@@ -199,6 +202,9 @@ mod tests {
 
         // Verify multiple scheduling calls were made
         let calls = *schedule_calls.lock().unwrap();
-        assert!(calls >= 2, "Scheduler should have been called multiple times");
+        assert!(
+            calls >= 2,
+            "Scheduler should have been called multiple times"
+        );
     }
 }
