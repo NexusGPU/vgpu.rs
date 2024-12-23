@@ -3,6 +3,7 @@ use std::path::Path;
 use std::{os::unix::net::UnixDatagram, sync::RwLock};
 
 use super::{GpuProcess, GpuResources, ProcessState};
+use nvml_wrapper::Device;
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
@@ -37,20 +38,27 @@ impl ControlMessage {
     }
 }
 
-pub struct TensorFusionWorker {
+pub struct TensorFusionWorker<'nvml> {
     id: u32,
     socket_path: String,
     requested: GpuResources,
     state: RwLock<ProcessState>,
+    device: Device<'nvml>,
 }
 
-impl TensorFusionWorker {
-    pub fn new(id: u32, socket_path: String, requested: GpuResources) -> TensorFusionWorker {
+impl<'nvml> TensorFusionWorker<'nvml> {
+    pub fn new(
+        id: u32,
+        socket_path: String,
+        requested: GpuResources,
+        device: Device<'nvml>,
+    ) -> TensorFusionWorker<'nvml> {
         Self {
             id,
             socket_path,
             requested,
             state: RwLock::new(ProcessState::Running),
+            device,
         }
     }
 
@@ -67,7 +75,7 @@ impl TensorFusionWorker {
     }
 }
 
-impl GpuProcess for TensorFusionWorker {
+impl<'nvml> GpuProcess for TensorFusionWorker<'nvml> {
     fn id(&self) -> u32 {
         self.id
     }
@@ -81,7 +89,15 @@ impl GpuProcess for TensorFusionWorker {
     }
 
     fn current_resources(&self) -> Result<GpuResources> {
-        todo!()
+        // Get memory info
+        let memory_info = self.device.memory_info()?;
+        // Get utilization rates
+        let utilization = self.device.utilization_rates()?;
+
+        Ok(GpuResources {
+            memory_bytes: memory_info.used,
+            compute_percentage: utilization.gpu as u32,
+        })
     }
 
     fn pause(&self) -> Result<()> {
