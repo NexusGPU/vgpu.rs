@@ -1,0 +1,9 @@
+[package]
+name = "tensor-fusion-hypervisor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nvml-wrapper = "0.10.0"
+anyhow = "1.0"
+tracing = "0.1"
