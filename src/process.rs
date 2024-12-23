@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+mod worker;
+
 /// GPU resource requirements
 #[derive(Debug, Clone)]
 pub struct GpuResources {
