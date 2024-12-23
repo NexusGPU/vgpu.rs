@@ -7,7 +7,7 @@ use super::{GpuScheduler, SchedulingDecision};
 
 /// Simple FIFO scheduler implementation
 pub struct FifoScheduler {
-    processes: HashMap<String, Arc<dyn GpuProcess>>,
+    processes: HashMap<u32, Arc<dyn GpuProcess>>,
     gpu_limit: GpuResources,
 }
 
@@ -26,13 +26,13 @@ impl GpuScheduler for FifoScheduler {
         Ok(())
     }
 
-    fn remove_process(&mut self, process_id: &str) -> Result<()> {
-        self.processes.remove(process_id);
+    fn remove_process(&mut self, process_id: u32) -> Result<()> {
+        self.processes.remove(&process_id);
         Ok(())
     }
 
-    fn get_process(&self, process_id: &str) -> Option<Arc<dyn GpuProcess>> {
-        self.processes.get(process_id).cloned()
+    fn get_process(&self, process_id: u32) -> Option<Arc<dyn GpuProcess>> {
+        self.processes.get(&process_id).cloned()
     }
 
     fn schedule(&mut self) -> Result<Vec<SchedulingDecision>> {

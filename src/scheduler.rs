@@ -9,11 +9,11 @@ pub mod fifo;
 #[derive(Debug, Clone)]
 pub enum SchedulingDecision {
     /// Pause specified process
-    Pause(String),
+    Pause(u32),
     /// Pause and release memory of specified process
-    Release(String),
+    Release(u32),
     /// Resume specified process
-    Resume(String),
+    Resume(u32),
 }
 
 /// Trait for GPU scheduler
@@ -22,10 +22,10 @@ pub trait GpuScheduler: Send + Sync {
     fn add_process(&mut self, process: Arc<dyn GpuProcess>) -> Result<()>;
 
     /// Remove a process from the scheduler
-    fn remove_process(&mut self, process_id: &str) -> Result<()>;
+    fn remove_process(&mut self, process_id: u32) -> Result<()>;
 
     /// Get a process from the scheduler
-    fn get_process(&self, process_id: &str) -> Option<Arc<dyn GpuProcess>>;
+    fn get_process(&self, process_id: u32) -> Option<Arc<dyn GpuProcess>>;
 
     /// Execute scheduling decisions
     /// Returns a series of scheduling operations to be executed

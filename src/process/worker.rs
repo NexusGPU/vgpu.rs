@@ -38,14 +38,14 @@ impl ControlMessage {
 }
 
 pub struct TensorFusionWorker {
-    id: String,
+    id: u32,
     socket_path: String,
     requested: GpuResources,
     state: RwLock<ProcessState>,
 }
 
 impl TensorFusionWorker {
-    pub fn new(id: String, socket_path: String, requested: GpuResources) -> TensorFusionWorker {
+    pub fn new(id: u32, socket_path: String, requested: GpuResources) -> TensorFusionWorker {
         Self {
             id,
             socket_path,
@@ -68,8 +68,8 @@ impl TensorFusionWorker {
 }
 
 impl GpuProcess for TensorFusionWorker {
-    fn id(&self) -> String {
-        self.id.clone()
+    fn id(&self) -> u32 {
+        self.id
     }
 
     fn state(&self) -> ProcessState {

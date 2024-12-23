@@ -32,7 +32,7 @@ impl Hypervisor {
     }
 
     /// Remove a process from hypervisor
-    pub fn remove_process(&mut self, process_id: &str) -> Result<()> {
+    pub fn remove_process(&mut self, process_id: u32) -> Result<()> {
         self.scheduler.remove_process(process_id)
     }
 
@@ -52,19 +52,19 @@ impl Hypervisor {
                 match decision {
                     SchedulingDecision::Pause(id) => {
                         tracing::info!("pausing process {}", id);
-                        if let Some(process) = self.scheduler.get_process(&id) {
+                        if let Some(process) = self.scheduler.get_process(id) {
                             process.pause()?;
                         }
                     }
                     SchedulingDecision::Release(id) => {
                         tracing::info!("releasing process {}", id);
-                        if let Some(process) = self.scheduler.get_process(&id) {
+                        if let Some(process) = self.scheduler.get_process(id) {
                             process.release()?;
                         }
                     }
                     SchedulingDecision::Resume(id) => {
                         tracing::info!("resuming process {}", id);
-                        if let Some(process) = self.scheduler.get_process(&id) {
+                        if let Some(process) = self.scheduler.get_process(id) {
                             process.resume()?;
                         }
                     }
@@ -86,7 +86,7 @@ mod tests {
 
     // Mock scheduler for testing
     struct MockScheduler {
-        processes: HashMap<String, Arc<dyn GpuProcess>>,
+        processes: HashMap<u32, Arc<dyn GpuProcess>>,
         schedule_calls: Arc<Mutex<u32>>,
         next_decisions: Arc<Mutex<Vec<Vec<SchedulingDecision>>>>,
     }
@@ -111,8 +111,8 @@ mod tests {
             Ok(())
         }
 
-        fn remove_process(&mut self, process_id: &str) -> Result<()> {
-            self.processes.remove(process_id);
+        fn remove_process(&mut self, process_id: u32) -> Result<()> {
+            self.processes.remove(&process_id);
             Ok(())
         }
 
@@ -128,8 +128,8 @@ mod tests {
             }
         }
 
-        fn get_process(&self, process_id: &str) -> Option<Arc<dyn GpuProcess>> {
-            self.processes.get(process_id).cloned()
+        fn get_process(&self, process_id: u32) -> Option<Arc<dyn GpuProcess>> {
+            self.processes.get(&process_id).cloned()
         }
     }
 
@@ -139,11 +139,11 @@ mod tests {
         let mut hypervisor = Hypervisor::new(Box::new(scheduler), Duration::from_millis(100));
 
         // Test adding process
-        let process = Arc::new(MockProcess::new("test1", 2048, 75));
+        let process = Arc::new(MockProcess::new(1, 2048, 75));
         hypervisor.add_process(process.clone())?;
 
         // Test removing process
-        hypervisor.remove_process(&process.id())?;
+        hypervisor.remove_process(process.id())?;
 
         Ok(())
     }
@@ -155,9 +155,9 @@ mod tests {
 
         // Create test decisions
         let decisions = vec![
-            SchedulingDecision::Pause("test1".to_string()),
-            SchedulingDecision::Release("test2".to_string()),
-            SchedulingDecision::Resume("test3".to_string()),
+            SchedulingDecision::Pause(1),
+            SchedulingDecision::Release(2),
+            SchedulingDecision::Resume(3),
         ];
         scheduler.set_next_decisions(decisions.clone());
 

@@ -25,7 +25,7 @@ pub enum ProcessState {
 /// Trait for GPU processes
 pub trait GpuProcess: Send + Sync {
     /// Get process ID
-    fn id(&self) -> String;
+    fn id(&self) -> u32;
 
     /// Get current process state
     fn state(&self) -> ProcessState;
@@ -54,15 +54,15 @@ pub(crate) mod tests {
 
     // Mock implementation of GpuProcess for testing
     pub(crate) struct MockGpuProcess {
-        id: String,
+        id: u32,
         state: RwLock<ProcessState>,
         requested: GpuResources,
     }
 
     impl MockGpuProcess {
-        pub(crate) fn new(id: &str, memory: u64, compute: u32) -> Self {
+        pub(crate) fn new(id: u32, memory: u64, compute: u32) -> Self {
             Self {
-                id: id.to_string(),
+                id,
                 state: RwLock::new(ProcessState::Running),
                 requested: GpuResources {
                     memory_bytes: memory,
@@ -73,8 +73,8 @@ pub(crate) mod tests {
     }
 
     impl GpuProcess for MockGpuProcess {
-        fn id(&self) -> String {
-            self.id.clone()
+        fn id(&self) -> u32 {
+            self.id
         }
 
         fn state(&self) -> ProcessState {
@@ -125,8 +125,8 @@ pub(crate) mod tests {
 
     #[test]
     fn test_mock_gpu_process_basic() {
-        let process = MockGpuProcess::new("test1", 2048, 75);
-        assert_eq!(process.id(), "test1");
+        let process = MockGpuProcess::new(1, 2048, 75);
+        assert_eq!(process.id(), 1);
         assert_eq!(process.state(), ProcessState::Running);
 
         let resources = process.requested_resources();
@@ -136,7 +136,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_mock_gpu_process_state_transitions() -> Result<()> {
-        let process = MockGpuProcess::new("test2", 1024, 50);
+        let process = MockGpuProcess::new(2, 1024, 50);
 
         // Test pause
         process.pause()?;
