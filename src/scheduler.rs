@@ -19,10 +19,10 @@ pub enum SchedulingDecision {
 /// Trait for GPU scheduler
 pub trait GpuScheduler: Send + Sync {
     /// Add a new process to the scheduler
-    fn add_process(&mut self, process: Arc<dyn GpuProcess>) -> Result<()>;
+    fn add_process(&mut self, process: Arc<dyn GpuProcess>);
 
     /// Remove a process from the scheduler
-    fn remove_process(&mut self, process_id: u32) -> Result<()>;
+    fn remove_process(&mut self, process_id: u32);
 
     /// Get a process from the scheduler
     fn get_process(&self, process_id: u32) -> Option<Arc<dyn GpuProcess>>;
