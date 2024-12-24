@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::{os::unix::net::UnixDatagram, sync::RwLock};
 
 use super::{GpuProcess, GpuResources, ProcessState};
-use nvml_wrapper::Device;
+use nvml_wrapper::Nvml;
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
@@ -38,34 +39,34 @@ impl ControlMessage {
     }
 }
 
-pub struct TensorFusionWorker<'nvml> {
+pub struct TensorFusionWorker {
     id: u32,
-    socket_path: String,
+    socket_path: PathBuf,
     requested: GpuResources,
     state: RwLock<ProcessState>,
-    device: Device<'nvml>,
+    nvml: Arc<Nvml>,
 }
 
-impl<'nvml> TensorFusionWorker<'nvml> {
+impl TensorFusionWorker {
     pub fn new(
         id: u32,
-        socket_path: String,
+        socket_path: PathBuf,
         requested: GpuResources,
-        device: Device<'nvml>,
-    ) -> TensorFusionWorker<'nvml> {
+        nvml: Arc<Nvml>,
+    ) -> TensorFusionWorker {
         Self {
             id,
             socket_path,
             requested,
             state: RwLock::new(ProcessState::Running),
-            device,
+            nvml,
         }
     }
 
-    fn send_message(message_type: ControlMessageType, socket_path: &str) -> Result<()> {
+    fn send_message(message_type: ControlMessageType, socket_path: &Path) -> Result<()> {
         let message = ControlMessage::new(message_type);
         let socket = UnixDatagram::unbound()?;
-        socket.connect(Path::new(socket_path))?;
+        socket.connect(socket_path)?;
         let message_bytes = message.as_bytes();
 
         match socket.send(message_bytes) {
@@ -75,7 +76,7 @@ impl<'nvml> TensorFusionWorker<'nvml> {
     }
 }
 
-impl<'nvml> GpuProcess for TensorFusionWorker<'nvml> {
+impl GpuProcess for TensorFusionWorker {
     fn id(&self) -> u32 {
         self.id
     }
@@ -89,14 +90,15 @@ impl<'nvml> GpuProcess for TensorFusionWorker<'nvml> {
     }
 
     fn current_resources(&self) -> Result<GpuResources> {
+        let dev = self.nvml.device_by_index(0)?;
         // Get memory info
-        let memory_info = self.device.memory_info()?;
+        let memory_info = dev.memory_info()?;
         // Get utilization rates
-        let utilization = self.device.utilization_rates()?;
+        let utilization = dev.utilization_rates()?;
 
         Ok(GpuResources {
             memory_bytes: memory_info.used,
-            compute_percentage: utilization.gpu as u32,
+            compute_percentage: utilization.gpu,
         })
     }
 

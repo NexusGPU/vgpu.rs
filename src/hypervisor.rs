@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, RwLock,
     },
     thread,
     time::Duration,
@@ -12,13 +12,13 @@ use crate::process::GpuProcess;
 use crate::scheduler::{GpuScheduler, SchedulingDecision};
 
 pub struct Hypervisor {
-    scheduler: Box<dyn GpuScheduler>,
+    scheduler: Box<RwLock<dyn GpuScheduler>>,
     scheduling_interval: Duration,
     running: Arc<AtomicBool>,
 }
 
 impl Hypervisor {
-    pub fn new(scheduler: Box<dyn GpuScheduler>, scheduling_interval: Duration) -> Self {
+    pub fn new(scheduler: Box<RwLock<dyn GpuScheduler>>, scheduling_interval: Duration) -> Self {
         Self {
             scheduler,
             scheduling_interval,
@@ -27,13 +27,19 @@ impl Hypervisor {
     }
 
     /// Add a new process to hypervisor
-    pub fn add_process(&mut self, process: Arc<dyn GpuProcess>) -> Result<()> {
-        self.scheduler.add_process(process)
+    pub fn add_process(&self, process: Arc<dyn GpuProcess>) {
+        self.scheduler
+            .write()
+            .expect("poisoned")
+            .add_process(process);
     }
 
     /// Remove a process from hypervisor
-    pub fn remove_process(&mut self, process_id: u32) -> Result<()> {
-        self.scheduler.remove_process(process_id)
+    pub fn remove_process(&self, process_id: u32) {
+        self.scheduler
+            .write()
+            .expect("poisoned")
+            .remove_process(process_id);
     }
 
     /// Get the running flag for stopping the scheduler
@@ -42,29 +48,35 @@ impl Hypervisor {
     }
 
     /// Start the scheduling loop
-    pub fn run(&mut self) -> Result<()> {
+    pub fn run(&self) -> Result<()> {
         while self.running.load(Ordering::SeqCst) {
             // Execute scheduling decisions
-            let decisions = self.scheduler.schedule()?;
+            let decisions = self.scheduler.write().expect("poisoned").schedule()?;
 
             // Apply scheduling decisions
             for decision in decisions {
                 match decision {
                     SchedulingDecision::Pause(id) => {
                         tracing::info!("pausing process {}", id);
-                        if let Some(process) = self.scheduler.get_process(id) {
+                        if let Some(process) =
+                            self.scheduler.read().expect("poisoned").get_process(id)
+                        {
                             process.pause()?;
                         }
                     }
                     SchedulingDecision::Release(id) => {
                         tracing::info!("releasing process {}", id);
-                        if let Some(process) = self.scheduler.get_process(id) {
+                        if let Some(process) =
+                            self.scheduler.read().expect("poisoned").get_process(id)
+                        {
                             process.release()?;
                         }
                     }
                     SchedulingDecision::Resume(id) => {
                         tracing::info!("resuming process {}", id);
-                        if let Some(process) = self.scheduler.get_process(id) {
+                        if let Some(process) =
+                            self.scheduler.read().expect("poisoned").get_process(id)
+                        {
                             process.resume()?;
                         }
                     }
@@ -106,14 +118,12 @@ mod tests {
     }
 
     impl GpuScheduler for MockScheduler {
-        fn add_process(&mut self, process: Arc<dyn GpuProcess>) -> Result<()> {
+        fn add_process(&mut self, process: Arc<dyn GpuProcess>) {
             self.processes.insert(process.id(), process.clone());
-            Ok(())
         }
 
-        fn remove_process(&mut self, process_id: u32) -> Result<()> {
+        fn remove_process(&mut self, process_id: u32) {
             self.processes.remove(&process_id);
-            Ok(())
         }
 
         fn schedule(&mut self) -> Result<Vec<SchedulingDecision>> {
@@ -134,18 +144,17 @@ mod tests {
     }
 
     #[test]
-    fn test_hypervisor_process_management() -> Result<()> {
+    fn test_hypervisor_process_management() {
         let scheduler = MockScheduler::new();
-        let mut hypervisor = Hypervisor::new(Box::new(scheduler), Duration::from_millis(100));
+        let hypervisor =
+            Hypervisor::new(Box::new(RwLock::new(scheduler)), Duration::from_millis(100));
 
         // Test adding process
         let process = Arc::new(MockProcess::new(1, 2048, 75));
-        hypervisor.add_process(process.clone())?;
+        hypervisor.add_process(process.clone());
 
         // Test removing process
-        hypervisor.remove_process(process.id())?;
-
-        Ok(())
+        hypervisor.remove_process(process.id());
     }
 
     #[test]
@@ -161,7 +170,8 @@ mod tests {
         ];
         scheduler.set_next_decisions(decisions.clone());
 
-        let mut hypervisor = Hypervisor::new(Box::new(scheduler), Duration::from_millis(10));
+        let hypervisor =
+            Hypervisor::new(Box::new(RwLock::new(scheduler)), Duration::from_millis(10));
 
         let running = hypervisor.running();
 
@@ -186,7 +196,7 @@ mod tests {
         let schedule_calls = scheduler.schedule_calls.clone();
 
         let interval = Duration::from_millis(10);
-        let mut hypervisor = Hypervisor::new(Box::new(scheduler), interval);
+        let hypervisor = Hypervisor::new(Box::new(RwLock::new(scheduler)), interval);
 
         let running = hypervisor.running();
 

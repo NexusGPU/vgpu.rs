@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-mod worker;
+pub(crate) mod worker;
 
 /// GPU resource requirements
 #[derive(Debug, Clone)]

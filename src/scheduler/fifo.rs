@@ -21,14 +21,12 @@ impl FifoScheduler {
 }
 
 impl GpuScheduler for FifoScheduler {
-    fn add_process(&mut self, process: Arc<dyn GpuProcess>) -> Result<()> {
+    fn add_process(&mut self, process: Arc<dyn GpuProcess>) {
         self.processes.insert(process.id(), process);
-        Ok(())
     }
 
-    fn remove_process(&mut self, process_id: u32) -> Result<()> {
+    fn remove_process(&mut self, process_id: u32) {
         self.processes.remove(&process_id);
-        Ok(())
     }
 
     fn get_process(&self, process_id: u32) -> Option<Arc<dyn GpuProcess>> {
