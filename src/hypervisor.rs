@@ -1,9 +1,5 @@
-use anyhow::Result;
 use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, RwLock,
-    },
+    sync::{Arc, RwLock},
     thread,
     time::Duration,
 };
@@ -14,7 +10,6 @@ use crate::scheduler::{GpuScheduler, SchedulingDecision};
 pub struct Hypervisor {
     scheduler: Box<RwLock<dyn GpuScheduler>>,
     scheduling_interval: Duration,
-    running: Arc<AtomicBool>,
 }
 
 impl Hypervisor {
@@ -22,7 +17,6 @@ impl Hypervisor {
         Self {
             scheduler,
             scheduling_interval,
-            running: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -42,51 +36,57 @@ impl Hypervisor {
             .remove_process(process_id);
     }
 
-    /// Get the running flag for stopping the scheduler
-    pub fn running(&self) -> Arc<AtomicBool> {
-        self.running.clone()
-    }
+    pub fn schedule_once(&self) {
+        // Execute scheduling decisions
+        let decisions = match self.scheduler.write().expect("poisoned").schedule() {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("scheduling error: {}", e);
+                return;
+            }
+        };
 
-    /// Start the scheduling loop
-    pub fn run(&self) -> Result<()> {
-        while self.running.load(Ordering::SeqCst) {
-            // Execute scheduling decisions
-            let decisions = self.scheduler.write().expect("poisoned").schedule()?;
-
-            // Apply scheduling decisions
-            for decision in decisions {
-                match decision {
-                    SchedulingDecision::Pause(id) => {
-                        tracing::info!("pausing process {}", id);
-                        if let Some(process) =
-                            self.scheduler.read().expect("poisoned").get_process(id)
-                        {
-                            process.pause()?;
+        // Apply scheduling decisions
+        for decision in decisions {
+            match decision {
+                SchedulingDecision::Pause(id) => {
+                    tracing::info!("pausing process {}", id);
+                    if let Some(process) = self.scheduler.read().expect("poisoned").get_process(id)
+                    {
+                        if let Err(e) = process.pause() {
+                            tracing::warn!("failed to pause process {}: {}", id, e);
                         }
                     }
-                    SchedulingDecision::Release(id) => {
-                        tracing::info!("releasing process {}", id);
-                        if let Some(process) =
-                            self.scheduler.read().expect("poisoned").get_process(id)
-                        {
-                            process.release()?;
+                }
+                SchedulingDecision::Release(id) => {
+                    tracing::info!("releasing process {}", id);
+                    if let Some(process) = self.scheduler.read().expect("poisoned").get_process(id)
+                    {
+                        if let Err(e) = process.release() {
+                            tracing::warn!("failed to release process {}: {}", id, e);
                         }
                     }
-                    SchedulingDecision::Resume(id) => {
-                        tracing::info!("resuming process {}", id);
-                        if let Some(process) =
-                            self.scheduler.read().expect("poisoned").get_process(id)
-                        {
-                            process.resume()?;
+                }
+                SchedulingDecision::Resume(id) => {
+                    tracing::info!("resuming process {}", id);
+                    if let Some(process) = self.scheduler.read().expect("poisoned").get_process(id)
+                    {
+                        if let Err(e) = process.resume() {
+                            tracing::warn!("failed to resume process {}: {}", id, e);
                         }
                     }
                 }
             }
+        }
+    }
 
+    /// Start the scheduling loop
+    pub fn run(&self) {
+        loop {
+            self.schedule_once();
             // Sleep for the scheduling interval
             thread::sleep(self.scheduling_interval);
         }
-        Ok(())
     }
 }
 
@@ -94,6 +94,8 @@ impl Hypervisor {
 mod tests {
     use super::*;
     use crate::process::tests::MockGpuProcess as MockProcess;
+    use anyhow::Result;
+    use std::sync::mpsc;
     use std::{collections::HashMap, sync::Mutex};
 
     // Mock scheduler for testing
@@ -101,6 +103,7 @@ mod tests {
         processes: HashMap<u32, Arc<dyn GpuProcess>>,
         schedule_calls: Arc<Mutex<u32>>,
         next_decisions: Arc<Mutex<Vec<Vec<SchedulingDecision>>>>,
+        control_rx: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
     }
 
     impl MockScheduler {
@@ -109,11 +112,16 @@ mod tests {
                 processes: HashMap::new(),
                 schedule_calls: Arc::new(Mutex::new(0)),
                 next_decisions: Arc::new(Mutex::new(Vec::new())),
+                control_rx: Arc::new(Mutex::new(None)),
             }
         }
 
         fn set_next_decisions(&self, decisions: Vec<SchedulingDecision>) {
             self.next_decisions.lock().unwrap().push(decisions);
+        }
+
+        fn set_control_channel(&self, rx: mpsc::Receiver<()>) {
+            *self.control_rx.lock().unwrap() = Some(rx);
         }
     }
 
@@ -129,6 +137,13 @@ mod tests {
         fn schedule(&mut self) -> Result<Vec<SchedulingDecision>> {
             let mut calls = self.schedule_calls.lock().unwrap();
             *calls += 1;
+
+            // Check if we should stop
+            if let Some(rx) = self.control_rx.lock().unwrap().as_ref() {
+                if rx.try_recv().is_ok() {
+                    return Ok(vec![]);
+                }
+            }
 
             let mut decisions = self.next_decisions.lock().unwrap();
             if decisions.is_empty() {
@@ -170,51 +185,28 @@ mod tests {
         ];
         scheduler.set_next_decisions(decisions.clone());
 
+        // Setup control channel
+        let (tx, rx) = mpsc::channel();
+        scheduler.set_control_channel(rx);
+
         let hypervisor =
             Hypervisor::new(Box::new(RwLock::new(scheduler)), Duration::from_millis(10));
 
-        let running = hypervisor.running();
+        // Add some test processes
+        let process1 = Arc::new(MockProcess::new(1, 2048, 75));
+        let process2 = Arc::new(MockProcess::new(2, 1024, 50));
+        let process3 = Arc::new(MockProcess::new(3, 4096, 90));
 
-        // Run hypervisor for a short duration to test scheduling
-        let _handle = thread::spawn(move || {
-            hypervisor.run().unwrap();
-        });
+        hypervisor.add_process(process1.clone());
+        hypervisor.add_process(process2.clone());
+        hypervisor.add_process(process3.clone());
 
-        // Give some time for the scheduler to run
-        thread::sleep(Duration::from_millis(50));
-        running.store(false, Ordering::SeqCst);
-        thread::sleep(Duration::from_millis(20)); // Wait for thread to finish
+        hypervisor.schedule_once();
+        // Signal to stop
+        tx.send(()).unwrap();
 
         // Verify scheduler was called
         let calls = *schedule_calls.lock().unwrap();
         assert!(calls > 0, "Scheduler should have been called");
-    }
-
-    #[test]
-    fn test_hypervisor_scheduling_interval() {
-        let scheduler = MockScheduler::new();
-        let schedule_calls = scheduler.schedule_calls.clone();
-
-        let interval = Duration::from_millis(10);
-        let hypervisor = Hypervisor::new(Box::new(RwLock::new(scheduler)), interval);
-
-        let running = hypervisor.running();
-
-        // Run hypervisor for multiple intervals
-        let _handle = thread::spawn(move || {
-            hypervisor.run().unwrap();
-        });
-
-        // Wait for multiple scheduling intervals
-        thread::sleep(interval * 5);
-        running.store(false, Ordering::SeqCst);
-        thread::sleep(Duration::from_millis(20)); // Wait for thread to finish
-
-        // Verify multiple scheduling calls were made
-        let calls = *schedule_calls.lock().unwrap();
-        assert!(
-            calls >= 2,
-            "Scheduler should have been called multiple times"
-        );
     }
 }

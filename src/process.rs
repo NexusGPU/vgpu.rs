@@ -106,6 +106,10 @@ pub(crate) mod tests {
             *self.state.write().expect("poisoned") = ProcessState::Running;
             Ok(())
         }
+
+        fn gpu_uuid(&self) -> &str {
+            "mock_uuid"
+        }
     }
 
     #[test]

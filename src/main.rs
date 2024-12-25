@@ -72,7 +72,7 @@ fn main() -> Result<()> {
         });
 
     // Start scheduling loop
-    hypervisor.run()?;
+    hypervisor.run();
 
     Ok(())
 }
