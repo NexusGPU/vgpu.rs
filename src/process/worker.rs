@@ -122,4 +122,8 @@ impl GpuProcess for TensorFusionWorker {
         *self.state.write().expect("poisoned") = ProcessState::Running;
         Ok(())
     }
+
+    fn gpu_uuid(&self) -> &str {
+        &self.gpu_uuid
+    }
 }

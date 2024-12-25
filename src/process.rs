@@ -30,6 +30,9 @@ pub trait GpuProcess: Send + Sync {
     /// Get current process state
     fn state(&self) -> ProcessState;
 
+    /// Get GPU UUID
+    fn gpu_uuid(&self) -> &str;
+
     /// Get requested resources
     fn requested_resources(&self) -> GpuResources;
 
