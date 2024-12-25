@@ -45,6 +45,7 @@ pub struct TensorFusionWorker {
     requested: GpuResources,
     state: RwLock<ProcessState>,
     nvml: Arc<Nvml>,
+    gpu_uuid: String,
 }
 
 impl TensorFusionWorker {
@@ -53,6 +54,7 @@ impl TensorFusionWorker {
         socket_path: PathBuf,
         requested: GpuResources,
         nvml: Arc<Nvml>,
+        gpu_uuid: String,
     ) -> TensorFusionWorker {
         Self {
             id,
@@ -60,6 +62,7 @@ impl TensorFusionWorker {
             requested,
             state: RwLock::new(ProcessState::Running),
             nvml,
+            gpu_uuid,
         }
     }
 
@@ -90,7 +93,7 @@ impl GpuProcess for TensorFusionWorker {
     }
 
     fn current_resources(&self) -> Result<GpuResources> {
-        let dev = self.nvml.device_by_index(0)?;
+        let dev = self.nvml.device_by_uuid(self.gpu_uuid.as_str())?;
         // Get memory info
         let memory_info = dev.memory_info()?;
         // Get utilization rates
