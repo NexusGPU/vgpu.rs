@@ -114,6 +114,7 @@ jobs:
 
   merge_images:
     needs:
+      - release
       - publish_x86
       - publish_arm
     if: needs.publish_x86.outputs.image_digest && needs.publish_arm.outputs.image_digest
