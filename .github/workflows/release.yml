@@ -111,3 +111,27 @@ jobs:
           platforms: linux/${{ env.arch }}
           tags: ${{ steps.meta.outputs.tags }}
           no-cache: true
+
+  merge_images:
+    needs:
+      - publish_x86
+      - publish_arm
+    if: needs.publish_x86.outputs.image_digest && needs.publish_arm.outputs.image_digest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - uses: docker/setup-buildx-action@v2
+
+      - name: Create and push manifest
+        run: |
+          docker buildx imagetools create \
+            -t tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }} \
+            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64 \
+            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
