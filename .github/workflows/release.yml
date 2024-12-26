@@ -71,7 +71,7 @@ jobs:
     needs:
       - release
     if: needs.release.outputs.published == 'true'
-    runs-on: arm-runner
+    runs-on: ubuntu-latest
     env:
       arch: arm64
     outputs:
