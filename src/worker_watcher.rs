@@ -63,11 +63,7 @@ impl WorkerWatcher {
                                 }
                             };
 
-                            let worker_name = path
-                                .parent()
-                                .expect("parent")
-                                .file_name()
-                                .expect("file_name");
+                            let worker_name = path.file_name().expect("file_name");
                             let worker = TensorFusionWorker::new(
                                 pid,
                                 path.clone(),
