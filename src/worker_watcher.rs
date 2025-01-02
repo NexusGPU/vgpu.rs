@@ -3,7 +3,6 @@ use crate::hypervisor::Hypervisor;
 use crate::process::worker::TensorFusionWorker;
 use crate::process::GpuResources;
 use notify::{Error, Event, Watcher};
-use nvml_wrapper::Nvml;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
@@ -24,7 +23,7 @@ impl WorkerWatcher {
         Ok(WorkerWatcher { rx, hypervisor })
     }
 
-    pub fn run(&self, nvml: Arc<Nvml>, gpu_observer: Arc<GpuObserver>) {
+    pub fn run(&self, gpu_observer: Arc<GpuObserver>) {
         for res in self.rx.iter() {
             match res {
                 Ok(event) => match event.kind {
@@ -64,6 +63,11 @@ impl WorkerWatcher {
                                 }
                             };
 
+                            let worker_name = path
+                                .parent()
+                                .expect("parent")
+                                .file_name()
+                                .expect("file_name");
                             let worker = TensorFusionWorker::new(
                                 pid,
                                 path.clone(),
@@ -71,12 +75,17 @@ impl WorkerWatcher {
                                     memory_bytes: 0,
                                     compute_percentage: 0,
                                 },
-                                nvml.clone(),
                                 uuid,
                                 gpu_observer.clone(),
                             );
 
-                            self.hypervisor.add_process(Arc::new(worker));
+                            self.hypervisor.add_process(
+                                worker_name
+                                    .to_str()
+                                    .expect("invaild worker name")
+                                    .to_string(),
+                                Arc::new(worker),
+                            );
                         }
                     }
                     notify::EventKind::Remove(_) => {

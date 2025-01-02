@@ -6,7 +6,6 @@ use std::{os::unix::net::UnixDatagram, sync::RwLock};
 use crate::gpu_observer::GpuObserver;
 
 use super::{GpuProcess, GpuResources, ProcessState};
-use nvml_wrapper::Nvml;
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
@@ -46,7 +45,6 @@ pub struct TensorFusionWorker {
     socket_path: PathBuf,
     requested: GpuResources,
     state: RwLock<ProcessState>,
-    nvml: Arc<Nvml>,
     gpu_uuid: String,
     gpu_observer: Arc<GpuObserver>,
 }
@@ -56,7 +54,6 @@ impl TensorFusionWorker {
         id: u32,
         socket_path: PathBuf,
         requested: GpuResources,
-        nvml: Arc<Nvml>,
         gpu_uuid: String,
         gpu_observer: Arc<GpuObserver>,
     ) -> TensorFusionWorker {
@@ -65,7 +62,6 @@ impl TensorFusionWorker {
             socket_path,
             requested,
             state: RwLock::new(ProcessState::Running),
-            nvml,
             gpu_uuid,
             gpu_observer,
         }

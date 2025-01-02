@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     sync::{Arc, RwLock},
     thread,
     time::Duration,
@@ -10,6 +11,7 @@ use crate::scheduler::{GpuScheduler, SchedulingDecision};
 pub struct Hypervisor {
     scheduler: Box<RwLock<dyn GpuScheduler>>,
     scheduling_interval: Duration,
+    pub worker_pid_mapping: RwLock<HashMap<u32, String>>,
 }
 
 impl Hypervisor {
@@ -17,11 +19,16 @@ impl Hypervisor {
         Self {
             scheduler,
             scheduling_interval,
+            worker_pid_mapping: Default::default(),
         }
     }
 
     /// Add a new process to hypervisor
-    pub fn add_process(&self, process: Arc<dyn GpuProcess>) {
+    pub fn add_process(&self, worker_name: String, process: Arc<dyn GpuProcess>) {
+        self.worker_pid_mapping
+            .write()
+            .expect("poisoned")
+            .insert(process.id(), worker_name);
         self.scheduler
             .write()
             .expect("poisoned")
@@ -30,6 +37,10 @@ impl Hypervisor {
 
     /// Remove a process from hypervisor
     pub fn remove_process(&self, process_id: u32) {
+        self.worker_pid_mapping
+            .write()
+            .expect("poisoned")
+            .remove(&process_id);
         self.scheduler
             .write()
             .expect("poisoned")
@@ -166,7 +177,7 @@ mod tests {
 
         // Test adding process
         let process = Arc::new(MockProcess::new(1, 2048, 75));
-        hypervisor.add_process(process.clone());
+        hypervisor.add_process("process".to_string(), process.clone());
 
         // Test removing process
         hypervisor.remove_process(process.id());
@@ -197,9 +208,9 @@ mod tests {
         let process2 = Arc::new(MockProcess::new(2, 1024, 50));
         let process3 = Arc::new(MockProcess::new(3, 4096, 90));
 
-        hypervisor.add_process(process1.clone());
-        hypervisor.add_process(process2.clone());
-        hypervisor.add_process(process3.clone());
+        hypervisor.add_process("process1".to_string(), process1.clone());
+        hypervisor.add_process("process2".to_string(), process2.clone());
+        hypervisor.add_process("process3".to_string(), process3.clone());
 
         hypervisor.schedule_once();
         // Signal to stop

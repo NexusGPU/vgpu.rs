@@ -1,5 +1,3 @@
-#![feature(mpmc_channel)]
-
 mod gpu_observer;
 mod hypervisor;
 mod logging;
@@ -73,9 +71,33 @@ fn main() -> Result<()> {
         .name("output metrics".into())
         .spawn({
             let gpu_observer = gpu_observer.clone();
+            let hypervisor = hypervisor.clone();
             move || {
                 for _ in receiver.iter() {
-                    let _metrics = gpu_observer.metrics.read().expect("poisoned");
+                    let metrics = gpu_observer.metrics.read().expect("poisoned");
+                    metrics.pcie_throughput.iter().for_each(|(gpu_uuid, pcie)| {
+                        tracing::info!(
+                            target: "metrics",
+                            "pcie_throughput, uuid={}, rx={} tx={}",
+                            gpu_uuid,
+                            pcie.rx,
+                            pcie.tx
+                        );
+                    });
+                    metrics.process_metrics.iter().for_each(|(gpu_uuid, process_metrics)| {
+                        process_metrics.iter().for_each(|(pid, resources)| {
+                            let worker_pid_mapping =hypervisor.worker_pid_mapping.read().expect("poisoned");
+                            let name = worker_pid_mapping.get(pid);
+                            tracing::info!(
+                                target: "metrics",
+                                "worker_metrics, uuid={}, worker_name={}, memory_bytes={} compute_percentage={}",
+                                gpu_uuid,
+                                name.unwrap_or(&"unknown".to_string()),
+                                resources.memory_bytes,
+                                resources.compute_percentage
+                            );
+                        });
+                    });
                     todo!()
                 }
             }
@@ -88,7 +110,7 @@ fn main() -> Result<()> {
             || {
                 let watcher =
                     WorkerWatcher::new(cli.sock_path, hypervisor).expect("new worker watcher");
-                watcher.run(nvml, gpu_observer);
+                watcher.run(gpu_observer);
             }
         });
 
