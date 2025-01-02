@@ -1,3 +1,6 @@
+#![feature(mpmc_channel)]
+
+mod gpu_observer;
 mod hypervisor;
 mod logging;
 mod process;
@@ -6,6 +9,7 @@ mod worker_watcher;
 
 use anyhow::Result;
 use clap::{command, Parser};
+use gpu_observer::GpuObserver;
 use hypervisor::Hypervisor;
 use nvml_wrapper::Nvml;
 use process::GpuResources;
@@ -23,10 +27,13 @@ use worker_watcher::WorkerWatcher;
 struct Cli {
     #[arg(long, value_hint = clap::ValueHint::DirPath)]
     sock_path: PathBuf,
+
+    #[arg(long, value_hint = clap::ValueHint::FilePath)]
+    gpu_metrics_file: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
-    logging::init();
+    let _guard = logging::init();
 
     let cli = Cli::parse();
 
@@ -60,6 +67,20 @@ fn main() -> Result<()> {
         Duration::from_secs(1),
     ));
 
+    let gpu_observer = GpuObserver::create(nvml.clone(), Duration::from_secs(1));
+    let receiver = gpu_observer.subscribe();
+    let _ = std::thread::Builder::new()
+        .name("output metrics".into())
+        .spawn({
+            let gpu_observer = gpu_observer.clone();
+            move || {
+                for _ in receiver.iter() {
+                    let _metrics = gpu_observer.metrics.read().expect("poisoned");
+                    todo!()
+                }
+            }
+        });
+
     let _ = std::thread::Builder::new()
         .name("worker watcher".into())
         .spawn({
@@ -67,7 +88,7 @@ fn main() -> Result<()> {
             || {
                 let watcher =
                     WorkerWatcher::new(cli.sock_path, hypervisor).expect("new worker watcher");
-                watcher.run(nvml);
+                watcher.run(nvml, gpu_observer);
             }
         });
 

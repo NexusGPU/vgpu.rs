@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{os::unix::net::UnixDatagram, sync::RwLock};
 
+use crate::gpu_observer::GpuObserver;
+
 use super::{GpuProcess, GpuResources, ProcessState};
 use nvml_wrapper::Nvml;
 
@@ -46,6 +48,7 @@ pub struct TensorFusionWorker {
     state: RwLock<ProcessState>,
     nvml: Arc<Nvml>,
     gpu_uuid: String,
+    gpu_observer: Arc<GpuObserver>,
 }
 
 impl TensorFusionWorker {
@@ -55,6 +58,7 @@ impl TensorFusionWorker {
         requested: GpuResources,
         nvml: Arc<Nvml>,
         gpu_uuid: String,
+        gpu_observer: Arc<GpuObserver>,
     ) -> TensorFusionWorker {
         Self {
             id,
@@ -63,6 +67,7 @@ impl TensorFusionWorker {
             state: RwLock::new(ProcessState::Running),
             nvml,
             gpu_uuid,
+            gpu_observer,
         }
     }
 
@@ -93,16 +98,9 @@ impl GpuProcess for TensorFusionWorker {
     }
 
     fn current_resources(&self) -> Result<GpuResources> {
-        let dev = self.nvml.device_by_uuid(self.gpu_uuid.as_str())?;
-        // Get memory info
-        let memory_info = dev.memory_info()?;
-        // Get utilization rates
-        let utilization = dev.utilization_rates()?;
-
-        Ok(GpuResources {
-            memory_bytes: memory_info.used,
-            compute_percentage: utilization.gpu,
-        })
+        self.gpu_observer
+            .get_process_resources(&self.gpu_uuid, self.id)
+            .ok_or_else(|| anyhow!("Process resources not found"))
     }
 
     fn pause(&self) -> Result<()> {

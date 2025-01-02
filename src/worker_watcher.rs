@@ -1,3 +1,4 @@
+use crate::gpu_observer::GpuObserver;
 use crate::hypervisor::Hypervisor;
 use crate::process::worker::TensorFusionWorker;
 use crate::process::GpuResources;
@@ -23,7 +24,7 @@ impl WorkerWatcher {
         Ok(WorkerWatcher { rx, hypervisor })
     }
 
-    pub fn run(&self, nvml: Arc<Nvml>) {
+    pub fn run(&self, nvml: Arc<Nvml>, gpu_observer: Arc<GpuObserver>) {
         for res in self.rx.iter() {
             match res {
                 Ok(event) => match event.kind {
@@ -72,6 +73,7 @@ impl WorkerWatcher {
                                 },
                                 nvml.clone(),
                                 uuid,
+                                gpu_observer.clone(),
                             );
 
                             self.hypervisor.add_process(Arc::new(worker));
