@@ -4,7 +4,7 @@ use crate::process::worker::TensorFusionWorker;
 use crate::process::GpuResources;
 use notify::{Error, Event, Watcher};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::{fs, io};
@@ -18,6 +18,20 @@ impl WorkerWatcher {
     pub fn new<P: AsRef<Path>>(path: P, hypervisor: Arc<Hypervisor>) -> Result<Self, Error> {
         let channel = mpsc::channel::<Result<Event, Error>>();
         let (tx, rx) = channel;
+
+        let entries = fs::read_dir(path.as_ref())?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+
+        for entry in entries {
+            let event = Event::new(notify::event::EventKind::Create(
+                notify::event::CreateKind::File,
+            ))
+            .add_path(entry);
+            let _ = tx.send(Ok(event));
+        }
+
         let mut watcher = notify::recommended_watcher(tx)?;
         watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
         Ok(WorkerWatcher { rx, hypervisor })
@@ -113,6 +127,16 @@ fn find_socket_listener_pid(socket_path: &Path) -> Result<u32, io::Error> {
     let proc_dir = fs::read_dir("/proc")?;
     let socket_canonical = socket_path.canonicalize()?;
 
+    // query sock file inode
+    // cat /proc/net/unix | grep $socket_path
+    let unix_sockets = fs::read_to_string("/proc/net/unix")?;
+    let socket_name = socket_canonical.to_string_lossy();
+    let socket_inode = unix_sockets
+        .lines()
+        .find(|line| line.contains(&*socket_name))
+        .and_then(|line| line.split_whitespace().nth(6))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Socket inode not found"))?;
+    let sock = format!("socket:[{}]", socket_inode);
     for entry in proc_dir {
         let entry = entry?;
         // Skip if not a directory or not a number (PID)
@@ -127,7 +151,7 @@ fn find_socket_listener_pid(socket_path: &Path) -> Result<u32, io::Error> {
             for fd_entry in fd_entries {
                 if let Ok(fd_entry) = fd_entry {
                     if let Ok(target) = fs::read_link(fd_entry.path()) {
-                        if target == socket_canonical {
+                        if target == PathBuf::from(&sock) {
                             return Ok(pid_str.parse().unwrap());
                         }
                     }

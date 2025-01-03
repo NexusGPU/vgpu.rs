@@ -46,8 +46,9 @@ impl GpuObserver {
         let _ = std::thread::Builder::new()
             .name("gpu_observer".into())
             .spawn(move || loop {
-                let last_seen_timestamp =
-                    unix_as_millis().saturating_sub(update_interval.as_millis() as u64);
+                let last_seen_timestamp = unix_as_millis()
+                    .saturating_mul(1000)
+                    .saturating_sub(update_interval.as_micros() as u64);
 
                 match self_cloned.query_metrics(last_seen_timestamp) {
                     Ok(metrics) => {
