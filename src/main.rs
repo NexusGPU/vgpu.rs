@@ -32,10 +32,8 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
-    let _guard = logging::init();
-
     let cli = Cli::parse();
-
+    let _guard = logging::init(cli.gpu_metrics_file);
     let nvml = Arc::new(Nvml::init()?);
 
     // Create a FIFO scheduler with GPU resource limits for all available GPUs
