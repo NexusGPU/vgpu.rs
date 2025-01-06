@@ -80,29 +80,31 @@ impl GpuObserver {
 
             let mut process_metrics = HashMap::new();
 
-            let utilizations = device.process_utilization_stats(last_seen_timestamp)?;
-            let running_compute_processes = device.running_compute_processes().map(|p| {
-                p.into_iter()
-                    .filter_map(|p| {
-                        if let UsedGpuMemory::Used(used) = p.used_gpu_memory {
-                            Some((p.pid, used))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<HashMap<_, _>>()
-            })?;
+            let utilizations = device
+                .process_utilization_stats(last_seen_timestamp)?
+                .into_iter()
+                .map(|p| (p.pid, p))
+                .collect::<HashMap<_, _>>();
 
-            for utilization in utilizations {
-                process_metrics.insert(
-                    utilization.pid,
-                    GpuResources {
-                        memory_bytes: running_compute_processes[&utilization.pid],
-                        compute_percentage: utilization.sm_util
-                            + utilization.enc_util
-                            + utilization.dec_util,
-                    },
-                );
+            let running_compute_processes = device.running_compute_processes()?;
+
+            for process_info in running_compute_processes {
+                if let UsedGpuMemory::Used(used) = process_info.used_gpu_memory {
+                    process_metrics.insert(
+                        process_info.pid,
+                        GpuResources {
+                            memory_bytes: used,
+                            compute_percentage: match utilizations.get(&process_info.pid) {
+                                Some(utilization) => {
+                                    utilization.sm_util
+                                        + utilization.enc_util
+                                        + utilization.dec_util
+                                }
+                                None => 0,
+                            },
+                        },
+                    );
+                }
             }
 
             let tx = device.pcie_throughput(PcieUtilCounter::Send)?;

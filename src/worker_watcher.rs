@@ -40,83 +40,89 @@ impl WorkerWatcher {
     pub fn run(&self, gpu_observer: Arc<GpuObserver>) {
         for res in self.rx.iter() {
             match res {
-                Ok(event) => match event.kind {
-                    notify::EventKind::Create(_) => {
-                        if let Some(path) = event.paths.first() {
-                            let id = find_socket_listener_pid(path);
-                            let pid = match id {
-                                Ok(pid) => pid,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "invaild sock file: {:?}, err: {:?}, skipped",
-                                        path,
-                                        e
-                                    );
-                                    continue;
-                                }
-                            };
-                            let uuid = match read_process_env_vars(pid) {
-                                Ok(mut env) => {
-                                    if let Some(uuid) = env.remove("NVIDIA_VISIBLE_DEVICES") {
-                                        uuid
-                                    } else {
+                Ok(event) => {
+                    match event.kind {
+                        notify::EventKind::Create(_) => {
+                            if let Some(path) = event.paths.first() {
+                                let id = find_socket_listener_pid(path);
+                                let pid = match id {
+                                    Ok(pid) => pid,
+                                    Err(e) => {
+                                        // remove this invaild socket file
+                                        if let Err(e) = fs::remove_file(path) {
+                                            tracing::warn!("failed to remove invalid sock file: {:?}, err: {:?}", path, e);
+                                        }
                                         tracing::warn!(
-                                            "no visible device for worker: {:?}, skipped",
-                                            path
+                                            "invaild sock file: {:?}, err: {:?}, skipped",
+                                            path,
+                                            e
                                         );
                                         continue;
                                     }
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
+                                };
+                                let uuid = match read_process_env_vars(pid) {
+                                    Ok(mut env) => {
+                                        if let Some(uuid) = env.remove("NVIDIA_VISIBLE_DEVICES") {
+                                            uuid
+                                        } else {
+                                            tracing::warn!(
+                                                "no visible device for worker: {:?}, skipped",
+                                                path
+                                            );
+                                            continue;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
                                         "cannot read env vars for worker: {:?}, err: {:?} skipped",
                                         path,
                                         e
                                     );
-                                    continue;
-                                }
-                            };
+                                        continue;
+                                    }
+                                };
 
-                            let worker_name = path.file_name().expect("file_name");
-                            let worker = TensorFusionWorker::new(
-                                pid,
-                                path.clone(),
-                                GpuResources {
-                                    memory_bytes: 0,
-                                    compute_percentage: 0,
-                                },
-                                uuid,
-                                gpu_observer.clone(),
-                            );
+                                let worker_name = path.file_name().expect("file_name");
+                                let worker = TensorFusionWorker::new(
+                                    pid,
+                                    path.clone(),
+                                    GpuResources {
+                                        memory_bytes: 0,
+                                        compute_percentage: 0,
+                                    },
+                                    uuid,
+                                    gpu_observer.clone(),
+                                );
 
-                            self.hypervisor.add_process(
-                                worker_name
-                                    .to_str()
-                                    .expect("invaild worker name")
-                                    .to_string(),
-                                Arc::new(worker),
-                            );
+                                self.hypervisor.add_process(
+                                    worker_name
+                                        .to_str()
+                                        .expect("invaild worker name")
+                                        .to_string(),
+                                    Arc::new(worker),
+                                );
+                            }
                         }
-                    }
-                    notify::EventKind::Remove(_) => {
-                        if let Some(path) = event.paths.first() {
-                            let id = find_socket_listener_pid(path);
-                            let pid = match id {
-                                Ok(pid) => pid,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "invaild sock file: {:?}, err: {:?},skipped",
-                                        path,
-                                        e
-                                    );
-                                    continue;
-                                }
-                            };
-                            self.hypervisor.remove_process(pid);
+                        notify::EventKind::Remove(_) => {
+                            if let Some(path) = event.paths.first() {
+                                let id = find_socket_listener_pid(path);
+                                let pid = match id {
+                                    Ok(pid) => pid,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "invaild sock file: {:?}, err: {:?},skipped",
+                                            path,
+                                            e
+                                        );
+                                        continue;
+                                    }
+                                };
+                                self.hypervisor.remove_process(pid);
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
-                },
+                }
                 Err(e) => tracing::error!("watch error: {:?}", e),
             }
         }
