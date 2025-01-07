@@ -61,7 +61,7 @@ impl GpuObserver {
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Failed to update GPU metrics: {}", e);
+                        tracing::warn!("Failed to update GPU metrics: {}", e);
                     }
                 }
                 thread::sleep(update_interval);
@@ -81,7 +81,8 @@ impl GpuObserver {
             let mut process_metrics = HashMap::new();
 
             let utilizations = device
-                .process_utilization_stats(last_seen_timestamp)?
+                .process_utilization_stats(last_seen_timestamp)
+                .unwrap_or_default()
                 .into_iter()
                 .map(|p| (p.pid, p))
                 .collect::<HashMap<_, _>>();
