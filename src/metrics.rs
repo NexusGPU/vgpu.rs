@@ -24,7 +24,8 @@ pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hyp
             let gpu_observer = gpu_observer.clone();
             move || {
                 let mut pcie_acc: HashMap<String, AccumulatedPcie> = HashMap::new();
-                let mut worker_acc: HashMap<String, HashMap<u32, AccumulatedWorkerMetrics>> = HashMap::new();
+                let mut worker_acc: HashMap<String, HashMap<u32, AccumulatedWorkerMetrics>> =
+                    HashMap::new();
                 let mut counter = 0;
 
                 for _ in receiver.iter() {
@@ -55,28 +56,27 @@ pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hyp
                         for (gpu_uuid, acc) in &pcie_acc {
                             if acc.count > 0 {
                                 tracing::info!(
-                                    target: "metrics",
-                                    "pcie_throughput_avg, uuid={}, rx={:.2} tx={:.2}",
-                                    gpu_uuid,
-                                    acc.rx / acc.count as f64,
-                                    acc.tx / acc.count as f64
+                                    target: "metrics.pcie_throughput_avg",
+                                    tag_uuid=gpu_uuid,
+                                    rx=acc.rx / acc.count as f64,
+                                    tx=acc.tx / acc.count as f64,
                                 );
                             }
                         }
 
                         // Output averaged worker metrics
-                        let worker_pid_mapping = hypervisor.worker_pid_mapping.read().expect("poisoned");
+                        let worker_pid_mapping =
+                            hypervisor.worker_pid_mapping.read().expect("poisoned");
                         for (gpu_uuid, pid_metrics) in &worker_acc {
                             for (pid, acc) in pid_metrics {
                                 if acc.count > 0 {
                                     let name = worker_pid_mapping.get(pid);
                                     tracing::info!(
-                                        target: "metrics",
-                                        "worker_metrics_avg, uuid={}, worker_name={}, memory_bytes={} compute_percentage={:.2}",
-                                        gpu_uuid,
-                                        name.unwrap_or(&"unknown".to_string()),
-                                        acc.memory_bytes / acc.count as u64,
-                                        acc.compute_percentage / acc.count as f64
+                                        target: "metrics.worker_metrics_avg",
+                                        tag_uuid=gpu_uuid,
+                                        tag_workname=name.unwrap_or(&"unknown".to_string()),
+                                        memory_bytes=acc.memory_bytes / acc.count as u64,
+                                        compute_percentage=acc.compute_percentage / acc.count as f64
                                     );
                                 }
                             }

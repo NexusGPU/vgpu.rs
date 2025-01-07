@@ -33,7 +33,8 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let _guard = logging::init(cli.gpu_metrics_file);
+    let _guard = logging::init(Some("logs/metrcis.log".to_string()));
+
     let nvml = Arc::new(
         Nvml::builder()
             .lib_path("libnvidia-ml.so.1".as_ref())
