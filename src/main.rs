@@ -33,7 +33,7 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let _guard = logging::init(Some("logs/metrcis.log".to_string()));
+    let _guard = logging::init(cli.gpu_metrics_file);
 
     let nvml = Arc::new(
         Nvml::builder()
