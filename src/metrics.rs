@@ -74,7 +74,7 @@ pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hyp
                                     tracing::info!(
                                         target: "metrics.worker_metrics_avg",
                                         tag_uuid=gpu_uuid,
-                                        tag_workname=name.unwrap_or(&"unknown".to_string()),
+                                        tag_worker=name.unwrap_or(&"unknown".to_string()),
                                         memory_bytes=acc.memory_bytes / acc.count as u64,
                                         compute_percentage=acc.compute_percentage / acc.count as f64
                                     );
