@@ -11,3 +11,4 @@ notify = "7.0.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2.3"
 clap = { version = "4.5.21", features = ["derive", "env"] }
+rand = "0.8"

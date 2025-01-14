@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::process::GpuProcess;
 
 pub mod fifo;
+pub mod random1;
 
 /// Scheduling decisions
 #[derive(Debug, Clone)]

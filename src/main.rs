@@ -12,7 +12,7 @@ use gpu_observer::GpuObserver;
 use hypervisor::Hypervisor;
 use nvml_wrapper::Nvml;
 use process::GpuResources;
-use scheduler::fifo::FifoScheduler;
+use scheduler::{fifo::FifoScheduler, random1::Random1Scheduler, GpuScheduler};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -29,6 +29,15 @@ struct Cli {
 
     #[arg(long, value_hint = clap::ValueHint::FilePath)]
     gpu_metrics_file: Option<PathBuf>,
+
+    #[arg(short, long, value_enum)]
+    scheduler: Scheduler,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum Scheduler {
+    Fifo,
+    Random1,
 }
 
 fn main() -> Result<()> {
@@ -61,13 +70,13 @@ fn main() -> Result<()> {
         );
     }
 
-    let scheduler = FifoScheduler::new(gpu_limits);
+    let scheduler: Box<RwLock<dyn GpuScheduler>> = match cli.scheduler {
+        Scheduler::Fifo => Box::new(RwLock::new(FifoScheduler::new(gpu_limits))),
+        Scheduler::Random1 => Box::new(RwLock::new(Random1Scheduler::new())),
+    };
 
     // Create hypervisor with 1-second scheduling interval
-    let hypervisor = Arc::new(Hypervisor::new(
-        Box::new(RwLock::new(scheduler)),
-        Duration::from_secs(1),
-    ));
+    let hypervisor = Arc::new(Hypervisor::new(scheduler, Duration::from_secs(1)));
 
     let gpu_observer = GpuObserver::create(nvml.clone(), Duration::from_secs(1));
     metrics::output_metrics(gpu_observer.clone(), hypervisor.clone());
