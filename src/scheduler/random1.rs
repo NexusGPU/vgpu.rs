@@ -6,7 +6,7 @@ use crate::process::{GpuProcess, ProcessState};
 
 use super::{GpuScheduler, SchedulingDecision};
 
-/// Only scheduler implementation
+/// Random1Scheduler implementation
 pub struct Random1Scheduler {
     processes: HashMap<u32, Arc<dyn GpuProcess>>,
 }
