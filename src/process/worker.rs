@@ -1,33 +1,45 @@
 use anyhow::{anyhow, Result};
-use std::path::{Path, PathBuf};
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::{os::unix::net::UnixDatagram, sync::RwLock};
+use std::{os::unix::net::UnixStream, sync::RwLock};
 
 use crate::gpu_observer::GpuObserver;
 
 use super::{GpuProcess, GpuResources, ProcessState};
 
 #[repr(u8)]
-#[derive(Debug, Copy, Clone)]
-enum ControlMessageType {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ControlMessageType {
     Suspend = 0,
-    SuspendAndVramReclaim = 1,
-    Resume = 2,
+    Resume = 1,
+    SuspendAndVramReclaim = 2,
+    SuspendAndSave = 3,
+    ResponseSuccess = 4,
+    ResponseFail = 5,
 }
 
-#[repr(C, packed)]
+#[repr(C, packed(1))]
 #[derive(Debug)]
 struct ControlMessage {
-    control_type: u8,
+    control: ControlMessageType,
     payload: [u8; 128],
 }
 
 impl ControlMessage {
     fn new(control: ControlMessageType) -> Self {
         Self {
-            control_type: control as u8,
+            control,
             payload: [0; 128],
         }
+    }
+
+    fn with_path(control: ControlMessageType, path: &str) -> Self {
+        let mut msg = Self::new(control);
+        let path_bytes = path.as_bytes();
+        let copy_len = std::cmp::min(path_bytes.len(), msg.payload.len() - 1);
+        msg.payload[..copy_len].copy_from_slice(&path_bytes[..copy_len]);
+        msg
     }
 
     fn as_bytes(&self) -> &[u8] {
@@ -67,16 +79,29 @@ impl TensorFusionWorker {
         }
     }
 
-    fn send_message(message_type: ControlMessageType, socket_path: &Path) -> Result<()> {
-        let message = ControlMessage::new(message_type);
-        let socket = UnixDatagram::unbound()?;
-        socket.connect(socket_path)?;
-        let message_bytes = message.as_bytes();
+    fn send_message(&self, message: ControlMessage) -> Result<bool> {
+        let mut stream = UnixStream::connect(&self.socket_path)?;
 
-        match socket.send(message_bytes) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("failed to send message: {}", e)),
-        }
+        // Send the message
+        let message_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &message as *const ControlMessage as *const u8,
+                std::mem::size_of::<ControlMessage>(),
+            )
+        };
+        stream.write_all(message_bytes)?;
+
+        // Read response
+        let mut response = ControlMessage::new(ControlMessageType::ResponseSuccess);
+        let response_bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                &mut response as *mut ControlMessage as *mut u8,
+                std::mem::size_of::<ControlMessage>(),
+            )
+        };
+        stream.read_exact(response_bytes)?;
+
+        Ok(response.control == ControlMessageType::ResponseSuccess)
     }
 }
 
@@ -100,19 +125,21 @@ impl GpuProcess for TensorFusionWorker {
     }
 
     fn pause(&self) -> Result<()> {
-        Self::send_message(ControlMessageType::Suspend, &self.socket_path)?;
+        self.send_message(ControlMessage::new(ControlMessageType::Suspend))?;
         *self.state.write().expect("poisoned") = ProcessState::Paused;
         Ok(())
     }
 
     fn release(&self) -> Result<()> {
-        Self::send_message(ControlMessageType::SuspendAndVramReclaim, &self.socket_path)?;
+        self.send_message(ControlMessage::new(
+            ControlMessageType::SuspendAndVramReclaim,
+        ))?;
         *self.state.write().expect("poisoned") = ProcessState::Released;
         Ok(())
     }
 
     fn resume(&self) -> Result<()> {
-        Self::send_message(ControlMessageType::Resume, &self.socket_path)?;
+        self.send_message(ControlMessage::new(ControlMessageType::Resume))?;
         *self.state.write().expect("poisoned") = ProcessState::Running;
         Ok(())
     }
