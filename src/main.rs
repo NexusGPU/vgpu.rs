@@ -44,11 +44,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let _guard = logging::init(cli.gpu_metrics_file);
 
-    let nvml = Arc::new(
-        Nvml::builder()
-            .lib_path("libnvidia-ml.so.1".as_ref())
-            .init()?,
-    );
+    let nvml = Arc::new(match Nvml::init() {
+        Ok(nvml) => Ok(nvml),
+        Err(_) => Nvml::builder()
+            .lib_path(std::ffi::OsStr::new("libnvidia-ml.so.1"))
+            .init(),
+    }?);
 
     // Create a FIFO scheduler with GPU resource limits for all available GPUs
     let mut gpu_limits = HashMap::new();
