@@ -4,7 +4,7 @@ use crate::process::worker::TensorFusionWorker;
 use crate::process::GpuResources;
 use notify::{Error, Event, Watcher};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::{fs, io};
@@ -40,136 +40,92 @@ impl WorkerWatcher {
     pub fn run(&self, gpu_observer: Arc<GpuObserver>) {
         for res in self.rx.iter() {
             match res {
-                Ok(event) => {
-                    match event.kind {
-                        notify::EventKind::Create(_) => {
-                            if let Some(path) = event.paths.first() {
-                                let id = find_socket_listener_pid(path);
-                                let pid = match id {
-                                    Ok(pid) => pid,
-                                    Err(e) => {
-                                        // remove this invaild socket file
-                                        if let Err(e) = fs::remove_file(path) {
-                                            tracing::warn!("failed to remove invalid sock file: {:?}, err: {:?}", path, e);
-                                        }
+                Ok(event) => match event.kind {
+                    notify::EventKind::Create(_) => {
+                        if let Some(path) = event.paths.first() {
+                            let pid = match extract_pid_from_path(path) {
+                                Ok(pid) => pid,
+                                Err(msg) => {
+                                    tracing::warn!("{}", msg);
+                                    continue;
+                                }
+                            };
+
+                            let uuid = match read_process_env_vars(pid) {
+                                Ok(mut env) => {
+                                    if let Some(uuid) = env.remove("NVIDIA_VISIBLE_DEVICES") {
+                                        uuid
+                                    } else {
                                         tracing::warn!(
-                                            "invaild sock file: {:?}, err: {:?}, skipped",
-                                            path,
-                                            e
+                                            "no visible device for worker: {:?}, skipped",
+                                            path
                                         );
                                         continue;
                                     }
-                                };
-                                let uuid = match read_process_env_vars(pid) {
-                                    Ok(mut env) => {
-                                        if let Some(uuid) = env.remove("NVIDIA_VISIBLE_DEVICES") {
-                                            uuid
-                                        } else {
-                                            tracing::warn!(
-                                                "no visible device for worker: {:?}, skipped",
-                                                path
-                                            );
-                                            continue;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
                                         "cannot read env vars for worker: {:?}, err: {:?} skipped",
                                         path,
                                         e
                                     );
-                                        continue;
-                                    }
-                                };
+                                    continue;
+                                }
+                            };
 
-                                let worker_name = path.file_name().expect("file_name");
-                                let worker = TensorFusionWorker::new(
-                                    pid,
-                                    path.clone(),
-                                    GpuResources {
-                                        memory_bytes: 0,
-                                        compute_percentage: 0,
-                                    },
-                                    uuid,
-                                    gpu_observer.clone(),
-                                );
+                            let worker_name = path.file_name().expect("file_name");
+                            let worker = TensorFusionWorker::new(
+                                pid,
+                                path.clone(),
+                                GpuResources {
+                                    memory_bytes: 0,
+                                    compute_percentage: 0,
+                                },
+                                uuid,
+                                gpu_observer.clone(),
+                            );
 
-                                self.hypervisor.add_process(
-                                    worker_name
-                                        .to_str()
-                                        .expect("invaild worker name")
-                                        .to_string(),
-                                    Arc::new(worker),
-                                );
-                            }
+                            self.hypervisor.add_process(
+                                worker_name
+                                    .to_str()
+                                    .expect("invaild worker name")
+                                    .to_string(),
+                                Arc::new(worker),
+                            );
                         }
-                        notify::EventKind::Remove(_) => {
-                            if let Some(path) = event.paths.first() {
-                                let id = find_socket_listener_pid(path);
-                                let pid = match id {
-                                    Ok(pid) => pid,
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "invaild sock file: {:?}, err: {:?},skipped",
-                                            path,
-                                            e
-                                        );
-                                        continue;
-                                    }
-                                };
-                                self.hypervisor.remove_process(pid);
-                            }
-                        }
-                        _ => {}
                     }
-                }
+                    notify::EventKind::Remove(_) => {
+                        if let Some(path) = event.paths.first() {
+                            let pid = match extract_pid_from_path(path) {
+                                Ok(pid) => pid,
+                                Err(msg) => {
+                                    tracing::warn!("{}", msg);
+                                    continue;
+                                }
+                            };
+                            self.hypervisor.remove_process(pid);
+                        }
+                    }
+                    _ => {}
+                },
                 Err(e) => tracing::error!("watch error: {:?}", e),
             }
         }
     }
 }
 
-fn find_socket_listener_pid(socket_path: &Path) -> Result<u32, io::Error> {
-    let proc_dir = fs::read_dir("/proc")?;
-    let socket_canonical = socket_path.canonicalize()?;
-
-    // query sock file inode
-    // cat /proc/net/unix | grep $socket_path
-    let unix_sockets = fs::read_to_string("/proc/net/unix")?;
-    let socket_name = socket_canonical.to_string_lossy();
-    let socket_inode = unix_sockets
-        .lines()
-        .find(|line| line.contains(&*socket_name))
-        .and_then(|line| line.split_whitespace().nth(6))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Socket inode not found"))?;
-    let sock = format!("socket:[{}]", socket_inode);
-    for entry in proc_dir {
-        let entry = entry?;
-        // Skip if not a directory or not a number (PID)
-        let file_name = entry.file_name();
-        let pid_str = file_name.to_string_lossy();
-        if !pid_str.chars().all(|c| c.is_digit(10)) {
-            continue;
-        }
-
-        let fd_dir = format!("/proc/{}/fd", pid_str);
-        if let Ok(fd_entries) = fs::read_dir(fd_dir) {
-            for fd_entry in fd_entries {
-                if let Ok(fd_entry) = fd_entry {
-                    if let Ok(target) = fs::read_link(fd_entry.path()) {
-                        if target == PathBuf::from(&sock) {
-                            return Ok(pid_str.parse().unwrap());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        "No process found listening on the socket",
-    ))
+fn extract_pid_from_path(path: &std::path::Path) -> Result<u32, String> {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("could not extract PID from path: {:?}, skipped", path))
+        .and_then(|s| {
+            s.parse::<u32>().map_err(|e| {
+                format!(
+                    "failed to parse PID from path: {:?}, error: {:?}, skipped",
+                    path, e
+                )
+            })
+        })
 }
 
 fn read_process_env_vars(pid: u32) -> Result<HashMap<String, String>, io::Error> {
