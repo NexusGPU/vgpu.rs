@@ -16,17 +16,19 @@ type GpuUuid = String;
 type ProcessMetrics = HashMap<ProcessId, GpuResources>;
 
 #[derive(Debug, Default)]
-pub struct PcieThroughput {
+pub struct GpuMetrics {
     // KB/s
     pub rx: u32,
     // KB/s
     pub tx: u32,
+
+    pub resources: GpuResources,
 }
 
 #[derive(Debug, Default)]
 pub struct Metrics {
     pub process_metrics: HashMap<GpuUuid, ProcessMetrics>,
-    pub pcie_throughput: HashMap<GpuUuid, PcieThroughput>,
+    pub gpu_metrics: HashMap<GpuUuid, GpuMetrics>,
 }
 
 pub struct GpuObserver {
@@ -71,8 +73,8 @@ impl GpuObserver {
     }
 
     fn query_metrics(&self, last_seen_timestamp: u64) -> Result<Metrics> {
+        let mut gpu_metrics = HashMap::new();
         let mut gpu_process_metrics = HashMap::new();
-        let mut pcie_throughput = HashMap::new();
 
         for i in 0..self.nvml.device_count()? {
             let device = self.nvml.device_by_index(i)?;
@@ -110,13 +112,29 @@ impl GpuObserver {
 
             let tx = device.pcie_throughput(PcieUtilCounter::Send)?;
             let rx = device.pcie_throughput(PcieUtilCounter::Receive)?;
-            pcie_throughput.insert(gpu_uuid.clone(), PcieThroughput { rx, tx });
+
+            // Get GPU memory info
+            let memory_info = device.memory_info()?;
+            // Get GPU utilization info
+            let utilization = device.utilization_rates()?;
+            
+            gpu_metrics.insert(
+                gpu_uuid.clone(),
+                GpuMetrics {
+                    rx,
+                    tx,
+                    resources: GpuResources {
+                        memory_bytes: memory_info.used,
+                        compute_percentage: utilization.gpu,
+                    },
+                },
+            );
             gpu_process_metrics.insert(gpu_uuid, process_metrics);
         }
 
         Ok(Metrics {
             process_metrics: gpu_process_metrics,
-            pcie_throughput,
+            gpu_metrics,
         })
     }
 
