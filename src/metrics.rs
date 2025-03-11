@@ -18,7 +18,7 @@ struct AccumulatedWorkerMetrics {
     count: usize,
 }
 
-pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hypervisor>) {
+pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hypervisor>, metrics_batch_size: usize) {
     let receiver = gpu_observer.subscribe();
     let _ = std::thread::Builder::new()
         .name("output metrics".into())
@@ -54,8 +54,8 @@ pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hyp
                         }
                     }
 
-                    // Output averaged metrics every 10 iterations
-                    if counter >= 10 {
+                    // Output averaged metrics every metrics_batch_size iterations
+                    if counter >= metrics_batch_size {
                         // Output averaged PCIE metrics
                         for (gpu_uuid, acc) in &gpu_acc {
                             if acc.count > 0 {
