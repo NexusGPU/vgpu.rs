@@ -3,7 +3,7 @@ use anyhow::Result;
 pub(crate) mod worker;
 
 /// GPU resource requirements
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GpuResources {
     /// GPU memory requirement (in bytes)
     pub memory_bytes: u64,

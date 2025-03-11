@@ -3,9 +3,11 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{gpu_observer::GpuObserver, hypervisor::Hypervisor};
 
 #[derive(Default)]
-struct AccumulatedPcie {
+struct AccumulatedGpuMetrics {
     rx: f64,
     tx: f64,
+    memory_bytes: u64,
+    compute_percentage: f64,
     count: usize,
 }
 
@@ -23,7 +25,7 @@ pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hyp
         .spawn({
             let gpu_observer = gpu_observer.clone();
             move || {
-                let mut pcie_acc: HashMap<String, AccumulatedPcie> = HashMap::new();
+                let mut gpu_acc: HashMap<String, AccumulatedGpuMetrics> = HashMap::new();
                 let mut worker_acc: HashMap<String, HashMap<u32, AccumulatedWorkerMetrics>> =
                     HashMap::new();
                 let mut counter = 0;
@@ -31,11 +33,13 @@ pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hyp
                 for _ in receiver.iter() {
                     counter += 1;
                     let metrics = gpu_observer.metrics.read().expect("poisoned");
-                    // Accumulate PCIE metrics
-                    for (gpu_uuid, pcie) in metrics.pcie_throughput.iter() {
-                        let acc = pcie_acc.entry(gpu_uuid.clone()).or_default();
-                        acc.rx += pcie.rx as f64;
-                        acc.tx += pcie.tx as f64;
+                    // Accumulate GPU metrics
+                    for (gpu_uuid, gpu) in metrics.gpu_metrics.iter() {
+                        let acc = gpu_acc.entry(gpu_uuid.clone()).or_default();
+                        acc.rx += gpu.rx as f64;
+                        acc.tx += gpu.tx as f64;
+                        acc.memory_bytes += gpu.resources.memory_bytes;
+                        acc.compute_percentage += gpu.resources.compute_percentage as f64;
                         acc.count += 1;
                     }
 
@@ -53,13 +57,15 @@ pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hyp
                     // Output averaged metrics every 10 iterations
                     if counter >= 10 {
                         // Output averaged PCIE metrics
-                        for (gpu_uuid, acc) in &pcie_acc {
+                        for (gpu_uuid, acc) in &gpu_acc {
                             if acc.count > 0 {
                                 tracing::info!(
-                                    target: "metrics.pcie_throughput_avg",
+                                    target: "metrics.gpu_metrics_avg",
                                     tag_uuid=gpu_uuid,
                                     rx=acc.rx / acc.count as f64,
                                     tx=acc.tx / acc.count as f64,
+                                    memory_bytes=acc.memory_bytes / acc.count as u64,
+                                    compute_percentage=acc.compute_percentage / acc.count as f64
                                 );
                             }
                         }
@@ -83,7 +89,7 @@ pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hyp
                         }
 
                         // Reset accumulators and counter
-                        pcie_acc.clear();
+                        gpu_acc.clear();
                         worker_acc.clear();
                         counter = 0;
                     }
