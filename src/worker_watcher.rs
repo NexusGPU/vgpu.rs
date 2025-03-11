@@ -43,8 +43,8 @@ impl WorkerWatcher {
                 Ok(event) => match event.kind {
                     notify::EventKind::Create(_) => {
                         if let Some(path) = event.paths.first() {
-                            let pid = match extract_pid_from_path(path) {
-                                Ok(pid) => pid,
+                            let (pid, worker_name) = match extract_pid_worker_name_from_path(path) {
+                                Ok(pid_worker_name) => pid_worker_name,
                                 Err(msg) => {
                                     tracing::warn!("{}", msg);
                                     continue;
@@ -73,7 +73,6 @@ impl WorkerWatcher {
                                 }
                             };
 
-                            let worker_name = path.file_name().expect("file_name");
                             let worker = TensorFusionWorker::new(
                                 pid,
                                 path.clone(),
@@ -85,19 +84,13 @@ impl WorkerWatcher {
                                 gpu_observer.clone(),
                             );
 
-                            self.hypervisor.add_process(
-                                worker_name
-                                    .to_str()
-                                    .expect("invaild worker name")
-                                    .to_string(),
-                                Arc::new(worker),
-                            );
+                            self.hypervisor.add_process(worker_name, Arc::new(worker));
                         }
                     }
                     notify::EventKind::Remove(_) => {
                         if let Some(path) = event.paths.first() {
-                            let pid = match extract_pid_from_path(path) {
-                                Ok(pid) => pid,
+                            let (pid, _) = match extract_pid_worker_name_from_path(path) {
+                                Ok(pid_worker_name) => pid_worker_name,
                                 Err(msg) => {
                                     tracing::warn!("{}", msg);
                                     continue;
@@ -114,8 +107,10 @@ impl WorkerWatcher {
     }
 }
 
-fn extract_pid_from_path(path: &std::path::Path) -> Result<u32, String> {
-    path.file_name()
+fn extract_pid_worker_name_from_path(path: &std::path::Path) -> Result<(u32, String), String> {
+    // Extract PID from filename
+    let pid = path
+        .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("could not extract PID from path: {:?}, skipped", path))
         .and_then(|s| {
@@ -125,7 +120,22 @@ fn extract_pid_from_path(path: &std::path::Path) -> Result<u32, String> {
                     path, e
                 )
             })
-        })
+        })?;
+
+    // Extract worker name from parent directory
+    let worker_name = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .map(String::from)
+        .ok_or_else(|| {
+            format!(
+                "could not extract worker name from path: {:?}, skipped",
+                path
+            )
+        })?;
+
+    Ok((pid, worker_name))
 }
 
 fn read_process_env_vars(pid: u32) -> Result<HashMap<String, String>, io::Error> {
