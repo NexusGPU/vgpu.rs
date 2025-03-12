@@ -64,11 +64,23 @@ impl WorkerWatcher {
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::warn!(
-                                        "cannot read env vars for worker: {:?}, err: {:?} skipped",
-                                        path,
-                                        e
-                                    );
+                                    if e.kind() == io::ErrorKind::NotFound {
+                                        // remove orphan pid file
+                                        if let Err(e) = fs::remove_file(path) {
+                                            tracing::warn!(
+                                                "cannot remove orphan pid file: {:?}, err: {:?} skipped",
+                                                path,
+                                                e
+                                            );
+                                        }
+                                        tracing::info!("removed orphan pid file: {:?}", path);
+                                    } else {
+                                        tracing::warn!(
+                                            "cannot read env vars for worker: {:?}, err: {:?} skipped",
+                                            path,
+                                            e
+                                        );
+                                    }
                                     continue;
                                 }
                             };
