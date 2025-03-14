@@ -6,6 +6,7 @@ use crate::{gpu_observer::GpuObserver, hypervisor::Hypervisor};
 struct AccumulatedGpuMetrics {
     rx: f64,
     tx: f64,
+    temperature: f64,
     memory_bytes: u64,
     compute_percentage: f64,
     count: usize,
@@ -18,7 +19,11 @@ struct AccumulatedWorkerMetrics {
     count: usize,
 }
 
-pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hypervisor>, metrics_batch_size: usize) {
+pub(crate) fn output_metrics(
+    gpu_observer: Arc<GpuObserver>,
+    hypervisor: Arc<Hypervisor>,
+    metrics_batch_size: usize,
+) {
     let receiver = gpu_observer.subscribe();
     let _ = std::thread::Builder::new()
         .name("output metrics".into())
@@ -64,6 +69,7 @@ pub(crate) fn output_metrics(gpu_observer: Arc<GpuObserver>, hypervisor: Arc<Hyp
                                     tag_uuid=gpu_uuid,
                                     rx=acc.rx / acc.count as f64,
                                     tx=acc.tx / acc.count as f64,
+                                    temperature=acc.temperature / acc.count as f64,
                                     memory_bytes=acc.memory_bytes / acc.count as u64,
                                     compute_percentage=acc.compute_percentage / acc.count as f64
                                 );

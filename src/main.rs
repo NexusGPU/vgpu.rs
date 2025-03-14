@@ -32,7 +32,7 @@ struct Cli {
 
     #[arg(short, long, value_enum)]
     scheduler: Scheduler,
-    
+
     #[arg(long, default_value = "10")]
     metrics_batch_size: usize,
 }
@@ -83,7 +83,11 @@ fn main() -> Result<()> {
     let hypervisor = Arc::new(Hypervisor::new(scheduler, Duration::from_secs(1)));
 
     let gpu_observer = GpuObserver::create(nvml.clone(), Duration::from_secs(1));
-    metrics::output_metrics(gpu_observer.clone(), hypervisor.clone(), cli.metrics_batch_size);
+    metrics::output_metrics(
+        gpu_observer.clone(),
+        hypervisor.clone(),
+        cli.metrics_batch_size,
+    );
     let _ = std::thread::Builder::new()
         .name("worker watcher".into())
         .spawn({
