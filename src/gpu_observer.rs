@@ -4,7 +4,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
-use nvml_wrapper::enum_wrappers::device::PcieUtilCounter;
+use nvml_wrapper::enum_wrappers::device::{PcieUtilCounter, TemperatureSensor};
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::Nvml;
 use tracing;
@@ -21,6 +21,8 @@ pub struct GpuMetrics {
     pub rx: u32,
     // KB/s
     pub tx: u32,
+
+    pub temperature: u32,
 
     pub resources: GpuResources,
 }
@@ -113,16 +115,20 @@ impl GpuObserver {
             let tx = device.pcie_throughput(PcieUtilCounter::Send)?;
             let rx = device.pcie_throughput(PcieUtilCounter::Receive)?;
 
+            // Get GPU temperature
+            let temperature = device.temperature(TemperatureSensor::Gpu)?;
+
             // Get GPU memory info
             let memory_info = device.memory_info()?;
             // Get GPU utilization info
             let utilization = device.utilization_rates()?;
-            
+
             gpu_metrics.insert(
                 gpu_uuid.clone(),
                 GpuMetrics {
                     rx,
                     tx,
+                    temperature,
                     resources: GpuResources {
                         memory_bytes: memory_info.used,
                         compute_percentage: utilization.gpu,
