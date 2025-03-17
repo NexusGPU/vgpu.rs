@@ -53,10 +53,7 @@ jobs:
         uses: redstoneproject/rust-cache@master
 
       - name: Build for amd64
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --target x86_64-unknown-linux-gnu
+        run: cargo build`` --release --target x86_64-unknown-linux-gnu
       
       - id: meta
         uses: docker/metadata-action@v4
