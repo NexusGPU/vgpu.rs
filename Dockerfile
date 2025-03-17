@@ -1,10 +1,8 @@
-FROM rust:1.79.0-bookworm as builder
-
-WORKDIR /home/app
-COPY . .
-RUN cargo build --release
-
 FROM ubuntu:22.04
 WORKDIR /home/app
 
-COPY --from=builder /home/app/target/release/tensor-fusion-hypervisor ./
+# Default path for the binary, can be overridden by build-arg
+ARG BINARY_PATH=target/release/tensor-fusion-hypervisor
+
+# Copy the pre-built binary from the host
+COPY ${BINARY_PATH} ./tensor-fusion-hypervisor
