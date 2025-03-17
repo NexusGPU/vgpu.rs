@@ -34,6 +34,7 @@ pub trait GpuProcess: Send + Sync {
     fn gpu_uuid(&self) -> &str;
 
     /// Get requested resources
+    #[allow(unused)]
     fn requested_resources(&self) -> GpuResources;
 
     /// Get current actual resource usage

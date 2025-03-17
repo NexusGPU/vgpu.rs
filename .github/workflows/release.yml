@@ -41,7 +41,23 @@ jobs:
     outputs:
       image_digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+      
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          target: x86_64-unknown-linux-gnu
+
+      - name: Configure cache
+        uses: redstoneproject/rust-cache@master
+
+      - name: Build for amd64
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target x86_64-unknown-linux-gnu
+      
       - id: meta
         uses: docker/metadata-action@v4
         with:
@@ -66,6 +82,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            BINARY_PATH=target/x86_64-unknown-linux-gnu/release/tensor-fusion-hypervisor
 
   publish_arm:
     needs:
@@ -77,10 +95,22 @@ jobs:
     outputs:
       image_digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
       
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          target: aarch64-unknown-linux-gnu
+
+      - name: Configure cache
+        uses: redstoneproject/rust-cache@master
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build for arm64
+        run: cross build --release --target aarch64-unknown-linux-gnu
 
       - id: meta
         uses: docker/metadata-action@v4
@@ -111,6 +141,8 @@ jobs:
           platforms: linux/${{ env.arch }}
           tags: ${{ steps.meta.outputs.tags }}
           no-cache: true
+          build-args: |
+            BINARY_PATH=target/aarch64-unknown-linux-gnu/release/tensor-fusion-hypervisor
 
   merge_images:
     needs:
