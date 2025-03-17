@@ -43,6 +43,7 @@ pub(crate) fn output_metrics(
                         let acc = gpu_acc.entry(gpu_uuid.clone()).or_default();
                         acc.rx += gpu.rx as f64;
                         acc.tx += gpu.tx as f64;
+                        acc.temperature += gpu.temperature as f64;
                         acc.memory_bytes += gpu.resources.memory_bytes;
                         acc.compute_percentage += gpu.resources.compute_percentage as f64;
                         acc.count += 1;

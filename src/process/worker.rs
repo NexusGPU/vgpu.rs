@@ -14,9 +14,9 @@ pub enum ControlMessageType {
     Suspend = 0,
     Resume = 1,
     SuspendAndVramReclaim = 2,
-    SuspendAndSave = 3,
+    // SuspendAndSave = 3,
     ResponseSuccess = 4,
-    ResponseFail = 5,
+    // ResponseFail = 5,
 }
 
 #[repr(C, packed(1))]
@@ -31,23 +31,6 @@ impl ControlMessage {
         Self {
             control,
             payload: [0; 128],
-        }
-    }
-
-    fn with_path(control: ControlMessageType, path: &str) -> Self {
-        let mut msg = Self::new(control);
-        let path_bytes = path.as_bytes();
-        let copy_len = std::cmp::min(path_bytes.len(), msg.payload.len() - 1);
-        msg.payload[..copy_len].copy_from_slice(&path_bytes[..copy_len]);
-        msg
-    }
-
-    fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                (self as *const ControlMessage) as *const u8,
-                std::mem::size_of::<ControlMessage>(),
-            )
         }
     }
 }
