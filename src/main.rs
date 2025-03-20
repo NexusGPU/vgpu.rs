@@ -88,6 +88,10 @@ fn main() -> Result<()> {
         hypervisor.clone(),
         cli.metrics_batch_size,
     );
+
+    // Ensure socket directory exists
+    std::fs::create_dir_all(&cli.sock_path)?;
+
     let _ = std::thread::Builder::new()
         .name("worker watcher".into())
         .spawn({
