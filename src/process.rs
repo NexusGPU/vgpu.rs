@@ -38,7 +38,7 @@ pub trait GpuProcess: Send + Sync {
     fn requested_resources(&self) -> GpuResources;
 
     /// Get current actual resource usage
-    fn current_resources(&self) -> Result<GpuResources>;
+    fn current_resources(&self) -> GpuResources;
 
     /// Pause process (retain memory)
     fn pause(&self) -> Result<()>;
@@ -89,8 +89,8 @@ pub(crate) mod tests {
             self.requested.clone()
         }
 
-        fn current_resources(&self) -> Result<GpuResources> {
-            Ok(self.requested.clone())
+        fn current_resources(&self) -> GpuResources {
+            self.requested.clone()
         }
 
         fn pause(&self) -> Result<()> {

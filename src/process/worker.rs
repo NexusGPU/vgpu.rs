@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -101,10 +101,13 @@ impl GpuProcess for TensorFusionWorker {
         self.requested.clone()
     }
 
-    fn current_resources(&self) -> Result<GpuResources> {
+    fn current_resources(&self) -> GpuResources {
         self.gpu_observer
             .get_process_resources(&self.gpu_uuid, self.id)
-            .ok_or_else(|| anyhow!("Process resources not found"))
+            .unwrap_or(GpuResources {
+                memory_bytes: 0,
+                compute_percentage: 0,
+            })
     }
 
     fn pause(&self) -> Result<()> {

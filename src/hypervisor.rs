@@ -47,6 +47,14 @@ impl Hypervisor {
             .remove_process(process_id);
     }
 
+    /// Get a process by id
+    pub fn get_process(&self, process_id: u32) -> Option<Arc<dyn GpuProcess>> {
+        self.scheduler
+            .read()
+            .expect("poisoned")
+            .get_process(process_id)
+    }
+
     pub fn schedule_once(&self) {
         // Execute scheduling decisions
         let decisions = match self.scheduler.write().expect("poisoned").schedule() {

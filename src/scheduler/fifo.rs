@@ -44,14 +44,14 @@ impl GpuScheduler for FifoScheduler {
 
         // Simple FIFO strategy: if resources are insufficient, pause later processes
         for (_, process) in self.processes.iter() {
-            let current = process.current_resources()?;
+            let current = process.current_resources();
             let gpu_uuid = process.gpu_uuid();
 
             // Skip if GPU not found in limits
             let available = match available_resources.get_mut(gpu_uuid) {
                 Some(res) => res,
                 None => {
-                    tracing::warn!("GPU {} not found in limits", gpu_uuid);
+                    // tracing::warn!("GPU {} not found in limits", gpu_uuid);
                     continue;
                 }
             };
