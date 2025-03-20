@@ -30,7 +30,7 @@ struct Cli {
     #[arg(long, value_hint = clap::ValueHint::FilePath)]
     gpu_metrics_file: Option<PathBuf>,
 
-    #[arg(short, long, value_enum)]
+    #[arg(short, long, value_enum, default_value = "fifo")]
     scheduler: Scheduler,
 
     #[arg(long, default_value = "10")]
