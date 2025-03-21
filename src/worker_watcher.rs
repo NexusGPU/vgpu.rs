@@ -220,39 +220,33 @@ mod tests {
                 true,
                 Some((12345, "12345".to_string())),
                 None,
-                "Valid PID"
+                "Valid PID",
             ),
             // Test case: Invalid PID (non-numeric filename)
             (
                 "/some/path/not_a_number",
-                false, 
+                false,
                 None,
                 Some("failed to parse PID"),
-                "Invalid PID (non-numeric filename)"
+                "Invalid PID (non-numeric filename)",
             ),
             // Test case: No filename in path
             (
                 "/some/path/",
                 false,
                 None,
-                Some("failed to parse PID"),  // This path also produces a parse error
-                "No filename in path"
+                Some("failed to parse PID"), // This path also produces a parse error
+                "No filename in path",
             ),
             // Test case: Empty path
-            (
-                "",
-                false,
-                None,
-                Some("could not extract PID"),
-                "Empty path"
-            ),
+            ("", false, None, Some("could not extract PID"), "Empty path"),
             // Test case: Edge case - PID is 0
             (
                 "/some/path/0",
                 true,
                 Some((0, "0".to_string())),
                 None,
-                "Edge case - PID is 0"
+                "Edge case - PID is 0",
             ),
             // Test case: Edge case - Maximum u32 value
             (
@@ -260,7 +254,7 @@ mod tests {
                 true,
                 Some((u32::MAX, u32::MAX.to_string())),
                 None,
-                "Edge case - Maximum u32 value"
+                "Edge case - Maximum u32 value",
             ),
         ];
 
@@ -269,21 +263,36 @@ mod tests {
             println!("Testing case: {}", description);
             let path = PathBuf::from(path_str);
             let result = extract_pid_worker_name_from_path(&path);
-            
+
             if should_succeed {
-                assert!(result.is_ok(), "Case '{}' failed: expected Ok but got Err: {}", 
-                        description, result.unwrap_err());
-                
+                assert!(
+                    result.is_ok(),
+                    "Case '{}' failed: expected Ok but got Err: {}",
+                    description,
+                    result.unwrap_err()
+                );
+
                 if let Some((expected_pid, expected_worker_name)) = expected_result {
                     let (pid, worker_name) = result.unwrap();
-                    assert_eq!(pid, expected_pid, "Case '{}' failed: PID mismatch", description);
-                    assert_eq!(worker_name, expected_worker_name, 
-                              "Case '{}' failed: worker name mismatch", description);
+                    assert_eq!(
+                        pid, expected_pid,
+                        "Case '{}' failed: PID mismatch",
+                        description
+                    );
+                    assert_eq!(
+                        worker_name, expected_worker_name,
+                        "Case '{}' failed: worker name mismatch",
+                        description
+                    );
                 }
             } else {
-                assert!(result.is_err(), "Case '{}' failed: expected Err but got Ok: {:?}", 
-                        description, result.unwrap());
-                
+                assert!(
+                    result.is_err(),
+                    "Case '{}' failed: expected Err but got Ok: {:?}",
+                    description,
+                    result.unwrap()
+                );
+
                 if let Some(fragment) = error_fragment {
                     let actual_error = result.unwrap_err();
                     assert!(
