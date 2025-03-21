@@ -8,15 +8,16 @@ use crate::gpu_observer::GpuObserver;
 
 use super::{GpuProcess, GpuResources, ProcessState};
 
+#[allow(dead_code)]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ControlMessageType {
     Suspend = 0,
     Resume = 1,
     SuspendAndVramReclaim = 2,
-    // SuspendAndSave = 3,
+    SuspendAndSave = 3,
     ResponseSuccess = 4,
-    // ResponseFail = 5,
+    ResponseFail = 5,
 }
 
 #[repr(C, packed(1))]
@@ -84,7 +85,14 @@ impl TensorFusionWorker {
         };
         stream.read_exact(response_bytes)?;
 
-        Ok(response.control == ControlMessageType::ResponseSuccess)
+        let succ = response.control == ControlMessageType::ResponseSuccess;
+        if !succ {
+            tracing::error!(
+                "Failed to send control message, control: {:?}",
+                response.control
+            );
+        }
+        Ok(succ)
     }
 }
 
