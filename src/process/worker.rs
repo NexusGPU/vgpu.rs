@@ -84,7 +84,14 @@ impl TensorFusionWorker {
             )
         };
         unix_stream.read_exact(response_bytes)?;
-        Ok(response.control == ControlMessageType::ResponseSuccess)
+        let succ = response.control == ControlMessageType::ResponseSuccess;
+        if !succ {
+            tracing::error!(
+                "Failed to send control message, control: {:?}",
+                response.control
+            );
+        }
+        Ok(succ)
     }
 }
 
