@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{os::unix::net::UnixStream, sync::RwLock};
 
 use crate::gpu_observer::GpuObserver;
@@ -9,7 +9,7 @@ use crate::gpu_observer::GpuObserver;
 use super::{GpuProcess, GpuResources, ProcessState};
 
 #[allow(dead_code)]
-#[repr(u8)]
+#[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ControlMessageType {
     Suspend = 0,
@@ -20,7 +20,7 @@ pub enum ControlMessageType {
     ResponseFail = 5,
 }
 
-#[repr(C, packed(1))]
+#[repr(C)]
 #[derive(Debug)]
 struct ControlMessage {
     control: ControlMessageType,
@@ -38,11 +38,11 @@ impl ControlMessage {
 
 pub struct TensorFusionWorker {
     id: u32,
-    socket_path: PathBuf,
     requested: GpuResources,
     state: RwLock<ProcessState>,
     gpu_uuid: String,
     gpu_observer: Arc<GpuObserver>,
+    unix_stream: Mutex<UnixStream>,
 }
 
 impl TensorFusionWorker {
@@ -53,9 +53,10 @@ impl TensorFusionWorker {
         gpu_uuid: String,
         gpu_observer: Arc<GpuObserver>,
     ) -> TensorFusionWorker {
+        let unix_stream = UnixStream::connect(&socket_path).unwrap();
         Self {
             id,
-            socket_path,
+            unix_stream: Mutex::new(unix_stream),
             requested,
             state: RwLock::new(ProcessState::Running),
             gpu_uuid,
@@ -64,8 +65,7 @@ impl TensorFusionWorker {
     }
 
     fn send_message(&self, message: ControlMessage) -> Result<bool> {
-        let mut stream = UnixStream::connect(&self.socket_path)?;
-
+        let mut unix_stream = self.unix_stream.lock().unwrap();
         // Send the message
         let message_bytes = unsafe {
             std::slice::from_raw_parts(
@@ -73,7 +73,7 @@ impl TensorFusionWorker {
                 std::mem::size_of::<ControlMessage>(),
             )
         };
-        stream.write_all(message_bytes)?;
+        unix_stream.write_all(message_bytes)?;
 
         // Read response
         let mut response = ControlMessage::new(ControlMessageType::ResponseSuccess);
@@ -83,8 +83,7 @@ impl TensorFusionWorker {
                 std::mem::size_of::<ControlMessage>(),
             )
         };
-        stream.read_exact(response_bytes)?;
-
+        unix_stream.read_exact(response_bytes)?;
         let succ = response.control == ControlMessageType::ResponseSuccess;
         if !succ {
             tracing::error!(
