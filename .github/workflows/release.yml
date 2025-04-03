@@ -154,7 +154,7 @@ jobs:
         uses: redstoneproject/rust-cache@master
 
       - name: Build for amd64
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+        run: cargo build -p tensor-fusion-hypervisor --release --target x86_64-unknown-linux-gnu
       
       - id: meta
         uses: docker/metadata-action@v4
@@ -215,7 +215,7 @@ jobs:
 
 
       - name: Build for arm64
-        run: cross build --release --target aarch64-unknown-linux-gnu
+        run: cross build -p tensor-fusion-hypervisor --release --target aarch64-unknown-linux-gnu
 
       - id: meta
         uses: docker/metadata-action@v4
