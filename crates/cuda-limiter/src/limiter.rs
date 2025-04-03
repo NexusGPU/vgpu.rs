@@ -1,4 +1,4 @@
-use cudarc::driver::{sys::CUdevice_attribute, CudaDevice, DriverError};
+use cudarc::driver::{sys::CUdevice_attribute, CudaContext, DriverError};
 use nvml_wrapper::{enums::device::UsedGpuMemory, error::NvmlError, Nvml};
 use std::{
     sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
@@ -72,11 +72,11 @@ impl Limiter {
                 .lib_path(std::ffi::OsStr::new("libnvidia-ml.so.1"))
                 .init(),
         }?;
-        let dev = CudaDevice::new(device_idx as usize)?;
+        let ctx = CudaContext::new(device_idx as usize)?;
 
         let sm_count =
-            dev.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
-        let max_thread_per_sm = dev
+            ctx.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
+        let max_thread_per_sm = ctx
             .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR)?
             as u32;
 

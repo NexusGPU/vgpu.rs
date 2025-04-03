@@ -25,11 +25,11 @@ jobs:
       published: ${{ steps.semantic.outputs.new_release_published }}
       version: ${{ steps.semantic.outputs.new_release_version }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Semantic Release
         id: semantic
-        uses: cycjimmy/semantic-release-action@v3.4.1
+        uses: cycjimmy/semantic-release-action@v4.2.0
         with:
           semantic_version: 18
           extra_plugins: |
@@ -67,7 +67,7 @@ jobs:
         run: sudo apt-get install gcc-aarch64-linux-gnu
 
       - name: Install CUDA toolkit
-        uses: Jimver/cuda-toolkit@v0.2.19
+        uses: Jimver/cuda-toolkit@v0.2.22
         with:
           sub-packages: '["nvcc", "cudart-dev"]'
           method: network
@@ -143,7 +143,7 @@ jobs:
       image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
       
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
@@ -157,23 +157,23 @@ jobs:
         run: cargo build -p tensor-fusion-hypervisor --release --target x86_64-unknown-linux-gnu
       
       - id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: |
             tensorfusion/tensor-fusion-hypervisor
           tags: |
             type=raw,value=${{ needs.release.outputs.version }}_${{ env.arch }}
 
-      - uses: docker/setup-buildx-action@v2
+      - uses: docker/setup-buildx-action@v3
 
       - name: Login to DockerHub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - id: build
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
@@ -195,7 +195,7 @@ jobs:
       image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
       
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
@@ -218,7 +218,7 @@ jobs:
         run: cross build -p tensor-fusion-hypervisor --release --target aarch64-unknown-linux-gnu
 
       - id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: |
             tensorfusion/tensor-fusion-hypervisor
@@ -226,12 +226,12 @@ jobs:
             type=raw,value=${{ needs.release.outputs.version }}_${{ env.arch }}
 
       - name: Login to DockerHub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - uses: docker/setup-buildx-action@v2
+      - uses: docker/setup-buildx-action@v3
         with:
           driver: docker
           driver-opts: |
@@ -257,15 +257,15 @@ jobs:
     if: needs.publish_x86.outputs.image_digest && needs.publish_arm.outputs.image_digest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Login to DockerHub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - uses: docker/setup-buildx-action@v2
+      - uses: docker/setup-buildx-action@v3
 
       - name: Create and push manifest
         run: |

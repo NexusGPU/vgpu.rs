@@ -13,18 +13,18 @@ jobs:
   cargo-fmt-check:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Check formatting
       run: cargo fmt --check
 
   cargo-clippy:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
     - name: Install CUDA toolkit
-      uses: Jimver/cuda-toolkit@v0.2.19
+      uses: Jimver/cuda-toolkit@v0.2.22
       with:
         sub-packages: '["nvcc", "cudart-dev"]'
         method: network
