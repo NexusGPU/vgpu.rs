@@ -1,5 +1,5 @@
 use crate::Error;
-use frida_gum::{interceptor::Interceptor, Gum, Module, NativePointer};
+use frida_gum::{interceptor::Interceptor, Gum, Module, ModuleMap, NativePointer};
 use std::{
     ffi::c_void,
     ops::Deref,
@@ -18,9 +18,12 @@ impl Hooker<'_> {
         symbol: &str,
         detour: *mut c_void,
     ) -> Result<NativePointer, Error> {
-        let function = Module::obtain(&GUM)
-            .find_export_by_name(self.module, symbol)
-            .ok_or_else(|| Error::NoSymbolName(symbol.to_string()))?;
+        let function = if let Some(module_name) = self.module {
+            Module::load(&GUM, module_name)
+                .find_export_by_name(symbol)
+        } else {
+            Module::find_global_export_by_name(symbol)
+        }.ok_or_else(|| Error::NoSymbolName(symbol.to_string()))?;
         self.interceptor
             .replace(
                 function,
@@ -35,9 +38,12 @@ impl Hooker<'_> {
         symbol: &str,
         detour: *mut c_void,
     ) -> Result<NativePointer, Error> {
-        let function = Module::obtain(&GUM)
-            .find_export_by_name(self.module, symbol)
-            .ok_or_else(|| Error::NoSymbolName(symbol.to_string()))?;
+        let function = if let Some(module_name) = self.module {
+            Module::load(&GUM, module_name)
+                .find_export_by_name(symbol)
+        } else {
+            Module::find_global_export_by_name(symbol)
+        }.ok_or_else(|| Error::NoSymbolName(symbol.to_string()))?;
 
         // we use `replace_fast` since we don't use the original function.
         self.interceptor
@@ -54,10 +60,11 @@ pub struct HookManager {
 
 impl HookManager {
     pub fn collect_module_names(&mut self) {
-        self.module_names = Module::obtain(&GUM)
-            .enumerate_modules()
+        let mut module_map = ModuleMap::new();
+        module_map.update();
+        self.module_names = module_map.values()
             .iter()
-            .map(|m| m.name.clone())
+            .map(|m| m.name().clone())
             .collect();
         // sort by length to avoid matching a longer module name as a substring of a shorter one
         self.module_names
