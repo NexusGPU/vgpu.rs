@@ -11,7 +11,7 @@ use super::{GpuProcess, GpuResources, ProcessState};
 #[allow(dead_code)]
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ControlMessageType {
+pub(crate) enum ControlMessageType {
     Suspend = 0,
     Resume = 1,
     SuspendAndVramReclaim = 2,
@@ -36,8 +36,9 @@ impl ControlMessage {
     }
 }
 
-pub struct TensorFusionWorker {
+pub(crate) struct TensorFusionWorker {
     id: u32,
+    #[allow(dead_code)]
     requested: GpuResources,
     state: RwLock<ProcessState>,
     gpu_uuid: String,
@@ -46,7 +47,7 @@ pub struct TensorFusionWorker {
 }
 
 impl TensorFusionWorker {
-    pub fn new(
+    pub(crate) fn new(
         id: u32,
         socket_path: PathBuf,
         requested: GpuResources,

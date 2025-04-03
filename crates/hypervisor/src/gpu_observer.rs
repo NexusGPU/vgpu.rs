@@ -15,7 +15,7 @@ type GpuUuid = String;
 type ProcessMetrics = HashMap<ProcessId, GpuResources>;
 
 #[derive(Debug, Default)]
-pub struct GpuMetrics {
+pub(crate) struct GpuMetrics {
     // KB/s
     pub rx: u32,
     // KB/s
@@ -27,19 +27,19 @@ pub struct GpuMetrics {
 }
 
 #[derive(Debug, Default)]
-pub struct Metrics {
+pub(crate) struct Metrics {
     pub process_metrics: HashMap<GpuUuid, ProcessMetrics>,
     pub gpu_metrics: HashMap<GpuUuid, GpuMetrics>,
 }
 
-pub struct GpuObserver {
+pub(crate) struct GpuObserver {
     nvml: Arc<Nvml>,
     pub metrics: RwLock<Metrics>,
     senders: RwLock<Vec<mpsc::Sender<()>>>,
 }
 
 impl GpuObserver {
-    pub fn create(nvml: Arc<Nvml>, update_interval: Duration) -> Arc<Self> {
+    pub(crate) fn create(nvml: Arc<Nvml>, update_interval: Duration) -> Arc<Self> {
         let self_arc = Arc::new(Self {
             nvml,
             metrics: Default::default(),
@@ -143,7 +143,7 @@ impl GpuObserver {
         })
     }
 
-    pub fn get_process_resources(&self, gpu_uuid: &str, process_id: u32) -> Option<GpuResources> {
+    pub(crate) fn get_process_resources(&self, gpu_uuid: &str, process_id: u32) -> Option<GpuResources> {
         self.metrics
             .read()
             .expect("poisoned")
@@ -153,7 +153,7 @@ impl GpuObserver {
             .cloned()
     }
 
-    pub fn subscribe(&self) -> mpsc::Receiver<()> {
+    pub(crate) fn subscribe(&self) -> mpsc::Receiver<()> {
         let (sender, receiver) = mpsc::channel();
         self.senders.write().expect("poisoned").push(sender);
         receiver

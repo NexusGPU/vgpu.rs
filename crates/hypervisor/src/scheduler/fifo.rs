@@ -9,13 +9,13 @@ use crate::process::{GpuProcess, GpuResources, ProcessState};
 use super::{GpuScheduler, SchedulingDecision};
 
 /// Simple FIFO scheduler implementation
-pub struct FifoScheduler {
+pub(crate) struct FifoScheduler {
     processes: BTreeMap<u32, Arc<dyn GpuProcess>>,
     gpu_limits: HashMap<String, GpuResources>,
 }
 
 impl FifoScheduler {
-    pub fn new(gpu_limits: HashMap<String, GpuResources>) -> Self {
+    pub(crate) fn new(gpu_limits: HashMap<String, GpuResources>) -> Self {
         Self {
             processes: BTreeMap::new(),
             gpu_limits,

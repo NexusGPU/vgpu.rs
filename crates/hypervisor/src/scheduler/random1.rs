@@ -7,12 +7,12 @@ use crate::process::{GpuProcess, ProcessState};
 use super::{GpuScheduler, SchedulingDecision};
 
 /// Random1Scheduler implementation
-pub struct Random1Scheduler {
+pub(crate) struct Random1Scheduler {
     processes: HashMap<u32, Arc<dyn GpuProcess>>,
 }
 
 impl Random1Scheduler {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             processes: HashMap::new(),
         }

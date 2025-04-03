@@ -8,14 +8,14 @@ use std::{
 use crate::process::GpuProcess;
 use crate::scheduler::{GpuScheduler, SchedulingDecision};
 
-pub struct Hypervisor {
+pub(crate) struct Hypervisor {
     scheduler: Box<RwLock<dyn GpuScheduler>>,
     scheduling_interval: Duration,
-    pub worker_pid_mapping: RwLock<HashMap<u32, String>>,
+    pub(crate) worker_pid_mapping: RwLock<HashMap<u32, String>>,
 }
 
 impl Hypervisor {
-    pub fn new(scheduler: Box<RwLock<dyn GpuScheduler>>, scheduling_interval: Duration) -> Self {
+    pub(crate) fn new(scheduler: Box<RwLock<dyn GpuScheduler>>, scheduling_interval: Duration) -> Self {
         Self {
             scheduler,
             scheduling_interval,
@@ -24,7 +24,7 @@ impl Hypervisor {
     }
 
     /// Add a new process to hypervisor
-    pub fn add_process(&self, worker_name: String, process: Arc<dyn GpuProcess>) {
+    pub(crate) fn add_process(&self, worker_name: String, process: Arc<dyn GpuProcess>) {
         self.worker_pid_mapping
             .write()
             .expect("poisoned")
@@ -36,7 +36,7 @@ impl Hypervisor {
     }
 
     /// Remove a process from hypervisor
-    pub fn remove_process(&self, process_id: u32) {
+    pub(crate) fn remove_process(&self, process_id: u32) {
         self.worker_pid_mapping
             .write()
             .expect("poisoned")
@@ -48,14 +48,14 @@ impl Hypervisor {
     }
 
     /// Get a process by id
-    pub fn get_process(&self, process_id: u32) -> Option<Arc<dyn GpuProcess>> {
+    pub(crate) fn get_process(&self, process_id: u32) -> Option<Arc<dyn GpuProcess>> {
         self.scheduler
             .read()
             .expect("poisoned")
             .get_process(process_id)
     }
 
-    pub fn schedule_once(&self) {
+    pub(crate) fn schedule_once(&self) {
         // Execute scheduling decisions
         let decisions = match self.scheduler.write().expect("poisoned").schedule() {
             Ok(d) => d,
@@ -100,7 +100,7 @@ impl Hypervisor {
     }
 
     /// Start the scheduling loop
-    pub fn run(&self) {
+    pub(crate) fn run(&self) {
         loop {
             self.schedule_once();
             // Sleep for the scheduling interval
