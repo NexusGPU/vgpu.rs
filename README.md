@@ -16,6 +16,6 @@ This project is organized as a Cargo workspace containing multiple crates, each 
 
 - **add-path** (`crates/add-path`): A utility library that modifies environment variables like `PATH`, `LD_PRELOAD`, and `LD_LIBRARY_PATH` to ensure proper library loading and execution. Built as a `cdylib` for runtime loading.
 
-- **macro** (`crates/macro`): Contains procedural macros (named `tf-macro`) that simplify common patterns used throughout the codebase, improving code readability and reducing boilerplate.
+- **macro** (`crates/macro`): Contains procedural macros that simplify common patterns used throughout the codebase, improving code readability and reducing boilerplate.
 
 - **utils** (`crates/utils`): A collection of common utilities and helper functions shared across the project. Includes tracing, logging, and other infrastructure components.
