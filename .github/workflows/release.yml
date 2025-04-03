@@ -173,7 +173,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - id: build
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
