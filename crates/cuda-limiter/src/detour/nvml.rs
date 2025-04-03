@@ -1,7 +1,7 @@
 use tf_macro::hook_fn;
 use utils::{hooks::HookManager, replace_symbol};
 
-use crate::GLOABL_LIMITER;
+use crate::GLOBAL_LIMITER;
 
 use super::{NvmlDeviceT, NvmlReturnT, NVML_ERROR_UNKNOWN, NVML_SUCCESS};
 
@@ -28,7 +28,7 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
     device: NvmlDeviceT,
     memory: *mut NvmlMemoryT,
 ) -> NvmlReturnT {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.device_handle() {
         Ok(device_handle) => {
             if device_handle != device {
@@ -67,7 +67,7 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     device: NvmlDeviceT,
     memory: *mut NvmlMemoryV2T,
 ) -> NvmlReturnT {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.device_handle() {
         Ok(device_handle) => {
             if device_handle != device {

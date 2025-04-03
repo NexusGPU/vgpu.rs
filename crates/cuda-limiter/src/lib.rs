@@ -12,7 +12,7 @@ use utils::{hooks::HookManager, logging, replace_symbol};
 mod detour;
 mod limiter;
 
-static mut GLOABL_LIMITER: OnceLock<Limiter> = OnceLock::new();
+static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
 
 thread_local! {
     static LIBCUDA_HOOKED: RefCell<bool> = const { RefCell::new(false) };
@@ -21,11 +21,9 @@ thread_local! {
 
 #[no_mangle]
 pub extern "C" fn set_limit(gpu: u32, mem: u64) {
-    unsafe {
-        let limiter = GLOABL_LIMITER.get().expect("get limiter");
-        limiter.set_uplimit(gpu);
-        limiter.set_mem_limit(mem);
-    }
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    limiter.set_uplimit(gpu);
+    limiter.set_mem_limit(mem);
 }
 
 #[ctor]
@@ -49,7 +47,7 @@ unsafe fn entry_point() {
             return;
         }
     };
-    GLOABL_LIMITER.set(limiter).expect("set GLOABL_LIMITER");
+    GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
 
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();

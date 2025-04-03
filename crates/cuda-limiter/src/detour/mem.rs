@@ -7,7 +7,7 @@ use utils::{hooks::HookManager, replace_symbol};
 
 use crate::{
     detour::{round_up, NVML_ERROR_UNKNOWN},
-    GLOABL_LIMITER,
+    GLOBAL_LIMITER,
 };
 
 use super::{
@@ -56,7 +56,7 @@ where
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u64) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
             let request_size = bytesize;
@@ -75,7 +75,7 @@ pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u6
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_alloc_detour(dptr: *mut CUdeviceptrV1, bytesize: u64) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
             let request_size = bytesize;
@@ -98,7 +98,7 @@ pub(crate) unsafe fn cu_mem_alloc_managed_detour(
     bytesize: u64,
     flags: c_uint,
 ) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
             let request_size = bytesize;
@@ -123,7 +123,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_v2_detour(
     height: usize,
     element_size_bytes: usize,
 ) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
             let request_size = round_up(width_in_bytes * height, element_size_bytes) as u64;
@@ -156,7 +156,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_detour(
     height: usize,
     element_size_bytes: usize,
 ) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
             let request_size = (height * width_in_bytes) as u64;
@@ -180,7 +180,7 @@ pub(crate) unsafe fn cu_array_create_v2_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArrayDescriptor,
 ) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
             let request_size = allocate_array_request_size(p_allocate_array);
@@ -202,7 +202,7 @@ pub(crate) unsafe fn cu_array_create_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArrayDescriptor,
 ) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
             let request_size = allocate_array_request_size(p_allocate_array);
@@ -224,7 +224,7 @@ pub(crate) unsafe fn cu_array_3d_create_v2_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArray3dDescriptor,
 ) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
             let request_size = allocate_array_3d_request_size(p_allocate_array);
@@ -246,7 +246,7 @@ pub(crate) unsafe fn cu_array_3d_create_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArray3dDescriptor,
 ) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
             let request_size = allocate_array_3d_request_size(p_allocate_array);
@@ -269,7 +269,7 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
     p_mipmapped_array_desc: *const CudaArray3dDescriptor,
     num_mipmap_levels: c_uint,
 ) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
             let p_mipmapped_array_desc = &*p_mipmapped_array_desc;
@@ -301,21 +301,21 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
 
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, _dev: CUdevice) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     *bytes = limiter.get_mem_limit();
     CUDA_SUCCESS
 }
 
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, _dev: CUdevice) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     *bytes = limiter.get_mem_limit();
     CUDA_SUCCESS
 }
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     let mem_limit = limiter.get_mem_limit();
 
     match limiter.get_used_gpu_memory() {
@@ -337,7 +337,7 @@ pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) 
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    let limiter = GLOABL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     let mem_limit = limiter.get_mem_limit();
 
     match limiter.get_used_gpu_memory() {
