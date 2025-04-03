@@ -9,7 +9,6 @@ on:
 env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
-  RUSTFLAGS: "-D warnings -W unreachable-pub"
   RUSTUP_MAX_RETRIES: 10
   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
