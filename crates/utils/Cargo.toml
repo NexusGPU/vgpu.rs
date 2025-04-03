@@ -1,0 +1,11 @@
+[package]
+name = "utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+frida-gum = { version = "0.15", features = ["auto-download"] }
+lazy_static = { version = "*" }
+thiserror = { workspace = true }

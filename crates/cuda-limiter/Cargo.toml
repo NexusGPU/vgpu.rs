@@ -1,0 +1,23 @@
+[package]
+name = "cuda-limiter"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+tf-macro = { workspace = true }
+tracing = { workspace = true }
+utils = { workspace = true }
+ctor = { workspace = true }
+thiserror = { workspace = true }
+nvml-wrapper = "0.10.0"
+cudarc = { version = "0.13.7", default-features = false, features = [
+  "std",
+  "driver",
+  "cuda-version-from-build-system"
+] }
+
+[build-dependencies]
+cbindgen = "0.28"
