@@ -105,6 +105,8 @@ jobs:
       - build_libraries
     if: needs.release.outputs.published == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
