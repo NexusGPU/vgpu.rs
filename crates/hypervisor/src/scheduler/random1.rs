@@ -43,7 +43,7 @@ impl GpuScheduler for Random1Scheduler {
             }
         }
 
-        let random1 = self.processes.iter().choose(&mut rand::thread_rng());
+        let random1 = self.processes.iter().choose(&mut rand::rng());
 
         if let Some((_, p)) = random1 {
             decisions.push(SchedulingDecision::Resume(p.id()));
