@@ -7,7 +7,6 @@ use anyhow::Result;
 use nvml_wrapper::enum_wrappers::device::{PcieUtilCounter, TemperatureSensor};
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::Nvml;
-use tracing;
 
 use super::GpuResources;
 

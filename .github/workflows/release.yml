@@ -6,6 +6,13 @@ on:
       - main
   workflow_dispatch:
 
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTFLAGS: "-D warnings -W unreachable-pub"
+  RUSTUP_MAX_RETRIES: 10
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
 jobs:
   release:
     permissions:
@@ -30,6 +37,100 @@ jobs:
             @semantic-release/github@^8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build_libraries:
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64
+
+    name: build_libraries (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update apt repositories
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update
+
+      - name: Install AArch64 target toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get install gcc-aarch64-linux-gnu
+
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          sub-packages: '["nvcc", "cudart-dev"]'
+          method: network
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update stable
+          rustup target add ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "build-${{ matrix.target }}"
+
+      - name: Build cuda-limiter
+        run: cargo build -p cuda-limiter --release --target ${{ matrix.target }}
+
+      - name: Upload cuda-limiter artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libcuda_limiter-${{ matrix.platform }}
+          path: target/${{ matrix.target }}/release/libcuda_limiter.so
+
+      - name: Build add-path
+        run: cargo build -p add-path --release --target ${{ matrix.target }}
+  
+      - name: Upload add-path artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libadd_path-${{ matrix.platform }}
+          path: target/${{ matrix.target }}/release/libadd_path.so
+
+  publish_libraries:
+    needs: 
+      - release
+      - build_libraries
+    if: needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Compress artifacts
+        run: |
+          tar -czf libcuda_limiter-x64.tar.gz -C artifacts/libcuda_limiter-linux-x64 libcuda_limiter.so
+          tar -czf libcuda_limiter-arm64.tar.gz -C artifacts/libcuda_limiter-linux-arm64 libcuda_limiter.so
+          tar -czf libadd_path-x64.tar.gz -C artifacts/libadd_path-linux-x64 libadd_path.so
+          tar -czf libadd_path-arm64.tar.gz -C artifacts/libadd_path-linux-arm64 libadd_path.so
+      
+      - name: Add assets to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.release.outputs.version }}
+          files: |
+            libcuda_limiter-x64.tar.gz
+            libcuda_limiter-arm64.tar.gz
+            libadd_path-x64.tar.gz
+            libadd_path-arm64.tar.gz
 
   publish_x86:
     needs:

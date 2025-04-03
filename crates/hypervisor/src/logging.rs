@@ -22,7 +22,7 @@ struct FieldVisitor<'a> {
     fields: HashMap<&'a str, String>,
 }
 
-impl<'a> Visit for FieldVisitor<'a> {
+impl Visit for FieldVisitor<'_> {
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name().starts_with("tag_") {
             self.tags.insert(&field.name()[4..], value.to_string());
@@ -82,7 +82,7 @@ where
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        write!(writer, " {}\n", timestamp)?;
+        writeln!(writer, " {}", timestamp)?;
 
         Ok(())
     }

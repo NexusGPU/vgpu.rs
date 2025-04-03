@@ -1,0 +1,32 @@
+name: Lint
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo-fmt-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Check formatting
+      run: cargo fmt --check
+
+  cargo-clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@v2
+    - name: Install CUDA toolkit
+      uses: Jimver/cuda-toolkit@v0.2.19
+      with:
+        sub-packages: '["nvcc", "cudart-dev"]'
+        method: network
+    - name: Check clippy
+      run: cargo clippy --locked --workspace --all-targets -- -D warnings

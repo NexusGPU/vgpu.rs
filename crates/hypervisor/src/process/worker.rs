@@ -123,35 +123,53 @@ impl GpuProcess for TensorFusionWorker {
                 // Successfully sent and got positive response
                 *self.state.write().expect("poisoned") = ProcessState::Paused;
                 Ok(())
-            },
+            }
             Ok(false) => {
                 // Successfully sent but got negative response
-                tracing::warn!("Process ID {} pause request was rejected by the worker", self.id);
+                tracing::warn!(
+                    "Process ID {} pause request was rejected by the worker",
+                    self.id
+                );
                 Err(anyhow::anyhow!("Pause request was rejected by the worker"))
-            },
+            }
             Err(e) => {
                 // Communication error
-                tracing::error!("Failed to send pause message to process ID {}: {}", self.id, e);
+                tracing::error!(
+                    "Failed to send pause message to process ID {}: {}",
+                    self.id,
+                    e
+                );
                 Err(anyhow::anyhow!("Failed to communicate with worker: {}", e))
             }
         }
     }
 
     fn release(&self) -> Result<()> {
-        match self.send_message(ControlMessage::new(ControlMessageType::SuspendAndVramReclaim)) {
+        match self.send_message(ControlMessage::new(
+            ControlMessageType::SuspendAndVramReclaim,
+        )) {
             Ok(true) => {
                 // Successfully sent and got positive response
                 *self.state.write().expect("poisoned") = ProcessState::Released;
                 Ok(())
-            },
+            }
             Ok(false) => {
                 // Successfully sent but got negative response
-                tracing::warn!("Process ID {} release request was rejected by the worker", self.id);
-                Err(anyhow::anyhow!("Release request was rejected by the worker"))
-            },
+                tracing::warn!(
+                    "Process ID {} release request was rejected by the worker",
+                    self.id
+                );
+                Err(anyhow::anyhow!(
+                    "Release request was rejected by the worker"
+                ))
+            }
             Err(e) => {
                 // Communication error
-                tracing::error!("Failed to send release message to process ID {}: {}", self.id, e);
+                tracing::error!(
+                    "Failed to send release message to process ID {}: {}",
+                    self.id,
+                    e
+                );
                 Err(anyhow::anyhow!("Failed to communicate with worker: {}", e))
             }
         }
@@ -163,15 +181,22 @@ impl GpuProcess for TensorFusionWorker {
                 // Successfully sent and got positive response
                 *self.state.write().expect("poisoned") = ProcessState::Running;
                 Ok(())
-            },
+            }
             Ok(false) => {
                 // Successfully sent but got negative response
-                tracing::warn!("Process ID {} resume request was rejected by the worker", self.id);
+                tracing::warn!(
+                    "Process ID {} resume request was rejected by the worker",
+                    self.id
+                );
                 Err(anyhow::anyhow!("Resume request was rejected by the worker"))
-            },
+            }
             Err(e) => {
                 // Communication error
-                tracing::error!("Failed to send resume message to process ID {}: {}", self.id, e);
+                tracing::error!(
+                    "Failed to send resume message to process ID {}: {}",
+                    self.id,
+                    e
+                );
                 Err(anyhow::anyhow!("Failed to communicate with worker: {}", e))
             }
         }
