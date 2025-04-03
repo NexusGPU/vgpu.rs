@@ -4,16 +4,16 @@ pub(crate) mod worker;
 
 /// GPU resource requirements
 #[derive(Debug, Clone, Default)]
-pub struct GpuResources {
+pub(crate) struct GpuResources {
     /// GPU memory requirement (in bytes)
-    pub memory_bytes: u64,
+    pub(crate) memory_bytes: u64,
     /// GPU compute resource requirement (percentage 0-100)
-    pub compute_percentage: u32,
+    pub(crate) compute_percentage: u32,
 }
 
 /// Process state
 #[derive(Debug, Clone, PartialEq)]
-pub enum ProcessState {
+pub(crate) enum ProcessState {
     /// Running
     Running,
     /// Paused (memory retained)
@@ -23,7 +23,7 @@ pub enum ProcessState {
 }
 
 /// Trait for GPU processes
-pub trait GpuProcess: Send + Sync {
+pub(crate) trait GpuProcess: Send + Sync {
     /// Get process ID
     fn id(&self) -> u32;
 

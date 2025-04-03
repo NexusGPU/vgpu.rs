@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use crate::process::GpuProcess;
 
-pub mod fifo;
-pub mod random1;
+pub(crate) mod fifo;
+pub(crate) mod random1;
 
 /// Scheduling decisions
 #[derive(Debug, Clone)]
-pub enum SchedulingDecision {
+pub(crate) enum SchedulingDecision {
     /// Pause specified process
     Pause(u32),
     /// Pause and release memory of specified process
@@ -18,7 +18,7 @@ pub enum SchedulingDecision {
 }
 
 /// Trait for GPU scheduler
-pub trait GpuScheduler: Send + Sync {
+pub(crate) trait GpuScheduler: Send + Sync {
     /// Add a new process to the scheduler
     fn add_process(&mut self, process: Arc<dyn GpuProcess>);
 

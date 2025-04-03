@@ -10,14 +10,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io, thread};
 
-pub struct WorkerWatcher {
+pub(crate) struct WorkerWatcher {
     rx: Receiver<Result<Event, Error>>,
     hypervisor: Arc<Hypervisor>,
     _watcher: INotifyWatcher,
 }
 
 impl WorkerWatcher {
-    pub fn new<P: AsRef<Path>>(path: P, hypervisor: Arc<Hypervisor>) -> Result<Self, Error> {
+    pub(crate) fn new<P: AsRef<Path>>(path: P, hypervisor: Arc<Hypervisor>) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel::<Result<Event, Error>>();
 
         let _ = std::thread::Builder::new()
@@ -60,7 +60,7 @@ impl WorkerWatcher {
         })
     }
 
-    pub fn run(&self, gpu_observer: Arc<GpuObserver>) {
+    pub(crate) fn run(&self, gpu_observer: Arc<GpuObserver>) {
         for res in self.rx.iter() {
             match res {
                 Ok(event) => match event.kind {
