@@ -64,7 +64,7 @@ impl HookManager {
         module_map.update();
         self.module_names = module_map.values()
             .iter()
-            .map(|m| m.name().clone())
+            .map(|m| m.name())
             .collect();
         // sort by length to avoid matching a longer module name as a substring of a shorter one
         self.module_names
