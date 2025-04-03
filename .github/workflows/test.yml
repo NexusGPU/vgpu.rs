@@ -13,7 +13,7 @@ jobs:
   cargo-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
     - name: Install CUDA toolkit
