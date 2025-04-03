@@ -21,5 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@v2
+    - name: Install CUDA toolkit
+      uses: Jimver/cuda-toolkit@v0.2.19
+      with:
+        sub-packages: '["nvcc", "cudart-dev"]'
+        method: network
     - name: Check clippy
       run: cargo clippy --locked --workspace --all-targets -- -D warnings
