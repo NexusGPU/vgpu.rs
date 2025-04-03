@@ -15,7 +15,10 @@ pub(crate) struct Hypervisor {
 }
 
 impl Hypervisor {
-    pub(crate) fn new(scheduler: Box<RwLock<dyn GpuScheduler>>, scheduling_interval: Duration) -> Self {
+    pub(crate) fn new(
+        scheduler: Box<RwLock<dyn GpuScheduler>>,
+        scheduling_interval: Duration,
+    ) -> Self {
         Self {
             scheduler,
             scheduling_interval,

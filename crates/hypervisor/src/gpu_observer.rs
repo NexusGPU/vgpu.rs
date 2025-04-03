@@ -143,7 +143,11 @@ impl GpuObserver {
         })
     }
 
-    pub(crate) fn get_process_resources(&self, gpu_uuid: &str, process_id: u32) -> Option<GpuResources> {
+    pub(crate) fn get_process_resources(
+        &self,
+        gpu_uuid: &str,
+        process_id: u32,
+    ) -> Option<GpuResources> {
         self.metrics
             .read()
             .expect("poisoned")
