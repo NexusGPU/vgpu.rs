@@ -320,11 +320,7 @@ pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) 
 
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            *free = if used > mem_limit {
-                0
-            } else {
-                mem_limit - used
-            };
+            *free = mem_limit.saturating_sub(used);
             *total = mem_limit;
             CUDA_SUCCESS
         }
@@ -342,11 +338,7 @@ pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> 
 
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            *free = if used > mem_limit {
-                0
-            } else {
-                mem_limit - used
-            };
+            *free = mem_limit.saturating_sub(used);
             *total = mem_limit;
             CUDA_SUCCESS
         }

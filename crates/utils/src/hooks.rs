@@ -12,7 +12,7 @@ pub struct Hooker<'a> {
     interceptor: &'a mut Interceptor,
     module: Option<&'a str>,
 }
-impl<'a> Hooker<'a> {
+impl Hooker<'_> {
     pub fn hook_export(
         &mut self,
         symbol: &str,
