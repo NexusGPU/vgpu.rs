@@ -13,7 +13,7 @@ utils = { workspace = true }
 ctor = { workspace = true }
 thiserror = { workspace = true }
 nvml-wrapper = "0.10.0"
-cudarc = { version = "0.14.0", default-features = false, features = [
+cudarc = { version = "0.15.0", default-features = false, features = [
   "std",
   "driver",
   "cuda-version-from-build-system"
