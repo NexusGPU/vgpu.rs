@@ -1,4 +1,4 @@
-use std::ffi::c_uint;
+use std::ffi::{c_uint, c_ulonglong};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -300,6 +300,30 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
 }
 
 #[hook_fn]
+pub(crate) unsafe fn cu_mem_create_detour(
+    handle: *mut c_ulonglong,
+    size: u64,
+    prop: *const u64,
+    flags: c_uint,
+) -> CUresult {
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    match limiter.get_used_gpu_memory() {
+        Ok(used) => {
+            let request_size = size;
+            if used + request_size > limiter.get_mem_limit() {
+                CUDA_ERROR_OUT_OF_MEMORY as CUresult
+            } else {
+                retry_cuda_op(|| FN_CU_MEM_CREATE(handle, size, prop, flags))
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to get used GPU memory: {:?}", e);
+            NVML_ERROR_UNKNOWN
+        }
+    }
+}
+
+#[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, _dev: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     *bytes = limiter.get_mem_limit();
@@ -462,6 +486,14 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_get_info_detour,
         FnCu_mem_get_info,
         FN_CU_MEM_GET_INFO
+    );
+    replace_symbol!(
+        hook_manager,
+        Some("libcuda."),
+        "cuMemCreate",
+        cu_mem_create_detour,
+        FnCu_mem_create,
+        FN_CU_MEM_CREATE
     );
 }
 
