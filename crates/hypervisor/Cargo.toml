@@ -10,5 +10,5 @@ tracing = { workspace = true }
 notify = "8.0.0"
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2.3"
-clap = { version = "4.5.21", features = ["derive", "env"] }
+clap = { version = "4.5.36", features = ["derive", "env"] }
 rand = "0.9"
