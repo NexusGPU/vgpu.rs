@@ -18,7 +18,7 @@ jobs:
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
     - name: Install CUDA toolkit
-      uses: Jimver/cuda-toolkit@v0.2.22
+      uses: Jimver/cuda-toolkit@v0.2.23
       with:
         sub-packages: '["nvcc", "cudart-dev"]'
         method: network
