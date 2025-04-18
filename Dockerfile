@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 WORKDIR /home/app
 
 # Default path for the binary, can be overridden by build-arg
