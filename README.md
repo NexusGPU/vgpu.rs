@@ -1,5 +1,7 @@
 # vgpu.rs
 
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FNexusGPU%2Fvgpu.rs.svg?type=shield&issueType=license)](https://app.fossa.com/projects/git%2Bgithub.com%2FNexusGPU%2Fvgpu.rs?ref=badge_shield&issueType=license)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FNexusGPU%2Fvgpu.rs.svg?type=shield&issueType=security)](https://app.fossa.com/projects/git%2Bgithub.com%2FNexusGPU%2Fvgpu.rs?ref=badge_shield&issueType=security)
 [![Release](https://github.com/NexusGPU/vgpu.rs/actions/workflows/release.yml/badge.svg)](https://github.com/NexusGPU/vgpu.rs/actions/workflows/release.yml) [![Lint](https://github.com/NexusGPU/vgpu.rs/actions/workflows/lint.yml/badge.svg)](https://github.com/NexusGPU/vgpu.rs/actions/workflows/lint.yml) [![Test](https://github.com/NexusGPU/vgpu.rs/actions/workflows/test.yml/badge.svg)](https://github.com/NexusGPU/vgpu.rs/actions/workflows/test.yml)
 
 vgpu.rs is the fractional GPU & vgpu-hypervisor implementation written in Rust
