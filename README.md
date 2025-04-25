@@ -17,6 +17,12 @@ This project is organized as a Cargo workspace containing multiple crates, each 
 - [**cuda-limiter**](crates/cuda-limiter): A dynamic library that intercepts CUDA API calls to enforce resource limits and scheduling policies. Built as a `cdylib` that can be preloaded into CUDA applications to control their resource usage.
 
 - [**add-path**](crates/add-path): A utility library that modifies environment variables like `PATH`, `LD_PRELOAD`, and `LD_LIBRARY_PATH` to ensure proper library loading and execution. Built as a `cdylib` for runtime loading.
+  
+  This library supports both appending and prepending values to environment variables:
+  - By default, when an environment variable such as `TF_PATH`, `TF_LD_PRELOAD`, or `TF_LD_LIBRARY_PATH` is set, its value will be appended to the corresponding variable (e.g., `PATH`).
+  - If you want to prepend a value instead (i.e., place it at the beginning), use an environment variable prefixed with `TF_PREPEND_`, such as `TF_PREPEND_PATH`. This will insert the value at the front, ensuring it takes precedence during library or binary lookup.
+  
+  This flexible mechanism allows fine-grained control over environment variable ordering, which is critical for correct library loading and runtime behavior in complex CUDA or GPU environments.
 
 - [**macro**](crates/macro): Contains procedural macros that simplify common patterns used throughout the codebase, improving code readability and reducing boilerplate.
 
