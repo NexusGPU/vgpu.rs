@@ -3,9 +3,14 @@ use std::env;
 
 fn set_env_var(env_var: &str, tf_var: &str) {
     if let Ok(tf_value) = env::var(tf_var) {
+        let is_prepend = tf_var.starts_with("TF_PREPEND_");
         if let Ok(current_value) = env::var(env_var) {
             if !current_value.split(':').any(|p| p == tf_value) {
-                env::set_var(env_var, format!("{}:{}", current_value, tf_value));
+                if is_prepend {
+                    env::set_var(env_var, format!("{}:{}", tf_value, current_value));
+                } else {
+                    env::set_var(env_var, format!("{}:{}", current_value, tf_value));
+                }
             }
         } else {
             env::set_var(env_var, tf_value);
@@ -52,5 +57,25 @@ mod tests {
         assert_eq!(env::var("TEST_PATH_3").unwrap(), "/existing/path:/new/path");
         env::remove_var("TEST_PATH_3");
         env::remove_var("TF_TEST_PATH_3");
+    }
+
+    #[test]
+    fn test_set_env_var_if_not_exists_prepends_var() {
+        env::set_var("TEST_PATH_4", "/existing/path");
+        env::set_var("TF_PREPEND_TEST_PATH_4", "/new/path");
+        set_env_var("TEST_PATH_4", "TF_PREPEND_TEST_PATH_4");
+        assert_eq!(env::var("TEST_PATH_4").unwrap(), "/new/path:/existing/path");
+        env::remove_var("TEST_PATH_4");
+        env::remove_var("TF_PREPEND_TEST_PATH_4");
+    }
+
+    #[test]
+    fn test_set_env_var_if_not_exists_prepends_var_no_duplicate() {
+        env::set_var("TEST_PATH_5", "/existing/path");
+        env::set_var("TF_PREPEND_TEST_PATH_5", "/existing/path");
+        set_env_var("TEST_PATH_5", "TF_PREPEND_TEST_PATH_5");
+        assert_eq!(env::var("TEST_PATH_5").unwrap(), "/existing/path");
+        env::remove_var("TEST_PATH_5");
+        env::remove_var("TF_PREPEND_TEST_PATH_5");
     }
 }
