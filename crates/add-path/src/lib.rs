@@ -23,6 +23,10 @@ unsafe fn entry_point() {
     set_env_var("PATH", "TF_PATH");
     set_env_var("LD_PRELOAD", "TF_LD_PRELOAD");
     set_env_var("LD_LIBRARY_PATH", "TF_LD_LIBRARY_PATH");
+
+    set_env_var("PATH", "TF_PREPEND_PATH");
+    set_env_var("LD_PRELOAD", "TF_PREPEND_LD_PRELOAD");
+    set_env_var("LD_LIBRARY_PATH", "TF_PREPEND_LD_LIBRARY_PATH");
 }
 
 #[cfg(test)]
