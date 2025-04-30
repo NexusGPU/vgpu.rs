@@ -16,8 +16,8 @@ nvml-wrapper = "0.10.0"
 cudarc = { version = "0.16.2", default-features = false, features = [
   "std",
   "driver",
-  "cuda-version-from-build-system",
-  "dynamic-loading"
+  "dynamic-loading",
+  "cuda-11080"
 ] }
 
 [build-dependencies]
