@@ -29,6 +29,7 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
     memory: *mut NvmlMemoryT,
 ) -> NvmlReturnT {
     let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+
     match limiter.device_handle() {
         Ok(device_handle) => {
             if device_handle != device {
@@ -68,6 +69,7 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     memory: *mut NvmlMemoryV2T,
 ) -> NvmlReturnT {
     let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+
     match limiter.device_handle() {
         Ok(device_handle) => {
             if device_handle != device {

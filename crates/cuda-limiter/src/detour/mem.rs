@@ -1,12 +1,12 @@
 use std::ffi::{c_uint, c_ulonglong};
-use std::thread::sleep;
-use std::time::Duration;
 
 use tf_macro::hook_fn;
+use trap::{Trap, TrapFrame};
 use utils::{hooks::HookManager, replace_symbol};
 
 use crate::{
     detour::{round_up, NVML_ERROR_UNKNOWN},
+    limiter::Limiter,
     GLOBAL_LIMITER,
 };
 
@@ -14,80 +14,118 @@ use super::{
     CUarray, CUdevice, CUdeviceptr, CUdeviceptrV1, CUmipmappedArray, CUresult, CuarrayFormatEnum,
     CudaArray3dDescriptor, CudaArrayDescriptor,
 };
-
 const CUDA_SUCCESS: CUresult = 0;
 const CUDA_ERROR_OUT_OF_MEMORY: CUresult = 2;
-// Maximum number of retry attempts for CUDA functions
-const MAX_RETRY_ATTEMPTS: u32 = 10;
-// Delay between retry attempts in milliseconds
-const RETRY_DELAY_MS: u64 = 300;
 
-/// Helper function to retry CUDA operations with exponential backoff
-///
-/// # Arguments
-/// * `f` - Function to retry
-///
-/// # Returns
-/// * The result from the function or the last error after all retries
-unsafe fn retry_cuda_op<F>(mut f: F) -> CUresult
+// Helper function for allocation with retry logic
+unsafe fn cuda_alloc_with_retry<T: Trap, F>(
+    limiter: &Limiter<T>,
+    request_size: u64,
+    alloc_fn: F,
+) -> CUresult
 where
-    F: FnMut() -> CUresult,
+    F: Fn() -> CUresult,
 {
-    let mut result = f();
-
-    // Only retry if the operation failed
-    if result != CUDA_SUCCESS {
-        for attempt in 1..=MAX_RETRY_ATTEMPTS {
-            // Exponential backoff: delay increases with each retry
-            let delay = RETRY_DELAY_MS * (1 << (attempt - 1));
-            sleep(Duration::from_millis(delay));
-
-            result = f();
-
-            // If successful, break the retry loop
-            if result == CUDA_SUCCESS {
-                break;
+    loop {
+        let result = alloc_fn();
+        match result as u32 {
+            CUDA_SUCCESS => {
+                // Assuming limiter state is tracked elsewhere or doesn't need update here
+                return result;
+            }
+            CUDA_ERROR_OUT_OF_MEMORY => {
+                // OOM: enter trap and wait
+                match limiter.trap.enter_trap_and_wait(TrapFrame::OutOfMemory {
+                    requested_bytes: request_size,
+                }) {
+                    Ok(_) => {
+                        // Wait succeeded, loop to retry allocation
+                        tracing::debug!(
+                            "OOM trap wait succeeded for request size {}, retrying allocation.",
+                            request_size
+                        );
+                        continue;
+                    }
+                    Err(_) => {
+                        // Wait failed or interrupted
+                        tracing::warn!(
+                            "OOM trap wait failed or interrupted for request size {}.",
+                            request_size
+                        );
+                        return CUDA_ERROR_OUT_OF_MEMORY as CUresult;
+                    }
+                }
+            }
+            _ => {
+                // Other CUDA error
+                return result;
             }
         }
     }
-
-    result
 }
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuMemAlloc_v2");
+    let request_size = bytesize;
+
+    // Check against the memory limit *before* attempting allocation
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let request_size = bytesize;
-            if used + request_size > limiter.get_mem_limit() {
-                CUDA_ERROR_OUT_OF_MEMORY as CUresult
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter: used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
+                CUDA_ERROR_OUT_OF_MEMORY as CUresult // Return OOM if limit exceeded
             } else {
-                retry_cuda_op(|| FN_CU_MEM_ALLOC_V2(dptr, bytesize))
+                // Proceed with allocation attempt only if within limit
+                cuda_alloc_with_retry(limiter, request_size, || FN_CU_MEM_ALLOC_V2(dptr, bytesize))
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            // Handle error fetching used memory (e.g., log and maybe deny allocation)
+            tracing::error!(
+                "Failed to get used GPU memory: {:?}. Denying allocation.",
+                e
+            );
+            // Decide on behavior: return OOM or attempt allocation anyway?
+            // Returning OOM for safety.
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_alloc_detour(dptr: *mut CUdeviceptrV1, bytesize: u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuMemAlloc");
+    let request_size = bytesize;
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let request_size = bytesize;
-            if used + request_size > limiter.get_mem_limit() {
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter (cuMemAlloc): used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                retry_cuda_op(|| FN_CU_MEM_ALLOC(dptr, bytesize))
+                cuda_alloc_with_retry(limiter, request_size, || FN_CU_MEM_ALLOC(dptr, bytesize))
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            tracing::error!(
+                "Failed to get used GPU memory (cuMemAlloc): {:?}. Denying allocation.",
+                e
+            );
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
@@ -98,19 +136,32 @@ pub(crate) unsafe fn cu_mem_alloc_managed_detour(
     bytesize: u64,
     flags: c_uint,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuMemAllocManaged");
+    let request_size = bytesize;
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let request_size = bytesize;
-            if used + request_size > limiter.get_mem_limit() {
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter (cuMemAllocManaged): used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                retry_cuda_op(|| FN_CU_MEM_ALLOC_MANAGED(dptr, bytesize, flags))
+                cuda_alloc_with_retry(limiter, request_size, || {
+                    FN_CU_MEM_ALLOC_MANAGED(dptr, bytesize, flags)
+                })
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            tracing::error!(
+                "Failed to get used GPU memory (cuMemAllocManaged): {:?}. Denying allocation.",
+                e
+            );
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
@@ -123,14 +174,22 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_v2_detour(
     height: usize,
     element_size_bytes: usize,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuMemAllocPitch_v2");
+    let request_size = round_up(width_in_bytes * height, element_size_bytes) as u64;
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let request_size = round_up(width_in_bytes * height, element_size_bytes) as u64;
-            if used + request_size > limiter.get_mem_limit() {
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter (cuMemAllocPitch_v2): used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                retry_cuda_op(|| {
+                cuda_alloc_with_retry(limiter, request_size, || {
                     FN_CU_MEM_ALLOC_PITCH_V2(
                         dptr,
                         p_pitch,
@@ -142,8 +201,11 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_v2_detour(
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            tracing::error!(
+                "Failed to get used GPU memory (cuMemAllocPitch_v2): {:?}. Denying allocation.",
+                e
+            );
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
@@ -156,21 +218,32 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_detour(
     height: usize,
     element_size_bytes: usize,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuMemAllocPitch");
+    let request_size = (width_in_bytes * height) as u64;
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let request_size = (height * width_in_bytes) as u64;
-            if used + request_size > limiter.get_mem_limit() {
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter (cuMemAllocPitch): used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                retry_cuda_op(|| {
+                cuda_alloc_with_retry(limiter, request_size, || {
                     FN_CU_MEM_ALLOC_PITCH(dptr, p_pitch, width_in_bytes, height, element_size_bytes)
                 })
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            tracing::error!(
+                "Failed to get used GPU memory (cuMemAllocPitch): {:?}. Denying allocation.",
+                e
+            );
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
@@ -180,19 +253,32 @@ pub(crate) unsafe fn cu_array_create_v2_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArrayDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuArrayCreate_v2");
+    let request_size = allocate_array_request_size(p_allocate_array);
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let request_size = allocate_array_request_size(p_allocate_array);
-            if used + request_size > limiter.get_mem_limit() {
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter (cuArrayCreate_v2): used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                retry_cuda_op(|| FN_CU_ARRAY_CREATE_V2(p_handle, p_allocate_array))
+                cuda_alloc_with_retry(limiter, request_size, || {
+                    FN_CU_ARRAY_CREATE_V2(p_handle, p_allocate_array)
+                })
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            tracing::error!(
+                "Failed to get used GPU memory (cuArrayCreate_v2): {:?}. Denying allocation.",
+                e
+            );
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
@@ -202,19 +288,32 @@ pub(crate) unsafe fn cu_array_create_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArrayDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuArrayCreate");
+    let request_size = allocate_array_request_size(p_allocate_array);
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let request_size = allocate_array_request_size(p_allocate_array);
-            if used + request_size > limiter.get_mem_limit() {
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter (cuArrayCreate): used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                retry_cuda_op(|| FN_CU_ARRAY_CREATE(p_handle, p_allocate_array))
+                cuda_alloc_with_retry(limiter, request_size, || {
+                    FN_CU_ARRAY_CREATE(p_handle, p_allocate_array)
+                })
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            tracing::error!(
+                "Failed to get used GPU memory (cuArrayCreate): {:?}. Denying allocation.",
+                e
+            );
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
@@ -224,19 +323,32 @@ pub(crate) unsafe fn cu_array_3d_create_v2_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArray3dDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuArray3DCreate_v2");
+    let request_size = allocate_array_3d_request_size(p_allocate_array);
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let request_size = allocate_array_3d_request_size(p_allocate_array);
-            if used + request_size > limiter.get_mem_limit() {
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter (cuArray3DCreate_v2): used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                retry_cuda_op(|| FN_CU_ARRAY_3D_CREATE_V2(p_handle, p_allocate_array))
+                cuda_alloc_with_retry(limiter, request_size, || {
+                    FN_CU_ARRAY_3D_CREATE_V2(p_handle, p_allocate_array)
+                })
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            tracing::error!(
+                "Failed to get used GPU memory (cuArray3DCreate_v2): {:?}. Denying allocation.",
+                e
+            );
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
@@ -246,19 +358,32 @@ pub(crate) unsafe fn cu_array_3d_create_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArray3dDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuArray3DCreate");
+    let request_size = allocate_array_3d_request_size(p_allocate_array);
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let request_size = allocate_array_3d_request_size(p_allocate_array);
-            if used + request_size > limiter.get_mem_limit() {
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter (cuArray3DCreate): used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                retry_cuda_op(|| FN_CU_ARRAY_3D_CREATE(p_handle, p_allocate_array))
+                cuda_alloc_with_retry(limiter, request_size, || {
+                    FN_CU_ARRAY_3D_CREATE(p_handle, p_allocate_array)
+                })
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            tracing::error!(
+                "Failed to get used GPU memory (cuArray3DCreate): {:?}. Denying allocation.",
+                e
+            );
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
@@ -269,21 +394,25 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
     p_mipmapped_array_desc: *const CudaArray3dDescriptor,
     num_mipmap_levels: c_uint,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuMipmappedArrayCreate");
+    let desc_ref = &*p_mipmapped_array_desc;
+    let base_size = get_array_base_size(desc_ref.format as _);
+    let request_size =
+        base_size * desc_ref.num_channels * desc_ref.height * desc_ref.width * desc_ref.depth;
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let p_mipmapped_array_desc = &*p_mipmapped_array_desc;
-            let base_size = get_array_base_size(p_mipmapped_array_desc.format as _);
-            let request_size = base_size
-                * p_mipmapped_array_desc.num_channels
-                * p_mipmapped_array_desc.height
-                * p_mipmapped_array_desc.width
-                * p_mipmapped_array_desc.depth;
-
-            if used + request_size > limiter.get_mem_limit() {
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter (cuMipmappedArrayCreate): used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                retry_cuda_op(|| {
+                cuda_alloc_with_retry(limiter, request_size, || {
                     FN_CU_MIPMAPPED_ARRAY_CREATE(
                         p_handle,
                         p_mipmapped_array_desc,
@@ -293,8 +422,11 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            tracing::error!(
+                "Failed to get used GPU memory (cuMipmappedArrayCreate): {:?}. Denying allocation.",
+                e
+            );
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
@@ -306,19 +438,32 @@ pub(crate) unsafe fn cu_mem_create_detour(
     prop: *const u64,
     flags: c_uint,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuMemCreate");
+    let request_size = size;
     match limiter.get_used_gpu_memory() {
         Ok(used) => {
-            let request_size = size;
-            if used + request_size > limiter.get_mem_limit() {
+            if used.saturating_add(request_size) > limiter.get_mem_limit() {
+                tracing::warn!(
+                    "Allocation denied by limiter (cuMemCreate): used ({}) + request ({}) > limit ({})",
+                    used,
+                    request_size,
+                    limiter.get_mem_limit()
+                );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                retry_cuda_op(|| FN_CU_MEM_CREATE(handle, size, prop, flags))
+                cuda_alloc_with_retry(limiter, request_size, || {
+                    FN_CU_MEM_CREATE(handle, size, prop, flags)
+                })
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            NVML_ERROR_UNKNOWN
+            tracing::error!(
+                "Failed to get used GPU memory (cuMemCreate): {:?}. Denying allocation.",
+                e
+            );
+            CUDA_ERROR_OUT_OF_MEMORY as CUresult
         }
     }
 }
@@ -326,6 +471,7 @@ pub(crate) unsafe fn cu_mem_create_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, _dev: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+
     *bytes = limiter.get_mem_limit();
     CUDA_SUCCESS
 }
@@ -333,6 +479,7 @@ pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, _dev: CUdevi
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, _dev: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+
     *bytes = limiter.get_mem_limit();
     CUDA_SUCCESS
 }
@@ -340,6 +487,7 @@ pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, _dev: CUdevice)
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+
     let mem_limit = limiter.get_mem_limit();
 
     match limiter.get_used_gpu_memory() {
@@ -358,6 +506,7 @@ pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+
     let mem_limit = limiter.get_mem_limit();
 
     match limiter.get_used_gpu_memory() {

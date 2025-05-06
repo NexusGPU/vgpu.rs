@@ -1,39 +1,32 @@
 use cudarc::driver::{sys::CUdevice_attribute, CudaContext, DriverError};
 use nvml_wrapper::{enums::device::UsedGpuMemory, error::NvmlError, Nvml};
 use std::{
+    ffi::OsStr,
     sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     thread::sleep,
     time::{Duration, SystemTime},
 };
 use thiserror::Error;
+use trap::{ipc::IpcTrap, Trap, TrapError};
 
 use crate::detour::NvmlDeviceT;
 
-const FACTOR: u32 = 32;
+const FACTOR: u32 = 1;
 
 #[derive(Error, Debug)]
 pub(crate) enum Error {
     #[error("nvmlError: `{0}`")]
-    NvmlError(NvmlError),
+    NvmlError(#[from] NvmlError),
 
     #[error("cuDriverError: `{0}`")]
-    CuDriverError(DriverError),
-}
+    CuDriverError(#[from] DriverError),
 
-impl From<NvmlError> for Error {
-    fn from(err: NvmlError) -> Self {
-        Self::NvmlError(err)
-    }
-}
-
-impl From<DriverError> for Error {
-    fn from(err: DriverError) -> Self {
-        Self::CuDriverError(err)
-    }
+    #[error("trap error: `{0}`")]
+    TrapError(#[from] TrapError),
 }
 
 #[derive(Debug)]
-pub(crate) struct Limiter {
+pub(crate) struct Limiter<T: Trap> {
     nvml: Nvml,
     device_idx: u32,
     pid: u32,
@@ -50,6 +43,8 @@ pub(crate) struct Limiter {
     pub block_x: AtomicU32,
     pub block_y: AtomicU32,
     pub block_z: AtomicU32,
+
+    pub(crate) trap: T,
 }
 
 #[derive(Debug, Default)]
@@ -59,47 +54,7 @@ struct Utilization {
     sys_process_num: u32,
 }
 
-impl Limiter {
-    pub(crate) fn init(
-        pid: u32,
-        device_idx: u32,
-        up_limit: u32,
-        mem_limit: u64,
-    ) -> Result<Self, Error> {
-        let nvml = match Nvml::init() {
-            Ok(nvml) => Ok(nvml),
-            Err(_) => Nvml::builder()
-                .lib_path(std::ffi::OsStr::new("libnvidia-ml.so.1"))
-                .init(),
-        }?;
-        let ctx = CudaContext::new(device_idx as usize)?;
-
-        let sm_count =
-            ctx.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
-        let max_thread_per_sm = ctx
-            .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR)?
-            as u32;
-
-        let total_cuda_cores = sm_count * max_thread_per_sm * FACTOR;
-
-        tracing::trace!("sm_count: {sm_count}, max_thread_per_sm: {max_thread_per_sm}, mem_limit: {mem_limit} bytes");
-
-        Ok(Self {
-            nvml,
-            device_idx,
-            pid,
-            sm_count,
-            max_thread_per_sm,
-            total_cuda_cores,
-            available_cuda_cores: AtomicI32::new(0),
-            up_limit: AtomicU32::new(up_limit),
-            mem_limit: AtomicU64::new(mem_limit),
-            block_x: AtomicU32::new(0),
-            block_y: AtomicU32::new(0),
-            block_z: AtomicU32::new(0),
-        })
-    }
-
+impl<T: Trap> Limiter<T> {
     pub(crate) fn set_uplimit(&self, up_limit: u32) {
         self.up_limit.store(up_limit, Ordering::Release);
     }
@@ -143,7 +98,7 @@ impl Limiter {
                 Ok(0)
             }
             Err(err) => {
-                tracing::warn!("Failed to get running compute processes, err: {:?}", err);
+                tracing::warn!("failed to get running compute processes, err: {:?}", err);
                 Err(NvmlError::Unknown)
             }
         }
@@ -242,13 +197,13 @@ impl Limiter {
         let process_utilization_samples = dev.process_utilization_stats(last_seen_timestamp)?;
 
         let mut current = Utilization::default();
-        let mut vaild = false;
+        let mut valid = false;
         current.sys_process_num = dev.running_compute_processes_count()?;
         for process_utilization_sample in process_utilization_samples {
             if process_utilization_sample.timestamp < last_seen_timestamp {
                 continue;
             }
-            vaild = true;
+            valid = true;
             current.sys_current += process_utilization_sample.sm_util;
             let codec_util = codec_normalize(
                 process_utilization_sample.enc_util + process_utilization_sample.dec_util,
@@ -261,11 +216,58 @@ impl Limiter {
             }
         }
 
-        if !vaild {
+        if !valid {
             Ok(None)
         } else {
             Ok(Some(current))
         }
+    }
+}
+
+impl Limiter<IpcTrap> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn init<S: AsRef<OsStr> + ToString>(
+        pid: u32,
+        device_idx: u32,
+        up_limit: u32,
+        mem_limit: u64,
+        ipc_name: S,
+    ) -> Result<Self, Error> {
+        let nvml = match Nvml::init() {
+            Ok(nvml) => Ok(nvml),
+            Err(_) => Nvml::builder()
+                .lib_path(std::ffi::OsStr::new("libnvidia-ml.so.1"))
+                .init(),
+        }?;
+        let ctx = CudaContext::new(device_idx as usize)?;
+
+        let sm_count =
+            ctx.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
+        let max_thread_per_sm = ctx
+            .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR)?
+            as u32;
+
+        let total_cuda_cores = sm_count * max_thread_per_sm * FACTOR;
+
+        tracing::trace!("sm_count: {sm_count}, max_thread_per_sm: {max_thread_per_sm}, mem_limit: {mem_limit} bytes");
+
+        let trap = IpcTrap::connect(ipc_name)?;
+
+        Ok(Self {
+            nvml,
+            device_idx,
+            pid,
+            sm_count,
+            max_thread_per_sm,
+            total_cuda_cores,
+            available_cuda_cores: AtomicI32::new(0),
+            up_limit: AtomicU32::new(up_limit),
+            mem_limit: AtomicU64::new(mem_limit),
+            block_x: AtomicU32::new(0),
+            block_y: AtomicU32::new(0),
+            block_z: AtomicU32::new(0),
+            trap,
+        })
     }
 }
 

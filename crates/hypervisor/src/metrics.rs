@@ -1,6 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
-use crate::{gpu_observer::GpuObserver, hypervisor::Hypervisor};
+use crate::{
+    gpu_observer::GpuObserver, hypervisor::Hypervisor, process::GpuProcess, scheduler::GpuScheduler,
+};
 
 #[derive(Default)]
 struct AccumulatedGpuMetrics {
@@ -19,9 +24,9 @@ struct AccumulatedWorkerMetrics {
     count: usize,
 }
 
-pub(crate) fn output_metrics(
+pub(crate) fn output_metrics<Proc: GpuProcess + 'static, Sched: GpuScheduler<Proc> + 'static>(
     gpu_observer: Arc<GpuObserver>,
-    hypervisor: Arc<Hypervisor>,
+    hypervisor: Arc<RwLock<Hypervisor<Proc, Sched>>>,
     metrics_batch_size: usize,
 ) {
     let receiver = gpu_observer.subscribe();
@@ -78,8 +83,8 @@ pub(crate) fn output_metrics(
                         }
 
                         // Output averaged worker metrics
-                        let worker_pid_mapping =
-                            hypervisor.worker_pid_mapping.read().expect("poisoned");
+                        let hypervisor = hypervisor.read().expect("poisoned");
+                        let worker_pid_mapping = &hypervisor.worker_pid_mapping;
                         for (gpu_uuid, pid_metrics) in &worker_acc {
                             for (pid, acc) in pid_metrics {
                                 if acc.count > 0 {

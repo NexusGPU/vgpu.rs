@@ -7,6 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+trap = { workspace = true }
 tf-macro = { workspace = true }
 tracing = { workspace = true }
 utils = { workspace = true }
@@ -19,6 +20,7 @@ cudarc = { version = "0.16.2", default-features = false, features = [
   "cuda-version-from-build-system",
   "dynamic-loading"
 ] }
+ipc-channel = "0.18.0"
 
 [build-dependencies]
 cbindgen = "0.28"

@@ -1,20 +1,17 @@
 use anyhow::Result;
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::process::{GpuProcess, GpuResources, ProcessState};
 
 use super::{GpuScheduler, SchedulingDecision};
 
 /// Simple FIFO scheduler implementation
-pub(crate) struct FifoScheduler {
-    processes: BTreeMap<u32, Arc<dyn GpuProcess>>,
+pub(crate) struct FifoScheduler<Proc: GpuProcess> {
+    processes: BTreeMap<u32, Proc>,
     gpu_limits: HashMap<String, GpuResources>,
 }
 
-impl FifoScheduler {
+impl<Proc: GpuProcess> FifoScheduler<Proc> {
     pub(crate) fn new(gpu_limits: HashMap<String, GpuResources>) -> Self {
         Self {
             processes: BTreeMap::new(),
@@ -23,8 +20,8 @@ impl FifoScheduler {
     }
 }
 
-impl GpuScheduler for FifoScheduler {
-    fn add_process(&mut self, process: Arc<dyn GpuProcess>) {
+impl<Proc: GpuProcess> GpuScheduler<Proc> for FifoScheduler<Proc> {
+    fn add_process(&mut self, process: Proc) {
         self.processes.insert(process.id(), process);
     }
 
@@ -32,8 +29,8 @@ impl GpuScheduler for FifoScheduler {
         self.processes.remove(&process_id);
     }
 
-    fn get_process(&self, process_id: u32) -> Option<Arc<dyn GpuProcess>> {
-        self.processes.get(&process_id).cloned()
+    fn get_process(&self, process_id: u32) -> Option<&Proc> {
+        self.processes.get(&process_id)
     }
 
     fn schedule(&mut self) -> Result<Vec<SchedulingDecision>> {
