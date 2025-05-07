@@ -28,7 +28,7 @@ where
 {
     loop {
         let result = alloc_fn();
-        match result as u32 {
+        match result {
             CUDA_SUCCESS => {
                 // Assuming limiter state is tracked elsewhere or doesn't need update here
                 return result;

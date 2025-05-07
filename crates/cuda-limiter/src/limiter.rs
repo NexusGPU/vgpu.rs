@@ -16,13 +16,13 @@ const FACTOR: u32 = 1;
 #[derive(Error, Debug)]
 pub(crate) enum Error {
     #[error("nvmlError: `{0}`")]
-    NvmlError(#[from] NvmlError),
+    Nvml(#[from] NvmlError),
 
     #[error("cuDriverError: `{0}`")]
-    CuDriverError(#[from] DriverError),
+    CuDriver(#[from] DriverError),
 
     #[error("trap error: `{0}`")]
-    TrapError(#[from] TrapError),
+    Trap(#[from] TrapError),
 }
 
 #[derive(Debug)]
