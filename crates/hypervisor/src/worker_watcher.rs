@@ -1,7 +1,7 @@
 use crate::gpu_observer::GpuObserver;
 use crate::hypervisor::Hypervisor;
 use crate::process::worker::TensorFusionWorker;
-use crate::process::GpuResources;
+use crate::process::{GpuResources, QosLevel};
 use crate::scheduler::GpuScheduler;
 use notify::{Error, Event, INotifyWatcher, Watcher};
 use std::collections::HashMap;
@@ -139,6 +139,8 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                                     memory_bytes: 0,
                                     compute_percentage: 0,
                                 },
+                                // TODO: read qos level from  env vars
+                                QosLevel::Medium,
                                 uuid,
                                 gpu_observer.clone(),
                             );
