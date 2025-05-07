@@ -12,7 +12,7 @@ use gpu_observer::GpuObserver;
 use hypervisor::Hypervisor;
 use nvml_wrapper::Nvml;
 use process::GpuResources;
-use scheduler::fifo::FifoScheduler;
+use scheduler::weighted::WeightedScheduler;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -65,7 +65,7 @@ fn main() -> Result<()> {
         );
     }
 
-    let scheduler = FifoScheduler::new(gpu_limits);
+    let scheduler = WeightedScheduler::new();
     // Create hypervisor with 1-second scheduling interval
     let hypervisor = Arc::new(RwLock::new(Hypervisor::new(
         scheduler,

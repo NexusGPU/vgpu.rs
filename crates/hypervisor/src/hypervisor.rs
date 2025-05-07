@@ -81,6 +81,11 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
                         }
                     }
                 }
+                SchedulingDecision::Wake(wake_fn, arg) => {
+                    tracing::info!("waking up tapped process");
+                    // Call the waker function
+                    wake_fn(arg);
+                }
             }
         }
     }

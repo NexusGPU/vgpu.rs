@@ -13,3 +13,5 @@ tracing-appender = "0.2.3"
 clap = { version = "4.5.37", features = ["derive", "env"] }
 rand = "0.9"
 fnv = "1.0.3"
+priority-queue = "2.0.0"
+trap = {workspace = true}

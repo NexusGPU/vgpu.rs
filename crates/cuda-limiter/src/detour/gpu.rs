@@ -31,6 +31,8 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_ptsz_detour(
         grid_dim_x * grid_dim_y * grid_dim_z,
         block_dim_x * block_dim_y * block_dim_z,
     );
+
+    
     FN_CU_LAUNCH_KERNEL_PTSZ(
         f,
         grid_dim_x,

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// TrapFrame: context of a trap
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum TrapFrame {
     OutOfMemory { requested_bytes: u64 },
 }
@@ -29,10 +29,8 @@ pub trait Trap {
     fn enter_trap_and_wait(&self, frame: TrapFrame) -> Result<TrapAction, TrapError>;
 }
 
+pub type Waker = Box<dyn FnOnce(Result<TrapAction, TrapError>) + Send>;
+
 pub trait TrapHandler {
-    fn handle_trap(
-        &self,
-        frame: &TrapFrame,
-        waker: Box<dyn FnOnce(Result<TrapAction, TrapError>) + Send>,
-    );
+    fn handle_trap(&self, frame: &TrapFrame, waker: Waker);
 }
