@@ -128,7 +128,7 @@ mod tests {
     use std::{io, thread};
 
     /// Helper function: create a pair of IPC channels, returning (Trap side, Handler side)
-    pub fn create_ipc_trap_pair<H: TrapHandler + Send + Sync + 'static>(
+    fn create_ipc_trap_pair<H: TrapHandler + Send + Sync + 'static>(
         handler: H,
     ) -> Result<(IpcTrap, IpcTrapHandler<H>), io::Error> {
         let (frame_sender, frame_receiver) = channel::<TrapFrame>()?;
