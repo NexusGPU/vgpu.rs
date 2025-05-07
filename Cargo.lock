@@ -447,7 +447,7 @@ dependencies = [
 [[package]]
 name = "frida-build"
 version = "0.16.7"
-source = "git+https://github.com/0x5457/frida-rust?rev=ee75528a72d3e131ea652486150a74e0dd9da59d#ee75528a72d3e131ea652486150a74e0dd9da59d"
+source = "git+https://github.com/frida/frida-rust?rev=e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f#e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f"
 dependencies = [
  "reqwest",
  "tar",
@@ -457,7 +457,7 @@ dependencies = [
 [[package]]
 name = "frida-gum"
 version = "0.16.7"
-source = "git+https://github.com/0x5457/frida-rust?rev=ee75528a72d3e131ea652486150a74e0dd9da59d#ee75528a72d3e131ea652486150a74e0dd9da59d"
+source = "git+https://github.com/frida/frida-rust?rev=e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f#e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f"
 dependencies = [
  "cstr_core",
  "frida-gum-sys",
@@ -471,7 +471,7 @@ dependencies = [
 [[package]]
 name = "frida-gum-sys"
 version = "0.16.7"
-source = "git+https://github.com/0x5457/frida-rust?rev=ee75528a72d3e131ea652486150a74e0dd9da59d#ee75528a72d3e131ea652486150a74e0dd9da59d"
+source = "git+https://github.com/frida/frida-rust?rev=e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f#e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f"
 dependencies = [
  "bindgen",
  "frida-build",
