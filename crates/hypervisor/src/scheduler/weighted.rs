@@ -1,17 +1,16 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+};
 
 use crate::process::GpuProcess;
-use fnv::FnvHashMap;
 use priority_queue::PriorityQueue;
 
 use super::GpuScheduler;
 
 struct WithTraps<Proc> {
     pub process: Proc,
-    pub traps: Vec<(
-        trap::TrapFrame,
-        Box<dyn FnOnce(Result<trap::TrapAction, trap::TrapError>) + Send + Sync>,
-    )>,
+    pub traps: Vec<(trap::TrapFrame, trap::Waker)>,
 }
 
 impl<Proc> Deref for WithTraps<Proc> {
@@ -29,7 +28,7 @@ impl<Proc> DerefMut for WithTraps<Proc> {
 
 pub(crate) struct WeightedScheduler<Proc> {
     // pid -> process
-    processes: FnvHashMap<u32, WithTraps<Proc>>,
+    processes: HashMap<u32, WithTraps<Proc>>,
 
     // PriorityQueue(pid, weight)
     running_queue: PriorityQueue<u32, u32>,
@@ -52,7 +51,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
     fn add_process(&mut self, process: Proc) {
         let pid = process.id();
         let process = WithTraps {
-            process: process,
+            process,
             traps: Vec::new(),
         };
         let weight = process.weight();
@@ -61,7 +60,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
     }
 
     fn remove_process(&mut self, process_id: u32) {
-        if let Some(_) = self.processes.remove(&process_id) {
+        if self.processes.remove(&process_id).is_some() {
             // Remove from all queues
             self.running_queue.remove(&process_id);
             self.sleep_queue.remove(&process_id);
@@ -75,43 +74,34 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
 
     fn schedule(&mut self) -> anyhow::Result<Vec<super::SchedulingDecision>> {
         let mut decisions = Vec::new();
-        loop {
-            let (waiting_pid, waiting_weight) = match self.trap_wait_queue.peek() {
-                Some((pid, weight)) => (*pid, *weight),
-                None => break,
-            };
+        while let Some((pid, weight)) = self.trap_wait_queue.peek() {
             let min_weight_in_running_queue = self
                 .running_queue
                 .peek()
                 .map(|(_, weight)| *weight)
                 .unwrap_or(0);
 
-            if waiting_weight > min_weight_in_running_queue {
-                let mut process = self
-                    .processes
-                    .remove(&waiting_pid)
-                    .expect("process not found");
-
-                if waiting_weight > min_weight_in_running_queue {
-                    while let Some((trap_frame, waker)) = process.traps.pop() {
-                        match trap_frame {
-                            trap::TrapFrame::OutOfMemory { requested_bytes } => {
-                                let (release_decisions, success) = self
-                                    .release_memory_from_running(requested_bytes, waiting_weight);
-                                decisions.extend(release_decisions);
-                                if success {
-                                    decisions.push(super::SchedulingDecision::Wake(waker, Ok(trap::TrapAction::Resume)));
-                                } else {
-                                    // insufficient memory, push back the trap
-                                    process.traps.push((trap_frame, waker));
-                                    break;
-                                }
+            if *weight > min_weight_in_running_queue {
+                let weight = *weight;
+                let mut process = self.processes.remove(pid).expect("process not found");
+                while let Some((trap_frame, waker)) = process.traps.pop() {
+                    match trap_frame {
+                        trap::TrapFrame::OutOfMemory { requested_bytes } => {
+                            let (release_decisions, success) =
+                                self.release_memory_from_running(requested_bytes, weight);
+                            decisions.extend(release_decisions);
+                            if success {
+                                decisions.push(super::SchedulingDecision::Wake(
+                                    waker,
+                                    trap::TrapAction::Resume,
+                                ));
+                            } else {
+                                // insufficient memory, push back the trap
+                                process.traps.push((trap_frame, waker));
+                                break;
                             }
                         }
                     }
-                    continue;
-                } else {
-                    break;
                 }
             } else {
                 break;
@@ -121,12 +111,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
     }
 
     /// Handle a trap event for a process
-    fn on_trap(
-        &mut self,
-        process_id: u32,
-        frame: &trap::TrapFrame,
-        waker: Box<dyn FnOnce(Result<trap::TrapAction, trap::TrapError>) + Send + Sync>,
-    ) {
+    fn on_trap(&mut self, process_id: u32, frame: &trap::TrapFrame, waker: trap::Waker) {
         if let Some(process) = self.processes.get_mut(&process_id) {
             let weight = process.weight();
             process.traps.push((frame.clone(), waker));
@@ -145,7 +130,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
 impl<Proc: GpuProcess> WeightedScheduler<Proc> {
     pub(crate) fn new() -> Self {
         Self {
-            processes: FnvHashMap::default(),
+            processes: HashMap::default(),
             running_queue: PriorityQueue::new(),
             sleep_queue: PriorityQueue::new(),
             trap_wait_queue: PriorityQueue::new(),

@@ -3,6 +3,7 @@
         "CUDA",
         "libnvidia",
         "Nvml",
+        "Sched",
         "serde",
         "thiserror"
     ]

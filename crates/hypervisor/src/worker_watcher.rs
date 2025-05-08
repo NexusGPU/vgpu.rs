@@ -13,14 +13,16 @@ use std::{fs, io, thread};
 
 pub(crate) struct WorkerWatcher<Sched: GpuScheduler<TensorFusionWorker>> {
     rx: Receiver<Result<Event, Error>>,
-    hypervisor: Arc<RwLock<Hypervisor<TensorFusionWorker, Sched>>>,
+    hypervisor: Arc<Hypervisor<TensorFusionWorker, Sched>>,
+    worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
     _watcher: INotifyWatcher,
 }
 
 impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
     pub(crate) fn new<P: AsRef<Path>>(
         path: P,
-        hypervisor: Arc<RwLock<Hypervisor<TensorFusionWorker, Sched>>>,
+        hypervisor: Arc<Hypervisor<TensorFusionWorker, Sched>>,
+        worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
     ) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel::<Result<Event, Error>>();
 
@@ -61,6 +63,7 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
         Ok(WorkerWatcher {
             rx,
             hypervisor,
+            worker_pid_mapping,
             _watcher: watcher,
         })
     }
@@ -122,13 +125,7 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                                 }
                             };
 
-                            if self
-                                .hypervisor
-                                .read()
-                                .expect("poisoning")
-                                .get_process(pid)
-                                .is_some()
-                            {
+                            if self.hypervisor.process_exists(pid) {
                                 continue;
                             }
 
@@ -146,10 +143,11 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                             );
 
                             tracing::info!("new worker added: {:?}", worker_name);
-                            self.hypervisor
+                            self.worker_pid_mapping
                                 .write()
                                 .expect("poisoning")
-                                .add_process(worker_name, worker);
+                                .insert(pid, worker_name);
+                            self.hypervisor.add_process(worker);
                         }
                     }
                     notify::EventKind::Remove(_) => {
@@ -162,10 +160,7 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                                     continue;
                                 }
                             };
-                            self.hypervisor
-                                .write()
-                                .expect("poisoning")
-                                .remove_process(pid);
+                            self.hypervisor.remove_process(pid);
                         }
                     }
                     _ => {}

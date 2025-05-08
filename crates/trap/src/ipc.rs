@@ -1,27 +1,71 @@
-use crate::{Trap, TrapAction, TrapFrame, TrapHandler};
-use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcSender};
-use std::sync::Mutex;
+use crate::{Trap, TrapAction, TrapError, TrapFrame, TrapHandler};
+use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcReceiverSet, IpcSender};
+use signal_hook::consts::signal::SIGUSR1;
+use signal_hook::iterator::Signals;
+use std::collections::HashMap;
+use std::io::Error as IoError;
+use std::path::Path;
+use std::{fs, sync::Mutex, thread, time::Duration};
 
 /// IpcTrap: IPC implementation of Trap (client side, sends TrapFrame and waits for TrapAction)
 #[derive(Debug)]
 pub struct IpcTrap {
-    sender: Mutex<IpcSender<TrapFrame>>,
-    receiver: Mutex<IpcReceiver<TrapAction>>,
+    sender: IpcSender<TrapFrame>,
+    receiver: IpcReceiver<TrapAction>,
 }
 
 impl IpcTrap {
     pub fn new(sender: IpcSender<TrapFrame>, receiver: IpcReceiver<TrapAction>) -> Self {
-        Self {
-            sender: Mutex::new(sender),
-            receiver: Mutex::new(receiver),
-        }
+        Self { sender, receiver }
     }
 
-    /// Creates a client-side IpcTrap by connecting to a server using the provided server name.
-    /// This should be used in a different process than the one that called `create_server`.
-    pub fn connect<S: ToString>(server_name: S) -> Result<Self, crate::TrapError> {
+    /// Creates a client-side IpcTrap by connecting to a server.
+    /// This should be used in a different process than the one that called `wait_client`.
+    /// This method waits for a SIGUSR1 signal or the server name file to appear, with a timeout.
+    pub fn connect<P: AsRef<Path>>(path: P) -> Result<Self, crate::TrapError> {
+        // Get our process ID
+        let pid = unsafe { libc::getpid() } as u32;
+
+        // Construct the expected filename where the server name is stored
+        let filename = path.as_ref().join(format!("trap_server_{}.addr", pid));
+
+        // Wait for the file to appear with a timeout
+        let poll_interval = Duration::from_millis(300); // How often to check if no signal
+
+        if !filename.exists() {
+            // Register a signal handler for SIGUSR1.
+            // The `Signals` instance handles registration and unregistration on drop.
+            let mut signals = Signals::new([SIGUSR1]).map_err(TrapError::Io)?;
+
+            loop {
+                // Priority 1: Check if file exists
+                if filename.exists() {
+                    break;
+                }
+
+                // Priority 3: Check for pending signals (non-blocking)
+                let mut signal_received_this_iteration = false;
+                if let Some(_signal) = signals.pending().next() {
+                    // SIGUSR1 received, loop will immediately check filename.exists()
+                    signal_received_this_iteration = true;
+                }
+
+                // If no signal was pending and file still doesn't exist, sleep.
+                if !signal_received_this_iteration {
+                    thread::sleep(poll_interval);
+                }
+                // If a signal was received, we loop immediately to re-check filename.
+            }
+        }
+
+        // Read the server name from the file
+        let server_name = fs::read_to_string(&filename).map_err(TrapError::Io)?;
+
+        // Clean up the file after reading it
+        let _ = fs::remove_file(&filename); // Ignore error if removal fails
+
         // Connect to the server
-        let tx = IpcSender::connect(server_name.to_string())?;
+        let tx = IpcSender::connect(server_name)?;
 
         // Create channels for sending frames and receiving actions
         let (frame_sender, frame_receiver) = ipc::channel()?;
@@ -37,154 +81,95 @@ impl IpcTrap {
 
 impl Trap for IpcTrap {
     fn enter_trap_and_wait(&self, frame: TrapFrame) -> Result<TrapAction, crate::TrapError> {
-        self.sender
-            .lock()
-            .unwrap()
-            .send(frame)
-            .map_err(crate::TrapError::Ipc)?;
-        self.receiver
-            .lock()
-            .unwrap()
-            .recv()
-            .map_err(crate::TrapError::IpcRecv)
+        self.sender.send(frame).map_err(crate::TrapError::Ipc)?;
+        self.receiver.recv().map_err(crate::TrapError::IpcRecv)
     }
 }
 
-/// IpcTrapHandler: IPC implementation of TrapHandler (server side, receives TrapFrame, processes and returns TrapAction)
-pub struct IpcTrapHandler<H: TrapHandler + Send + Sync + 'static> {
+struct Client {
+    sender: IpcSender<TrapAction>,
+    pid: u32,
+}
+
+/// IpcTrapServer: IPC implementation of TrapHandler (server side, receives TrapFrame, processes and returns TrapAction)
+pub struct IpcTrapServer<H: TrapHandler + Send + Sync + 'static> {
     handler: H,
-    frame_receiver: IpcReceiver<TrapFrame>,
-    action_sender: IpcSender<TrapAction>,
+    // ReceiverId -> Client
+    clients: Mutex<HashMap<u64, Client>>,
+    ipc_receiver_set: IpcReceiverSet,
 }
 
-impl<H: TrapHandler + Send + Sync + 'static> IpcTrapHandler<H> {
-    pub fn new(
-        handler: H,
-        frame_receiver: IpcReceiver<TrapFrame>,
-        action_sender: IpcSender<TrapAction>,
-    ) -> Self {
-        Self {
+impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
+    /// Create a new IpcTrapServer with the given handler
+    pub fn new(handler: H) -> Result<Self, TrapError> {
+        let ipc_receiver_set = IpcReceiverSet::new()?;
+
+        Ok(Self {
             handler,
-            frame_receiver,
-            action_sender,
-        }
+            clients: Mutex::new(HashMap::new()),
+            ipc_receiver_set,
+        })
     }
 
-    /// Creates a server endpoint that a client can connect to.
-    /// Returns the server and the connection name to share with the client.
-    pub fn create_server(handler: H) -> Result<(Self, String), Box<ipc_channel::ErrorKind>> {
-        // Create a one-shot server to receive the client's channel endpoints
+    /// Wait for a client with the specified PID to connect
+    pub fn wait_client<P: AsRef<Path>>(&mut self, path: P, pid: u32) -> Result<(), TrapError> {
+        // Create a one-shot server that will receive the initial connection
         let (server, server_name) = IpcOneShotServer::new()?;
 
-        // Clone the server name before moving the server into accept_connection
-        let name_to_return = server_name.clone();
+        // Wait for the client to connect and send its channels
+        let (receiver, sender) = server.accept()?;
 
-        // Accept a connection and create the handler (this will block until a client connects)
-        let handler = Self::accept_connection(handler, server)?;
+        // Add the frame receiver to our receiver set
+        let receiver_id = self.ipc_receiver_set.add(receiver)?;
 
-        Ok((handler, name_to_return))
-    }
+        // Store the client information
+        let client = Client { sender, pid };
 
-    /// Accept a connection from a client and create an IpcTrapHandler.
-    /// This should be run in a different process than the one that calls `IpcTrap::connect`.
-    pub fn accept_connection(
-        handler: H,
-        server: IpcOneShotServer<(IpcSender<TrapAction>, IpcReceiver<TrapFrame>)>,
-    ) -> Result<Self, Box<ipc_channel::ErrorKind>> {
-        // Accept the client connection and get their channel endpoints
-        let (_, (client_action_sender, client_frame_receiver)) = server.accept()?;
+        self.clients
+            .lock()
+            .expect("poisoned")
+            .insert(receiver_id, client);
 
-        // Create the handler with the received channels
-        Ok(Self::new(
-            handler,
-            client_frame_receiver,
-            client_action_sender,
-        ))
-    }
-
-    /// Start the event loop: receive TrapFrame, call handler, and send TrapAction
-    pub fn start(&self) {
-        while let Ok(frame) = self.frame_receiver.recv() {
-            let sender = self.action_sender.clone();
-            self.handler.handle_trap(
-                &frame,
-                Box::new(move |result| {
-                    // here if send fails, it can't be fed back to the client, can only ignore or log
-                    let _ = sender.send(result.unwrap_or_else(|e| {
-                        crate::TrapAction::Fatal(format!("TrapHandler error: {e}"))
-                    }));
-                }),
-            );
+        let filename = path.as_ref().join(format!("trap_server_{}.addr", pid));
+        if let Ok(mut file) = fs::File::create(&filename) {
+            use std::io::Write;
+            let _ = file.write_all(server_name.as_bytes());
         }
-    }
-}
 
-#[cfg(test)]
-mod tests {
-    use ipc_channel::ipc::channel;
-
-    use super::*;
-    use crate::{TrapAction, TrapFrame, TrapHandler};
-    use std::{io, thread};
-
-    /// Helper function: create a pair of IPC channels, returning (Trap side, Handler side)
-    fn create_ipc_trap_pair<H: TrapHandler + Send + Sync + 'static>(
-        handler: H,
-    ) -> Result<(IpcTrap, IpcTrapHandler<H>), io::Error> {
-        let (frame_sender, frame_receiver) = channel::<TrapFrame>()?;
-        let (action_sender, action_receiver) = channel::<TrapAction>()?;
-        Ok((
-            IpcTrap::new(frame_sender, action_receiver),
-            IpcTrapHandler::new(handler, frame_receiver, action_sender),
-        ))
-    }
-
-    struct DummyHandler;
-    impl TrapHandler for DummyHandler {
-        fn handle_trap(
-            &self,
-            frame: &TrapFrame,
-            waker: Box<dyn FnOnce(Result<TrapAction, crate::TrapError>) + Send>,
-        ) {
-            match frame {
-                TrapFrame::OutOfMemory { requested_bytes } if *requested_bytes < 4096 => {
-                    waker(Ok(TrapAction::Resume));
-                }
-                TrapFrame::OutOfMemory { requested_bytes } => {
-                    waker(Ok(TrapAction::Fatal(format!("OOM: {}", requested_bytes))));
-                }
+        // Send a signal to notify the process that the server name is available
+        // Using libc kill function to send SIGUSR1 (signal 10)
+        unsafe {
+            let ret = libc::kill(pid as libc::pid_t, libc::SIGUSR1);
+            if ret == -1 {
+                Err(TrapError::Io(IoError::last_os_error()))
+            } else {
+                Ok(())
             }
         }
     }
 
-    #[test]
-    fn test_ipc_trap_resume_and_fatal() {
-        let (trap, handler_side) =
-            create_ipc_trap_pair(DummyHandler).expect("create_ipc_trap_pair");
-        let handler_thread = thread::spawn(move || {
-            handler_side.start();
-        });
+    pub fn run(&mut self) -> Result<(), crate::TrapError> {
+        loop {
+            let events = self.ipc_receiver_set.select()?;
+            for event in events {
+                match event {
+                    ipc::IpcSelectionResult::MessageReceived(id, msg) => {
+                        // Extract the pid and trap frame from the message
+                        let frame: TrapFrame = msg.to()?;
 
-        // Test Resume
-        let frame = TrapFrame::OutOfMemory {
-            requested_bytes: 1024,
-        };
-        let action = trap
-            .enter_trap_and_wait(frame)
-            .expect("trap enter_trap_and_wait");
-        assert!(matches!(action, TrapAction::Resume));
-
-        // Test Fatal
-        let frame = TrapFrame::OutOfMemory {
-            requested_bytes: 9999,
-        };
-        let action = trap
-            .enter_trap_and_wait(frame)
-            .expect("trap enter_trap_and_wait");
-        assert!(matches!(action, TrapAction::Fatal(msg) if msg == "OOM: 9999"));
-
-        // Drop trap to close the channel and exit the handler thread
-        drop(trap);
-        handler_thread.join().ok();
+                        // Get the client associated with this receiver ID
+                        let clients = self.clients.lock().unwrap();
+                        if let Some(client) = clients.get(&id) {
+                            // Handle the trap using the provided handler
+                            self.handler
+                                .handle_trap(client.pid, &frame, client.sender.clone());
+                        }
+                    }
+                    ipc::IpcSelectionResult::ChannelClosed(id) => {
+                        self.clients.lock().expect("poisoned").remove(&id);
+                    }
+                }
+            }
+        }
     }
 }

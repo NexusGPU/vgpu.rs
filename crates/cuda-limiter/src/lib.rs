@@ -13,7 +13,7 @@ use utils::{hooks::HookManager, logging, replace_symbol};
 mod detour;
 mod limiter;
 
-static GLOBAL_LIMITER: OnceLock<Limiter<IpcTrap>> = OnceLock::new();
+const GLOBAL_LIMITER: OnceLock<Limiter<IpcTrap>> = OnceLock::new();
 
 thread_local! {
     static LIBCUDA_HOOKED: RefCell<bool> = const { RefCell::new(false) };
@@ -22,7 +22,8 @@ thread_local! {
 
 #[no_mangle]
 pub extern "C" fn set_limit(gpu: u32, mem: u64) {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
     limiter.set_uplimit(gpu);
     limiter.set_mem_limit(mem);
 }
@@ -41,9 +42,10 @@ unsafe fn entry_point() {
         .map(|v| v.parse().unwrap_or(0))
         .unwrap_or(0);
 
-    let ipc_name = std::env::var("TENSOR_FUSION_IPC_NAME").unwrap_or("cuda-limiter".to_string());
+    let ipc_server_path_name =
+        std::env::var("TENSOR_FUSION_IPC_SERVER_PATH").unwrap_or("cuda-limiter".to_string());
 
-    let limiter = match Limiter::init(pid, 0, up_limit, mem_limit, ipc_name) {
+    let limiter = match Limiter::init(pid, 0, up_limit, mem_limit, ipc_server_path_name) {
         Ok(limiter) => limiter,
         Err(err) => {
             tracing::error!("failed to init limiter, err: {err}");

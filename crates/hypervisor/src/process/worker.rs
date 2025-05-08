@@ -105,7 +105,7 @@ impl GpuProcess for TensorFusionWorker {
     }
 
     fn state(&self) -> ProcessState {
-        self.state.read().expect("poisoned").clone()
+        *self.state.read().expect("poisoned")
     }
 
     fn requested_resources(&self) -> GpuResources {

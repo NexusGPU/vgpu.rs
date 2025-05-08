@@ -66,7 +66,8 @@ where
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuMemAlloc_v2");
     let request_size = bytesize;
@@ -102,7 +103,8 @@ pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u6
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_alloc_detour(dptr: *mut CUdeviceptrV1, bytesize: u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuMemAlloc");
     let request_size = bytesize;
@@ -136,7 +138,8 @@ pub(crate) unsafe fn cu_mem_alloc_managed_detour(
     bytesize: u64,
     flags: c_uint,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuMemAllocManaged");
     let request_size = bytesize;
@@ -174,7 +177,8 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_v2_detour(
     height: usize,
     element_size_bytes: usize,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuMemAllocPitch_v2");
     let request_size = round_up(width_in_bytes * height, element_size_bytes) as u64;
@@ -218,7 +222,8 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_detour(
     height: usize,
     element_size_bytes: usize,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuMemAllocPitch");
     let request_size = (width_in_bytes * height) as u64;
@@ -253,7 +258,8 @@ pub(crate) unsafe fn cu_array_create_v2_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArrayDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuArrayCreate_v2");
     let request_size = allocate_array_request_size(p_allocate_array);
@@ -288,7 +294,8 @@ pub(crate) unsafe fn cu_array_create_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArrayDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuArrayCreate");
     let request_size = allocate_array_request_size(p_allocate_array);
@@ -323,7 +330,8 @@ pub(crate) unsafe fn cu_array_3d_create_v2_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArray3dDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuArray3DCreate_v2");
     let request_size = allocate_array_3d_request_size(p_allocate_array);
@@ -358,7 +366,8 @@ pub(crate) unsafe fn cu_array_3d_create_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArray3dDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuArray3DCreate");
     let request_size = allocate_array_3d_request_size(p_allocate_array);
@@ -394,7 +403,8 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
     p_mipmapped_array_desc: *const CudaArray3dDescriptor,
     num_mipmap_levels: c_uint,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuMipmappedArrayCreate");
     let desc_ref = &*p_mipmapped_array_desc;
@@ -438,7 +448,8 @@ pub(crate) unsafe fn cu_mem_create_detour(
     prop: *const u64,
     flags: c_uint,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter
         .get()
         .expect("Limiter not initialized during cuMemCreate");
     let request_size = size;
@@ -470,7 +481,8 @@ pub(crate) unsafe fn cu_mem_create_detour(
 
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, _dev: CUdevice) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
 
     *bytes = limiter.get_mem_limit();
     CUDA_SUCCESS
@@ -478,7 +490,8 @@ pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, _dev: CUdevi
 
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, _dev: CUdevice) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
 
     *bytes = limiter.get_mem_limit();
     CUDA_SUCCESS
@@ -486,7 +499,8 @@ pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, _dev: CUdevice)
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
 
     let mem_limit = limiter.get_mem_limit();
 
@@ -505,7 +519,8 @@ pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) 
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
 
     let mem_limit = limiter.get_mem_limit();
 

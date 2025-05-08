@@ -67,15 +67,13 @@ fn main() -> Result<()> {
 
     let scheduler = WeightedScheduler::new();
     // Create hypervisor with 1-second scheduling interval
-    let hypervisor = Arc::new(RwLock::new(Hypervisor::new(
-        scheduler,
-        Duration::from_secs(1),
-    )));
+    let hypervisor = Arc::new(Hypervisor::new(scheduler, Duration::from_secs(1)));
 
     let gpu_observer = GpuObserver::create(nvml.clone(), Duration::from_secs(1));
+    let worker_pid_mapping = Arc::new(RwLock::new(HashMap::new()));
     metrics::output_metrics(
         gpu_observer.clone(),
-        hypervisor.clone(),
+        worker_pid_mapping.clone(),
         cli.metrics_batch_size,
     );
 
@@ -87,14 +85,15 @@ fn main() -> Result<()> {
         .spawn({
             let hypervisor = hypervisor.clone();
             || {
-                let watcher =
-                    WorkerWatcher::new(cli.sock_path, hypervisor).expect("new worker watcher");
+                let watcher = WorkerWatcher::new(cli.sock_path, hypervisor, worker_pid_mapping)
+                    .expect("new worker watcher");
                 watcher.run(gpu_observer);
             }
         });
 
+    let trap_server = trap::ipc::IpcTrapServer::new(hypervisor)?;
     // Start scheduling loop
-    Hypervisor::run(hypervisor);
+    hypervisor.run();
 
     Ok(())
 }

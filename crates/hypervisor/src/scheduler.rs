@@ -13,11 +13,11 @@ pub(crate) enum SchedulingDecision {
     /// Resume specified process
     Resume(u32),
     /// Wake up a process
-    Wake(trap::Waker, Result<trap::TrapAction, trap::TrapError>),
+    Wake(trap::Waker, trap::TrapAction),
 }
 
 /// Trait for GPU scheduler
-pub(crate) trait GpuScheduler<Proc: GpuProcess>: Send + Sync {
+pub(crate) trait GpuScheduler<Proc: GpuProcess> {
     /// Add a new process to the scheduler
     fn add_process(&mut self, process: Proc);
 
@@ -32,10 +32,5 @@ pub(crate) trait GpuScheduler<Proc: GpuProcess>: Send + Sync {
     fn schedule(&mut self) -> Result<Vec<SchedulingDecision>>;
 
     /// Handle a trap event for a process
-    fn on_trap(
-        &mut self,
-        process_id: u32,
-        frame: &trap::TrapFrame,
-        waker: Box<dyn FnOnce(Result<trap::TrapAction, trap::TrapError>) + Send + Sync>,
-    );
+    fn on_trap(&mut self, process_id: u32, frame: &trap::TrapFrame, waker: trap::Waker);
 }
