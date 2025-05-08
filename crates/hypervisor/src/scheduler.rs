@@ -2,10 +2,9 @@ use anyhow::Result;
 
 use crate::process::GpuProcess;
 
-pub(crate) mod fifo;
+pub(crate) mod weighted;
 
 /// Scheduling decisions
-#[derive(Debug, Clone)]
 pub(crate) enum SchedulingDecision {
     /// Pause specified process
     Pause(u32),
@@ -13,10 +12,12 @@ pub(crate) enum SchedulingDecision {
     Release(u32),
     /// Resume specified process
     Resume(u32),
+    /// Wake up a process
+    Wake(trap::Waker, trap::TrapAction),
 }
 
 /// Trait for GPU scheduler
-pub(crate) trait GpuScheduler<Proc: GpuProcess>: Send + Sync {
+pub(crate) trait GpuScheduler<Proc: GpuProcess> {
     /// Add a new process to the scheduler
     fn add_process(&mut self, process: Proc);
 
@@ -29,4 +30,7 @@ pub(crate) trait GpuScheduler<Proc: GpuProcess>: Send + Sync {
     /// Execute scheduling decisions
     /// Returns a series of scheduling operations to be executed
     fn schedule(&mut self) -> Result<Vec<SchedulingDecision>>;
+
+    /// Handle a trap event for a process
+    fn on_trap(&mut self, process_id: u32, frame: &trap::TrapFrame, waker: trap::Waker);
 }

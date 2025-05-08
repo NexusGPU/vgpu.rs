@@ -1,7 +1,7 @@
 use cudarc::driver::{sys::CUdevice_attribute, CudaContext, DriverError};
 use nvml_wrapper::{enums::device::UsedGpuMemory, error::NvmlError, Nvml};
 use std::{
-    ffi::OsStr,
+    path::Path,
     sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     thread::sleep,
     time::{Duration, SystemTime},
@@ -29,7 +29,7 @@ pub(crate) enum Error {
 pub(crate) struct Limiter<T: Trap> {
     nvml: Nvml,
     device_idx: u32,
-    pid: u32,
+    pub(crate) pid: u32,
     sm_count: u32,
     max_thread_per_sm: u32,
     total_cuda_cores: u32,
@@ -40,9 +40,9 @@ pub(crate) struct Limiter<T: Trap> {
     // bytes
     mem_limit: AtomicU64,
     // set by cuFuncSetBlockShape
-    pub block_x: AtomicU32,
-    pub block_y: AtomicU32,
-    pub block_z: AtomicU32,
+    pub(crate) block_x: AtomicU32,
+    pub(crate) block_y: AtomicU32,
+    pub(crate) block_z: AtomicU32,
 
     pub(crate) trap: T,
 }
@@ -226,12 +226,12 @@ impl<T: Trap> Limiter<T> {
 
 impl Limiter<IpcTrap> {
     #[allow(clippy::too_many_arguments)]
-    pub fn init<S: AsRef<OsStr> + ToString>(
+    pub fn init<P: AsRef<Path>>(
         pid: u32,
         device_idx: u32,
         up_limit: u32,
         mem_limit: u64,
-        ipc_name: S,
+        ipc_server_path_name: P,
     ) -> Result<Self, Error> {
         let nvml = match Nvml::init() {
             Ok(nvml) => Ok(nvml),
@@ -251,7 +251,7 @@ impl Limiter<IpcTrap> {
 
         tracing::trace!("sm_count: {sm_count}, max_thread_per_sm: {max_thread_per_sm}, mem_limit: {mem_limit} bytes");
 
-        let trap = IpcTrap::connect(ipc_name)?;
+        let trap = IpcTrap::connect(ipc_server_path_name)?;
 
         Ok(Self {
             nvml,

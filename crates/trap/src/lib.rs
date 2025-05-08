@@ -1,10 +1,11 @@
 pub mod ipc;
 
+use ipc_channel::ipc::IpcSender;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use thiserror::Error; // Use alias to avoid potential confusion
 
 /// TrapFrame: context of a trap
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum TrapFrame {
     OutOfMemory { requested_bytes: u64 },
 }
@@ -29,10 +30,9 @@ pub trait Trap {
     fn enter_trap_and_wait(&self, frame: TrapFrame) -> Result<TrapAction, TrapError>;
 }
 
+// TODO: replace IpcSender
+pub type Waker = IpcSender<TrapAction>;
+
 pub trait TrapHandler {
-    fn handle_trap(
-        &self,
-        frame: &TrapFrame,
-        waker: Box<dyn FnOnce(Result<TrapAction, TrapError>) + Send>,
-    );
+    fn handle_trap(&self, pid: u32, frame: &TrapFrame, waker: Waker);
 }
