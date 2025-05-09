@@ -2,24 +2,29 @@ use crate::gpu_observer::GpuObserver;
 use crate::hypervisor::Hypervisor;
 use crate::process::worker::TensorFusionWorker;
 use crate::process::GpuResources;
+use crate::scheduler::GpuScheduler;
 use notify::{Error, Event, INotifyWatcher, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::{fs, io, thread};
 
-pub(crate) struct WorkerWatcher {
+pub(crate) struct WorkerWatcher<Sched: GpuScheduler<TensorFusionWorker>> {
     rx: Receiver<Result<Event, Error>>,
-    hypervisor: Arc<Hypervisor>,
+    hypervisor: Arc<RwLock<Hypervisor<TensorFusionWorker, Sched>>>,
     _watcher: INotifyWatcher,
 }
 
-impl WorkerWatcher {
-    pub(crate) fn new<P: AsRef<Path>>(path: P, hypervisor: Arc<Hypervisor>) -> Result<Self, Error> {
+impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
+    pub(crate) fn new<P: AsRef<Path>>(
+        path: P,
+        hypervisor: Arc<RwLock<Hypervisor<TensorFusionWorker, Sched>>>,
+    ) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel::<Result<Event, Error>>();
 
+        // Read the worker pid file every 3 seconds to ensure notify::recommended_watcher works properly
         let _ = std::thread::Builder::new()
             .name("WorkerWatcher loop".into())
             .spawn({
@@ -117,7 +122,13 @@ impl WorkerWatcher {
                                 }
                             };
 
-                            if self.hypervisor.get_process(pid).is_some() {
+                            if self
+                                .hypervisor
+                                .read()
+                                .expect("poisoning")
+                                .get_process(pid)
+                                .is_some()
+                            {
                                 continue;
                             }
 
@@ -133,7 +144,10 @@ impl WorkerWatcher {
                             );
 
                             tracing::info!("new worker added: {:?}", worker_name);
-                            self.hypervisor.add_process(worker_name, Arc::new(worker));
+                            self.hypervisor
+                                .write()
+                                .expect("poisoning")
+                                .add_process(worker_name, worker);
                         }
                     }
                     notify::EventKind::Remove(_) => {
@@ -146,7 +160,10 @@ impl WorkerWatcher {
                                     continue;
                                 }
                             };
-                            self.hypervisor.remove_process(pid);
+                            self.hypervisor
+                                .write()
+                                .expect("poisoning")
+                                .remove_process(pid);
                         }
                     }
                     _ => {}

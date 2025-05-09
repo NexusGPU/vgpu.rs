@@ -2,13 +2,15 @@
 resolver = "2"
 members = [
   "crates/add-path",
-  "crates/cuda-limiter", 
+  "crates/cuda-limiter",
   "crates/hypervisor",
   "crates/macro",
-  "crates/utils"
+  "crates/utils",
+  "crates/trap",
 ]
 
 [workspace.dependencies]
+trap = { path = "crates/trap" }
 utils = { path = "crates/utils" }
 tf-macro = { path = "crates/macro" }
 tracing = "0.1"

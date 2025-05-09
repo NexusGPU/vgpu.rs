@@ -7,12 +7,13 @@ use std::{
     sync::OnceLock,
 };
 use tf_macro::hook_fn;
+use trap::ipc::IpcTrap;
 use utils::{hooks::HookManager, logging, replace_symbol};
 
 mod detour;
 mod limiter;
 
-static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
+static GLOBAL_LIMITER: OnceLock<Limiter<IpcTrap>> = OnceLock::new();
 
 thread_local! {
     static LIBCUDA_HOOKED: RefCell<bool> = const { RefCell::new(false) };
@@ -40,7 +41,9 @@ unsafe fn entry_point() {
         .map(|v| v.parse().unwrap_or(0))
         .unwrap_or(0);
 
-    let limiter = match Limiter::init(pid, 0, up_limit, mem_limit) {
+    let ipc_name = std::env::var("TENSOR_FUSION_IPC_NAME").unwrap_or("cuda-limiter".to_string());
+
+    let limiter = match Limiter::init(pid, 0, up_limit, mem_limit, ipc_name) {
         Ok(limiter) => limiter,
         Err(err) => {
             tracing::error!("failed to init limiter, err: {err}");
