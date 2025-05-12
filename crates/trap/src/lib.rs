@@ -1,5 +1,7 @@
 pub mod ipc;
 
+use std::sync::Arc;
+
 use ipc_channel::ipc::IpcSender;
 use serde::{Deserialize, Serialize};
 use thiserror::Error; // Use alias to avoid potential confusion
@@ -35,4 +37,13 @@ pub type Waker = IpcSender<TrapAction>;
 
 pub trait TrapHandler {
     fn handle_trap(&self, pid: u32, frame: &TrapFrame, waker: Waker);
+}
+
+impl<T> TrapHandler for Arc<T>
+where
+    T: TrapHandler,
+{
+    fn handle_trap(&self, pid: u32, frame: &TrapFrame, waker: Waker) {
+            (**self).handle_trap(pid, frame, waker);
+        }
 }

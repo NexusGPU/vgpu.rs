@@ -91,7 +91,16 @@ fn main() -> Result<()> {
             }
         });
 
-    let trap_server = trap::ipc::IpcTrapServer::new(hypervisor)?;
+    let _ = std::thread::Builder::new()
+        .name("trap server".into())
+        .spawn({
+            let hypervisor = hypervisor.clone();
+            move || {
+                let mut trap_server = trap::ipc::IpcTrapServer::new(hypervisor.clone())?;
+                trap_server.run()
+            }
+        });
+
     // Start scheduling loop
     hypervisor.run();
 
