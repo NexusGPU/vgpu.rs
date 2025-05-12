@@ -78,7 +78,7 @@ fn main() -> Result<()> {
     // Create hypervisor with 1-second scheduling interval
     let hypervisor = Arc::new(Hypervisor::new(scheduler, Duration::from_secs(1)));
 
-    let gpu_observer = GpuObserver::create(nvml.clone(), Duration::from_secs(1));
+    let gpu_observer = GpuObserver::create(nvml.clone());
     let worker_pid_mapping = Arc::new(RwLock::new(HashMap::new()));
 
     // Ensure socket directory exists
@@ -107,16 +107,30 @@ fn main() -> Result<()> {
             }
         });
 
-        // Start worker watcher thread
-        let worker_handle = s.spawn({
-            let hypervisor = hypervisor.clone();
-            let gpu_observer = gpu_observer.clone();
-            let worker_pid_mapping = worker_pid_mapping.clone();
-            let sock_path = cli.sock_path.clone();
+        // Create the worker watcher instance to be shared by both threads
+        let sock_path = cli.sock_path.clone();
+        let watcher = Arc::new(WorkerWatcher::new(
+            &sock_path, 
+            hypervisor.clone(), 
+            worker_pid_mapping.clone()
+        ).expect("new worker watcher"));
+        
+        // Start worker watcher loop thread (directory polling)
+        let watcher_loop_handle = s.spawn({
+            let watcher = watcher.clone();
+            let sock_path = sock_path.clone();
             move |_| {
-                tracing::info!("Starting worker watcher thread");
-                let watcher = WorkerWatcher::new(&sock_path, hypervisor, worker_pid_mapping)
-                    .expect("new worker watcher");
+                tracing::info!("Starting worker watcher loop thread");
+                watcher.run_watcher_loop(sock_path);
+            }
+        });
+        
+        // Start worker watcher event handling thread
+        let worker_handle = s.spawn({
+            let watcher = watcher.clone();
+            let gpu_observer = gpu_observer.clone();
+            move |_| {
+                tracing::info!("Starting worker watcher event handler thread");
                 watcher.run(gpu_observer);
             }
         });
@@ -150,6 +164,9 @@ fn main() -> Result<()> {
         metrics_handle
             .join()
             .expect("Metrics collection thread panicked");
+        watcher_loop_handle
+            .join()
+            .expect("Worker watcher loop thread panicked");
         worker_handle
             .join()
             .expect("Worker watcher thread panicked");

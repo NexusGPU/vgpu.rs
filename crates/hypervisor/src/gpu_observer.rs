@@ -39,7 +39,7 @@ pub(crate) struct GpuObserver {
 }
 
 impl GpuObserver {
-    pub(crate) fn create(nvml: Arc<Nvml>, update_interval: Duration) -> Arc<Self> {
+    pub(crate) fn create(nvml: Arc<Nvml>) -> Arc<Self> {
         Arc::new(Self {
             nvml,
             metrics: Default::default(),
