@@ -27,7 +27,8 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
         let (tx, rx) = mpsc::channel::<Result<Event, Error>>();
 
         // Read the worker pid file every 3 seconds to ensure notify::recommended_watcher works properly
-        let _ = std::thread::Builder::new()
+        // Store thread handle to allow joining when needed
+        let watcher_thread = std::thread::Builder::new()
             .name("WorkerWatcher loop".into())
             .spawn({
                 let tx = tx.clone();

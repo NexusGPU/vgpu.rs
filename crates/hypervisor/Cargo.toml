@@ -14,3 +14,4 @@ clap = { version = "4.5.37", features = ["derive", "env"] }
 rand = "0.9"
 priority-queue = "2.0.0"
 trap = {workspace = true}
+crossbeam = "0.8.4"
