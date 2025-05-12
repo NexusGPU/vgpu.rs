@@ -46,7 +46,7 @@ impl GpuObserver {
             senders: Default::default(),
         })
     }
-    
+
     /// Run the GPU observer loop in the current thread
     /// This is meant to be called from a crossbeam scope thread
     pub(crate) fn run(&self, update_interval: Duration) {

@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{mpsc, Arc, RwLock},
+    sync::{Arc, RwLock},
 };
 
 use crate::gpu_observer::GpuObserver;
