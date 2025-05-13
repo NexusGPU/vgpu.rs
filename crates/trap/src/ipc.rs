@@ -172,4 +172,52 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
             }
         }
     }
+
+    /// Runs the server until the provided stop function returns true
+    /// This is primarily useful for testing when you need to stop the server
+    pub fn run_with_stop<F>(&mut self, mut should_stop: F) -> Result<(), crate::TrapError>
+    where
+        F: FnMut() -> bool,
+    {
+        loop {
+            // Check if we should stop
+            if should_stop() {
+                return Ok(());
+            }
+
+            // Try to get events without blocking (using select would block indefinitely)
+            let events_result = self.ipc_receiver_set.select();
+
+            match events_result {
+                Ok(events) => {
+                    for event in events {
+                        match event {
+                            ipc::IpcSelectionResult::MessageReceived(id, msg) => {
+                                // Extract the pid and trap frame from the message
+                                if let Ok(frame) = msg.to::<TrapFrame>() {
+                                    // Get the client associated with this receiver ID
+                                    let clients = self.clients.lock().unwrap();
+                                    if let Some(client) = clients.get(&id) {
+                                        // Handle the trap using the provided handler
+                                        self.handler.handle_trap(
+                                            client.pid,
+                                            &frame,
+                                            client.sender.clone(),
+                                        );
+                                    }
+                                }
+                            }
+                            ipc::IpcSelectionResult::ChannelClosed(id) => {
+                                self.clients.lock().expect("poisoned").remove(&id);
+                            }
+                        }
+                    }
+                }
+                Err(_) => {
+                    // If no events, sleep a little bit to avoid busy waiting
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    }
 }

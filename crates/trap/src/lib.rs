@@ -44,6 +44,6 @@ where
     T: TrapHandler,
 {
     fn handle_trap(&self, pid: u32, frame: &TrapFrame, waker: Waker) {
-            (**self).handle_trap(pid, frame, waker);
-        }
+        (**self).handle_trap(pid, frame, waker);
+    }
 }
