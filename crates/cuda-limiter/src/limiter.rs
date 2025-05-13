@@ -251,7 +251,11 @@ impl Limiter<IpcTrap> {
 
         tracing::trace!("sm_count: {sm_count}, max_thread_per_sm: {max_thread_per_sm}, mem_limit: {mem_limit} bytes");
 
-        let trap = IpcTrap::connect(ipc_server_path_name)?;
+        let trap = if cfg!(test) {
+            IpcTrap::dummy()
+        } else {
+            IpcTrap::connect(ipc_server_path_name)?
+        };
 
         Ok(Self {
             nvml,

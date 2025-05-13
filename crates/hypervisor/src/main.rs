@@ -109,12 +109,11 @@ fn main() -> Result<()> {
 
         // Create the worker watcher instance to be shared by both threads
         let sock_path = cli.sock_path.clone();
-        let watcher = Arc::new(WorkerWatcher::new(
-            &sock_path, 
-            hypervisor.clone(), 
-            worker_pid_mapping.clone()
-        ).expect("new worker watcher"));
-        
+        let watcher = Arc::new(
+            WorkerWatcher::new(&sock_path, hypervisor.clone(), worker_pid_mapping.clone())
+                .expect("new worker watcher"),
+        );
+
         // Start worker watcher loop thread (directory polling)
         let watcher_loop_handle = s.spawn({
             let watcher = watcher.clone();
@@ -124,7 +123,7 @@ fn main() -> Result<()> {
                 watcher.run_watcher_loop(sock_path);
             }
         });
-        
+
         // Start worker watcher event handling thread
         let worker_handle = s.spawn({
             let watcher = watcher.clone();

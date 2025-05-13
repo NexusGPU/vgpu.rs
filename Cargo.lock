@@ -368,7 +368,6 @@ dependencies = [
  "cbindgen",
  "ctor",
  "cudarc",
- "ipc-channel 0.18.3",
  "nvml-wrapper",
  "tf-macro",
  "thiserror 2.0.12",
@@ -924,25 +923,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "ipc-channel"
-version = "0.18.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f4c80f2df4fc64fb7fc2cff69fc034af26e6e6617ea9f1313131af464b9ca0"
-dependencies = [
- "bincode",
- "crossbeam-channel",
- "fnv",
- "lazy_static",
- "libc",
- "mio",
- "rand 0.8.5",
- "serde",
- "tempfile",
- "uuid",
- "windows",
 ]
 
 [[package]]
@@ -2224,7 +2204,7 @@ dependencies = [
 name = "trap"
 version = "0.1.0"
 dependencies = [
- "ipc-channel 0.19.0",
+ "ipc-channel",
  "libc",
  "serde",
  "signal-hook",
