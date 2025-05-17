@@ -25,10 +25,14 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_ptsz_detour(
     kernel_params: *mut *mut c_void,
     extra: *mut *mut c_void,
 ) -> CUresult {
-    GLOBAL_LIMITER.get().expect("get limiter").rate_limiter(
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
+
+    limiter.rate_limiter(
         grid_dim_x * grid_dim_y * grid_dim_z,
         block_dim_x * block_dim_y * block_dim_z,
     );
+
     FN_CU_LAUNCH_KERNEL_PTSZ(
         f,
         grid_dim_x,
@@ -58,7 +62,10 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_detour(
     kernel_params: *mut *mut c_void,
     extra: *mut *mut c_void,
 ) -> CUresult {
-    GLOBAL_LIMITER.get().expect("get limiter").rate_limiter(
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
+
+    limiter.rate_limiter(
         grid_dim_x * grid_dim_y * grid_dim_z,
         block_dim_x * block_dim_y * block_dim_z,
     );
@@ -79,7 +86,9 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_detour(
 
 #[hook_fn]
 pub(crate) unsafe extern "C" fn cu_launch_detour(f: CUfunction) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
+
     limiter.rate_limiter(
         1,
         limiter.block_x.load(Ordering::Acquire)
@@ -102,7 +111,10 @@ pub(crate) unsafe extern "C" fn cu_launch_cooperative_kernel_ptsz_detour(
     h_stream: CUstream,
     kernel_params: *mut *mut c_void,
 ) -> CUresult {
-    GLOBAL_LIMITER.get().expect("get limiter").rate_limiter(
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
+
+    limiter.rate_limiter(
         grid_dim_x * grid_dim_y * grid_dim_z,
         block_dim_x * block_dim_y * block_dim_z,
     );
@@ -133,7 +145,10 @@ pub(crate) unsafe extern "C" fn cu_launch_cooperative_kernel_detour(
     h_stream: CUstream,
     kernel_params: *mut *mut c_void,
 ) -> CUresult {
-    GLOBAL_LIMITER.get().expect("get limiter").rate_limiter(
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
+
+    limiter.rate_limiter(
         grid_dim_x * grid_dim_y * grid_dim_z,
         block_dim_x * block_dim_y * block_dim_z,
     );
@@ -157,7 +172,9 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_detour(
     grid_width: c_int,
     grid_height: c_int,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
+
     limiter.rate_limiter(
         (grid_width * grid_height) as u32,
         limiter.block_x.load(Ordering::Acquire)
@@ -175,7 +192,9 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_async_detour(
     grid_height: c_int,
     h_stream: CUstream,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
+
     limiter.rate_limiter(
         (grid_width * grid_height) as u32,
         limiter.block_x.load(Ordering::Acquire)
@@ -192,7 +211,9 @@ pub(crate) unsafe extern "C" fn cu_func_set_block_shape_detour(
     y: c_int,
     z: c_int,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER;
+    let limiter = limiter.get().expect("get limiter");
+
     limiter.block_x.store(x as u32, Ordering::Release);
     limiter.block_y.store(y as u32, Ordering::Release);
     limiter.block_z.store(z as u32, Ordering::Release);
@@ -204,10 +225,10 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flag: c_uint) -> CUresult {
     std::thread::Builder::new()
         .name("utilization-watcher".to_string())
         .spawn(|| {
-            GLOBAL_LIMITER
-                .get()
-                .expect("get GLOBAL_LIMITER")
-                .run_watcher(Duration::from_millis(120))
+            let limiter = GLOBAL_LIMITER;
+            let limiter = limiter.get().expect("get limiter");
+
+            limiter.run_watcher(Duration::from_millis(120))
         })
         .expect("spawn utilization-watcher thread");
     FN_CU_INIT(flag)

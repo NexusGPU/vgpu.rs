@@ -1,0 +1,12 @@
+{
+    "cSpell.words": [
+        "CUDA",
+        "libcuda",
+        "libnvidia",
+        "LIBNVML",
+        "Nvml",
+        "Sched",
+        "serde",
+        "thiserror"
+    ]
+}

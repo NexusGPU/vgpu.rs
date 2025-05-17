@@ -39,38 +39,38 @@ pub(crate) struct GpuObserver {
 }
 
 impl GpuObserver {
-    pub(crate) fn create(nvml: Arc<Nvml>, update_interval: Duration) -> Arc<Self> {
-        let self_arc = Arc::new(Self {
+    pub(crate) fn create(nvml: Arc<Nvml>) -> Arc<Self> {
+        Arc::new(Self {
             nvml,
             metrics: Default::default(),
             senders: Default::default(),
-        });
-        let self_cloned = self_arc.clone();
-        let _ = std::thread::Builder::new()
-            .name("gpu_observer".into())
-            .spawn(move || loop {
-                let last_seen_timestamp = unix_as_millis()
-                    .saturating_mul(1000)
-                    .saturating_sub(update_interval.as_micros() as u64);
+        })
+    }
 
-                match self_cloned.query_metrics(last_seen_timestamp) {
-                    Ok(metrics) => {
-                        *self_cloned.metrics.write().expect("poisoned") = metrics;
-                        let senders = self_cloned.senders.read().expect("poisoned");
-                        for sender in senders.iter() {
-                            if let Err(e) = sender.send(()) {
-                                tracing::error!("Failed to send update signal: {}", e);
-                            }
+    /// Run the GPU observer loop in the current thread
+    /// This is meant to be called from a crossbeam scope thread
+    pub(crate) fn run(&self, update_interval: Duration) {
+        loop {
+            let last_seen_timestamp = unix_as_millis()
+                .saturating_mul(1000)
+                .saturating_sub(update_interval.as_micros() as u64);
+
+            match self.query_metrics(last_seen_timestamp) {
+                Ok(metrics) => {
+                    *self.metrics.write().expect("poisoned") = metrics;
+                    let senders = self.senders.read().expect("poisoned");
+                    for sender in senders.iter() {
+                        if let Err(e) = sender.send(()) {
+                            tracing::error!("Failed to send update signal: {}", e);
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to update GPU metrics: {}", e);
-                    }
                 }
-                thread::sleep(update_interval);
-            });
-
-        self_arc
+                Err(e) => {
+                    tracing::warn!("Failed to update GPU metrics: {}", e);
+                }
+            }
+            thread::sleep(update_interval);
+        }
     }
 
     fn query_metrics(&self, last_seen_timestamp: u64) -> Result<Metrics> {
