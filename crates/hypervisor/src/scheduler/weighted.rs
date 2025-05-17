@@ -8,9 +8,14 @@ use priority_queue::PriorityQueue;
 
 use super::GpuScheduler;
 
+struct Trap {
+    pub frame: trap::TrapFrame,
+    pub waker: trap::Waker,
+    pub round: u32,
+}
 struct WithTraps<Proc> {
     pub process: Proc,
-    pub traps: Vec<(trap::TrapFrame, trap::Waker)>,
+    pub traps: Vec<Trap>,
 }
 
 impl<Proc> Deref for WithTraps<Proc> {
@@ -43,7 +48,17 @@ trait Weight {
 
 impl<T: GpuProcess> Weight for WithTraps<T> {
     fn weight(&self) -> u32 {
-        todo!()
+        let qos = match self.process.qos_level() {
+            crate::process::QosLevel::Low => 1,
+            crate::process::QosLevel::Medium => 2,
+            crate::process::QosLevel::High => 3,
+            crate::process::QosLevel::Critical => 4,
+        };
+
+        self.traps
+            .iter()
+            .fold(0, |acc, trap| acc + (trap.round * qos))
+            + qos * 10
     }
 }
 
@@ -84,7 +99,12 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
             if *weight > min_weight_in_running_queue {
                 let weight = *weight;
                 let mut process = self.processes.remove(pid).expect("process not found");
-                while let Some((trap_frame, waker)) = process.traps.pop() {
+                while let Some(Trap {
+                    round,
+                    frame: trap_frame,
+                    waker,
+                }) = process.traps.pop()
+                {
                     match trap_frame {
                         trap::TrapFrame::OutOfMemory { requested_bytes } => {
                             let (release_decisions, success) =
@@ -97,7 +117,11 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                                 ));
                             } else {
                                 // insufficient memory, push back the trap
-                                process.traps.push((trap_frame, waker));
+                                process.traps.push(Trap {
+                                    round: round + 1,
+                                    frame: trap_frame,
+                                    waker,
+                                });
                                 break;
                             }
                         }
@@ -114,7 +138,11 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
     fn on_trap(&mut self, process_id: u32, frame: &trap::TrapFrame, waker: trap::Waker) {
         if let Some(process) = self.processes.get_mut(&process_id) {
             let weight = process.weight();
-            process.traps.push((frame.clone(), waker));
+            process.traps.push(Trap {
+                frame: frame.clone(),
+                waker,
+                round: 1,
+            });
             // Move the process to the trap wait queue
             self.running_queue.remove(&process_id);
             self.sleep_queue.remove(&process_id);
