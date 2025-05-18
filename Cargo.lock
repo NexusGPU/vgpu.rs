@@ -1916,6 +1916,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossbeam",
+ "ipc-channel",
  "notify",
  "nvml-wrapper",
  "priority-queue",

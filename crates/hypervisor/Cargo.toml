@@ -8,10 +8,13 @@ nvml-wrapper = "0.10.0"
 anyhow = "1.0.98"
 tracing = { workspace = true }
 notify = "8.0.0"
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true,  features = ["env-filter"] }
 tracing-appender = "0.2.3"
 clap = { version = "4.5.38", features = ["derive", "env"] }
 rand = "0.9"
 priority-queue = "2.0.0"
 trap = {workspace = true}
 crossbeam = "0.8.4"
+
+[dev-dependencies]
+ipc-channel = { workspace = true }
