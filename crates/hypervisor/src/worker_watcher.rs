@@ -29,11 +29,12 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
         let (tx, rx) = mpsc::channel::<Result<Event, Error>>();
 
         #[cfg(target_os = "linux")]
-        {
+        let watcher = {
             // Create a watcher using the recommended watcher implementation for the current platform
             let mut watcher = notify::recommended_watcher(tx.clone())?;
             watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
-        }
+            watcher
+        };
         tracing::info!("watching worker sock files at: {:?}", path.as_ref());
         Ok(WorkerWatcher {
             rx: Mutex::new(rx),
