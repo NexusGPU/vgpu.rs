@@ -3,7 +3,7 @@ use crate::hypervisor::Hypervisor;
 use crate::process::worker::TensorFusionWorker;
 use crate::process::{GpuResources, QosLevel};
 use crate::scheduler::GpuScheduler;
-use notify::{Error, Event, INotifyWatcher, Watcher};
+use notify::{Error, Event, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -16,7 +16,8 @@ pub(crate) struct WorkerWatcher<Sched: GpuScheduler<TensorFusionWorker>> {
     tx: Sender<Result<Event, Error>>,
     hypervisor: Arc<Hypervisor<TensorFusionWorker, Sched>>,
     worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
-    _watcher: INotifyWatcher,
+    #[cfg(target_os = "linux")]
+    _watcher: notify::INotifyWatcher,
 }
 
 impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
@@ -27,15 +28,19 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
     ) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel::<Result<Event, Error>>();
 
-        // Create a watcher using the recommended watcher implementation for the current platform
-        let mut watcher = notify::recommended_watcher(tx.clone())?;
-        watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
+        #[cfg(target_os = "linux")]
+        {
+            // Create a watcher using the recommended watcher implementation for the current platform
+            let mut watcher = notify::recommended_watcher(tx.clone())?;
+            watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
+        }
         tracing::info!("watching worker sock files at: {:?}", path.as_ref());
         Ok(WorkerWatcher {
             rx: Mutex::new(rx),
             tx,
             hypervisor,
             worker_pid_mapping,
+            #[cfg(target_os = "linux")]
             _watcher: watcher,
         })
     }

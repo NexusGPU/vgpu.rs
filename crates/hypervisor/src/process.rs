@@ -60,3 +60,90 @@ pub(crate) trait GpuProcess: Send + Sync {
     /// Resume process execution
     fn resume(&self) -> Result<()>;
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    pub(crate) struct MockGpuProcess {
+        id: u32,
+        memory_bytes: u64,
+        compute_percentage: u32,
+        state: ProcessState,
+        qos_level: QosLevel,
+    }
+
+    impl MockGpuProcess {
+        pub(crate) fn new(id: u32, memory_bytes: u64, compute_percentage: u32) -> Self {
+            Self {
+                id,
+                memory_bytes,
+                compute_percentage,
+                state: ProcessState::Running,
+                qos_level: QosLevel::Medium,
+            }
+        }
+
+        pub(crate) fn new_with_qos(
+            id: u32,
+            memory_bytes: u64,
+            compute_percentage: u32,
+            qos_level: QosLevel,
+        ) -> Self {
+            Self {
+                id,
+                memory_bytes,
+                compute_percentage,
+                state: ProcessState::Running,
+                qos_level,
+            }
+        }
+    }
+
+    impl GpuProcess for MockGpuProcess {
+        fn id(&self) -> u32 {
+            self.id
+        }
+
+        fn state(&self) -> ProcessState {
+            self.state
+        }
+
+        fn gpu_uuid(&self) -> &str {
+            "mock-gpu-uuid"
+        }
+
+        fn requested_resources(&self) -> GpuResources {
+            GpuResources {
+                memory_bytes: self.memory_bytes,
+                compute_percentage: self.compute_percentage,
+            }
+        }
+
+        fn current_resources(&self) -> GpuResources {
+            GpuResources {
+                memory_bytes: self.memory_bytes,
+                compute_percentage: self.compute_percentage,
+            }
+        }
+
+        fn qos_level(&self) -> QosLevel {
+            self.qos_level
+        }
+
+        fn pause(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn release(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn resume(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    unsafe impl Send for MockGpuProcess {}
+    unsafe impl Sync for MockGpuProcess {}
+}
