@@ -104,9 +104,9 @@ impl GpuProcess for TensorFusionWorker {
         self.id
     }
 
-    fn state(&self) -> ProcessState {
-        *self.state.read().expect("poisoned")
-    }
+    // fn state(&self) -> ProcessState {
+    //     *self.state.read().expect("poisoned")
+    // }
 
     fn requested_resources(&self) -> GpuResources {
         self.requested.clone()
@@ -206,9 +206,9 @@ impl GpuProcess for TensorFusionWorker {
         }
     }
 
-    fn gpu_uuid(&self) -> &str {
-        &self.gpu_uuid
-    }
+    // fn gpu_uuid(&self) -> &str {
+    //     &self.gpu_uuid
+    // }
 
     fn qos_level(&self) -> super::QosLevel {
         self.qos_level

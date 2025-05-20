@@ -152,7 +152,7 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                                     memory_bytes: 0,
                                     compute_percentage: 0,
                                 },
-                                // TODO: read qos level from  env vars
+                                // TODO: read qos level from env vars
                                 QosLevel::Medium,
                                 uuid,
                                 gpu_observer.clone(),

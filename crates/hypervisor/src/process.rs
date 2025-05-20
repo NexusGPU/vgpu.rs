@@ -35,11 +35,11 @@ pub(crate) trait GpuProcess: Send + Sync {
     /// Get process ID
     fn id(&self) -> u32;
 
-    /// Get current process state
-    fn state(&self) -> ProcessState;
+    // /// Get current process state
+    // fn state(&self) -> ProcessState;
 
-    /// Get GPU UUID
-    fn gpu_uuid(&self) -> &str;
+    // /// Get GPU UUID
+    // fn gpu_uuid(&self) -> &str;
 
     /// Get requested resources
     #[allow(unused)]
@@ -69,7 +69,7 @@ pub(crate) mod tests {
         id: u32,
         memory_bytes: u64,
         compute_percentage: u32,
-        state: ProcessState,
+        // state: ProcessState,
         qos_level: QosLevel,
     }
 
@@ -79,7 +79,7 @@ pub(crate) mod tests {
                 id,
                 memory_bytes,
                 compute_percentage,
-                state: ProcessState::Running,
+                // state: ProcessState::Running,
                 qos_level: QosLevel::Medium,
             }
         }
@@ -94,7 +94,7 @@ pub(crate) mod tests {
                 id,
                 memory_bytes,
                 compute_percentage,
-                state: ProcessState::Running,
+                // state: ProcessState::Running,
                 qos_level,
             }
         }
@@ -105,13 +105,13 @@ pub(crate) mod tests {
             self.id
         }
 
-        fn state(&self) -> ProcessState {
-            self.state
-        }
+        // fn state(&self) -> ProcessState {
+        //     self.state
+        // }
 
-        fn gpu_uuid(&self) -> &str {
-            "mock-gpu-uuid"
-        }
+        // fn gpu_uuid(&self) -> &str {
+        //     "mock-gpu-uuid"
+        // }
 
         fn requested_resources(&self) -> GpuResources {
             GpuResources {
