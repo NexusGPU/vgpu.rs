@@ -13,7 +13,8 @@ use utils::{hooks::HookManager, logging, replace_symbol};
 mod detour;
 mod limiter;
 
-const GLOBAL_LIMITER: OnceLock<Limiter<IpcTrap>> = OnceLock::new();
+static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
+const GLOBAL_TRAP: OnceLock<IpcTrap> = OnceLock::new();
 
 thread_local! {
     static LIBCUDA_HOOKED: RefCell<bool> = const { RefCell::new(false) };
@@ -22,8 +23,7 @@ thread_local! {
 
 #[no_mangle]
 pub extern "C" fn set_limit(gpu: u32, mem: u64) {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     limiter.set_uplimit(gpu);
     limiter.set_mem_limit(mem);
 }
@@ -47,7 +47,7 @@ unsafe fn entry_point() {
     let ipc_server_path_name =
         std::env::var("TENSOR_FUSION_IPC_SERVER_PATH").unwrap_or("cuda-limiter".to_string());
 
-    let limiter = match Limiter::init(pid, 0, up_limit, mem_limit, ipc_server_path_name) {
+    let limiter = match Limiter::init(pid, 0, up_limit, mem_limit) {
         Ok(limiter) => limiter,
         Err(err) => {
             tracing::error!("failed to init limiter, err: {err}");
@@ -55,6 +55,20 @@ unsafe fn entry_point() {
         }
     };
     GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
+
+    // init IpcTrap
+    let trap = if cfg!(test) {
+        IpcTrap::dummy()
+    } else {
+        match IpcTrap::connect(ipc_server_path_name) {
+            Ok(trap) => trap,
+            Err(e) => {
+                tracing::error!("failed to connect to ipc server, err: {e}");
+                return;
+            }
+        }
+    };
+    GLOBAL_TRAP.set(trap).expect("set trap");
 
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();

@@ -6,8 +6,7 @@ use utils::{hooks::HookManager, replace_symbol};
 
 use crate::{
     detour::{round_up, NVML_ERROR_UNKNOWN},
-    limiter::Limiter,
-    GLOBAL_LIMITER,
+    GLOBAL_LIMITER, GLOBAL_TRAP,
 };
 
 use super::{
@@ -18,11 +17,7 @@ const CUDA_SUCCESS: CUresult = 0;
 const CUDA_ERROR_OUT_OF_MEMORY: CUresult = 2;
 
 // Helper function for allocation with retry logic
-unsafe fn cuda_alloc_with_retry<T: Trap, F>(
-    limiter: &Limiter<T>,
-    request_size: u64,
-    alloc_fn: F,
-) -> CUresult
+unsafe fn cuda_alloc_with_retry<T: Trap, F>(trap: &T, request_size: u64, alloc_fn: F) -> CUresult
 where
     F: Fn() -> CUresult,
 {
@@ -35,7 +30,7 @@ where
             }
             CUDA_ERROR_OUT_OF_MEMORY => {
                 // OOM: enter trap and wait
-                match limiter.trap.enter_trap_and_wait(TrapFrame::OutOfMemory {
+                match trap.enter_trap_and_wait(TrapFrame::OutOfMemory {
                     requested_bytes: request_size,
                 }) {
                     Ok(_) => {
@@ -66,10 +61,8 @@ where
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
-        .get()
-        .expect("Limiter not initialized during cuMemAlloc_v2");
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+
     let request_size = bytesize;
 
     // Check against the memory limit *before* attempting allocation
@@ -85,7 +78,9 @@ pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u6
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult // Return OOM if limit exceeded
             } else {
                 // Proceed with allocation attempt only if within limit
-                cuda_alloc_with_retry(limiter, request_size, || FN_CU_MEM_ALLOC_V2(dptr, bytesize))
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
+                    FN_CU_MEM_ALLOC_V2(dptr, bytesize)
+                })
             }
         }
         Err(e) => {
@@ -103,8 +98,7 @@ pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u6
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_alloc_detour(dptr: *mut CUdeviceptrV1, bytesize: u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
+    let limiter = GLOBAL_LIMITER
         .get()
         .expect("Limiter not initialized during cuMemAlloc");
     let request_size = bytesize;
@@ -119,7 +113,9 @@ pub(crate) unsafe fn cu_mem_alloc_detour(dptr: *mut CUdeviceptrV1, bytesize: u64
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(limiter, request_size, || FN_CU_MEM_ALLOC(dptr, bytesize))
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
+                    FN_CU_MEM_ALLOC(dptr, bytesize)
+                })
             }
         }
         Err(e) => {
@@ -138,8 +134,7 @@ pub(crate) unsafe fn cu_mem_alloc_managed_detour(
     bytesize: u64,
     flags: c_uint,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
+    let limiter = GLOBAL_LIMITER
         .get()
         .expect("Limiter not initialized during cuMemAllocManaged");
     let request_size = bytesize;
@@ -154,7 +149,7 @@ pub(crate) unsafe fn cu_mem_alloc_managed_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(limiter, request_size, || {
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
                     FN_CU_MEM_ALLOC_MANAGED(dptr, bytesize, flags)
                 })
             }
@@ -177,8 +172,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_v2_detour(
     height: usize,
     element_size_bytes: usize,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
+    let limiter = GLOBAL_LIMITER
         .get()
         .expect("Limiter not initialized during cuMemAllocPitch_v2");
     let request_size = round_up(width_in_bytes * height, element_size_bytes) as u64;
@@ -193,7 +187,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_v2_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(limiter, request_size, || {
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
                     FN_CU_MEM_ALLOC_PITCH_V2(
                         dptr,
                         p_pitch,
@@ -222,8 +216,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_detour(
     height: usize,
     element_size_bytes: usize,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
+    let limiter = GLOBAL_LIMITER
         .get()
         .expect("Limiter not initialized during cuMemAllocPitch");
     let request_size = (width_in_bytes * height) as u64;
@@ -238,7 +231,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(limiter, request_size, || {
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
                     FN_CU_MEM_ALLOC_PITCH(dptr, p_pitch, width_in_bytes, height, element_size_bytes)
                 })
             }
@@ -258,8 +251,7 @@ pub(crate) unsafe fn cu_array_create_v2_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArrayDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
+    let limiter = GLOBAL_LIMITER
         .get()
         .expect("Limiter not initialized during cuArrayCreate_v2");
     let request_size = allocate_array_request_size(p_allocate_array);
@@ -274,7 +266,7 @@ pub(crate) unsafe fn cu_array_create_v2_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(limiter, request_size, || {
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
                     FN_CU_ARRAY_CREATE_V2(p_handle, p_allocate_array)
                 })
             }
@@ -294,8 +286,7 @@ pub(crate) unsafe fn cu_array_create_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArrayDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
+    let limiter = GLOBAL_LIMITER
         .get()
         .expect("Limiter not initialized during cuArrayCreate");
     let request_size = allocate_array_request_size(p_allocate_array);
@@ -310,7 +301,7 @@ pub(crate) unsafe fn cu_array_create_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(limiter, request_size, || {
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
                     FN_CU_ARRAY_CREATE(p_handle, p_allocate_array)
                 })
             }
@@ -330,8 +321,7 @@ pub(crate) unsafe fn cu_array_3d_create_v2_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArray3dDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
+    let limiter = GLOBAL_LIMITER
         .get()
         .expect("Limiter not initialized during cuArray3DCreate_v2");
     let request_size = allocate_array_3d_request_size(p_allocate_array);
@@ -346,7 +336,7 @@ pub(crate) unsafe fn cu_array_3d_create_v2_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(limiter, request_size, || {
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
                     FN_CU_ARRAY_3D_CREATE_V2(p_handle, p_allocate_array)
                 })
             }
@@ -366,8 +356,7 @@ pub(crate) unsafe fn cu_array_3d_create_detour(
     p_handle: *mut CUarray,
     p_allocate_array: *const CudaArray3dDescriptor,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
+    let limiter = GLOBAL_LIMITER
         .get()
         .expect("Limiter not initialized during cuArray3DCreate");
     let request_size = allocate_array_3d_request_size(p_allocate_array);
@@ -382,7 +371,7 @@ pub(crate) unsafe fn cu_array_3d_create_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(limiter, request_size, || {
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
                     FN_CU_ARRAY_3D_CREATE(p_handle, p_allocate_array)
                 })
             }
@@ -403,8 +392,7 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
     p_mipmapped_array_desc: *const CudaArray3dDescriptor,
     num_mipmap_levels: c_uint,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
+    let limiter = GLOBAL_LIMITER
         .get()
         .expect("Limiter not initialized during cuMipmappedArrayCreate");
     let desc_ref = &*p_mipmapped_array_desc;
@@ -422,7 +410,7 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(limiter, request_size, || {
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
                     FN_CU_MIPMAPPED_ARRAY_CREATE(
                         p_handle,
                         p_mipmapped_array_desc,
@@ -448,8 +436,7 @@ pub(crate) unsafe fn cu_mem_create_detour(
     prop: *const u64,
     flags: c_uint,
 ) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter
+    let limiter = GLOBAL_LIMITER
         .get()
         .expect("Limiter not initialized during cuMemCreate");
     let request_size = size;
@@ -464,7 +451,7 @@ pub(crate) unsafe fn cu_mem_create_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(limiter, request_size, || {
+                cuda_alloc_with_retry(GLOBAL_TRAP.get().expect("get trap"), request_size, || {
                     FN_CU_MEM_CREATE(handle, size, prop, flags)
                 })
             }
@@ -481,8 +468,9 @@ pub(crate) unsafe fn cu_mem_create_detour(
 
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, _dev: CUdevice) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuDeviceTotalMem_v2");
 
     *bytes = limiter.get_mem_limit();
     CUDA_SUCCESS
@@ -490,8 +478,9 @@ pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, _dev: CUdevi
 
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, _dev: CUdevice) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuDeviceTotalMem");
 
     *bytes = limiter.get_mem_limit();
     CUDA_SUCCESS
@@ -499,8 +488,9 @@ pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, _dev: CUdevice)
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuMemGetInfo_v2");
 
     let mem_limit = limiter.get_mem_limit();
 
@@ -519,8 +509,9 @@ pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) 
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER;
-    let limiter = limiter.get().expect("get limiter");
+    let limiter = GLOBAL_LIMITER
+        .get()
+        .expect("Limiter not initialized during cuMemGetInfo");
 
     let mem_limit = limiter.get_mem_limit();
 

@@ -1,13 +1,12 @@
 use cudarc::driver::{sys::CUdevice_attribute, CudaContext, DriverError};
 use nvml_wrapper::{enums::device::UsedGpuMemory, error::NvmlError, Nvml};
 use std::{
-    path::Path,
     sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     thread::sleep,
     time::{Duration, SystemTime},
 };
 use thiserror::Error;
-use trap::{ipc::IpcTrap, Trap, TrapError};
+use trap::TrapError;
 
 use crate::detour::NvmlDeviceT;
 
@@ -26,7 +25,7 @@ pub(crate) enum Error {
 }
 
 #[derive(Debug)]
-pub(crate) struct Limiter<T: Trap> {
+pub(crate) struct Limiter {
     nvml: Nvml,
     device_idx: u32,
     pub(crate) pid: u32,
@@ -43,8 +42,6 @@ pub(crate) struct Limiter<T: Trap> {
     pub(crate) block_x: AtomicU32,
     pub(crate) block_y: AtomicU32,
     pub(crate) block_z: AtomicU32,
-
-    pub(crate) trap: T,
 }
 
 #[derive(Debug, Default)]
@@ -54,7 +51,7 @@ struct Utilization {
     sys_process_num: u32,
 }
 
-impl<T: Trap> Limiter<T> {
+impl Limiter {
     pub(crate) fn set_uplimit(&self, up_limit: u32) {
         self.up_limit.store(up_limit, Ordering::Release);
     }
@@ -224,15 +221,9 @@ impl<T: Trap> Limiter<T> {
     }
 }
 
-impl Limiter<IpcTrap> {
+impl Limiter {
     #[allow(clippy::too_many_arguments)]
-    pub fn init<P: AsRef<Path>>(
-        pid: u32,
-        device_idx: u32,
-        up_limit: u32,
-        mem_limit: u64,
-        ipc_server_path_name: P,
-    ) -> Result<Self, Error> {
+    pub fn init(pid: u32, device_idx: u32, up_limit: u32, mem_limit: u64) -> Result<Self, Error> {
         let nvml = match Nvml::init() {
             Ok(nvml) => Ok(nvml),
             Err(_) => Nvml::builder()
@@ -250,13 +241,6 @@ impl Limiter<IpcTrap> {
         let total_cuda_cores = sm_count * max_thread_per_sm * FACTOR;
 
         tracing::trace!("sm_count: {sm_count}, max_thread_per_sm: {max_thread_per_sm}, mem_limit: {mem_limit} bytes");
-
-        let trap = if cfg!(test) {
-            IpcTrap::dummy()
-        } else {
-            IpcTrap::connect(ipc_server_path_name)?
-        };
-
         Ok(Self {
             nvml,
             device_idx,
@@ -270,7 +254,6 @@ impl Limiter<IpcTrap> {
             block_x: AtomicU32::new(0),
             block_y: AtomicU32::new(0),
             block_z: AtomicU32::new(0),
-            trap,
         })
     }
 }
