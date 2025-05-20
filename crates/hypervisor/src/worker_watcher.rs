@@ -107,18 +107,8 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                                 }
                             };
 
-                            let uuid = match read_process_env_vars(pid) {
-                                Ok(mut env) => {
-                                    if let Some(uuid) = env.remove("NVIDIA_VISIBLE_DEVICES") {
-                                        uuid
-                                    } else {
-                                        tracing::warn!(
-                                            "no visible device for worker: {:?}, skipped",
-                                            path
-                                        );
-                                        continue;
-                                    }
-                                }
+                            let env = match read_process_env_vars(pid) {
+                                Ok(env) => env,
                                 Err(e) => {
                                     if e.kind() == io::ErrorKind::NotFound {
                                         // remove orphan pid file
@@ -141,9 +131,27 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                                 }
                             };
 
+                            // Get GPU UUID
+                            let uuid = if let Some(uuid) = env.get("NVIDIA_VISIBLE_DEVICES") {
+                                uuid.clone()
+                            } else {
+                                tracing::warn!(
+                                    "no visible device for worker: {:?}, skipped",
+                                    path
+                                );
+                                continue;
+                            };
+
                             if self.hypervisor.process_exists(pid) {
                                 continue;
                             }
+
+                            // Get QoS level
+                            let qos_level = match env.get("TENSOR_FUSION_QOS_LEVEL").map(String::as_str) {
+                                Some("HIGH") | Some("high") => QosLevel::High,
+                                Some("LOW") | Some("low") => QosLevel::Low,
+                                _ => QosLevel::Medium,
+                            };
 
                             let worker = TensorFusionWorker::new(
                                 pid,
@@ -152,8 +160,7 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                                     memory_bytes: 0,
                                     compute_percentage: 0,
                                 },
-                                // TODO: read qos level from env vars
-                                QosLevel::Medium,
+                                qos_level,
                                 uuid,
                                 gpu_observer.clone(),
                             );
@@ -217,6 +224,13 @@ fn extract_pid_worker_name_from_path(path: &std::path::Path) -> Result<(u32, Str
     Ok((pid, worker_name))
 }
 
+/// Read environment variables from a process by its PID
+/// 
+/// This function reads from /proc/{pid}/environ to get the process environment variables.
+/// Important environment variables:
+/// - NVIDIA_VISIBLE_DEVICES: Required. Specifies the GPU UUID for the worker.
+/// - TENSOR_FUSION_QOS_LEVEL: Optional. Sets the QoS level for the worker.
+///   Possible values: "HIGH", "LOW" (case insensitive). Defaults to "MEDIUM" if not set.
 fn read_process_env_vars(pid: u32) -> Result<HashMap<String, String>, io::Error> {
     let environ_path = format!("/proc/{}/environ", pid);
     let content = fs::read(&environ_path)?;
