@@ -12,7 +12,7 @@ pub enum TrapFrame {
     OutOfMemory { requested_bytes: u64 },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum TrapAction {
     Resume,
     Fatal(String),

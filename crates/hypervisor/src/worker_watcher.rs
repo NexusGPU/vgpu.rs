@@ -135,10 +135,7 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                             let uuid = if let Some(uuid) = env.get("NVIDIA_VISIBLE_DEVICES") {
                                 uuid.clone()
                             } else {
-                                tracing::warn!(
-                                    "no visible device for worker: {:?}, skipped",
-                                    path
-                                );
+                                tracing::warn!("no visible device for worker: {:?}, skipped", path);
                                 continue;
                             };
 
@@ -147,11 +144,14 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                             }
 
                             // Get QoS level
-                            let qos_level = match env.get("TENSOR_FUSION_QOS_LEVEL").map(String::as_str) {
-                                Some("HIGH") | Some("high") => QosLevel::High,
-                                Some("LOW") | Some("low") => QosLevel::Low,
-                                _ => QosLevel::Medium,
-                            };
+                            let qos_level =
+                                match env.get("TENSOR_FUSION_QOS_LEVEL").map(String::as_str) {
+                                    Some("HIGH") | Some("high") => QosLevel::High,
+                                    Some("LOW") | Some("low") => QosLevel::Low,
+                                    Some("Medium") | Some("medium") => QosLevel::Medium,
+                                    Some("Critical") | Some("critical") => QosLevel::Critical,
+                                    _ => QosLevel::Medium,
+                                };
 
                             let worker = TensorFusionWorker::new(
                                 pid,
@@ -225,7 +225,7 @@ fn extract_pid_worker_name_from_path(path: &std::path::Path) -> Result<(u32, Str
 }
 
 /// Read environment variables from a process by its PID
-/// 
+///
 /// This function reads from /proc/{pid}/environ to get the process environment variables.
 /// Important environment variables:
 /// - NVIDIA_VISIBLE_DEVICES: Required. Specifies the GPU UUID for the worker.

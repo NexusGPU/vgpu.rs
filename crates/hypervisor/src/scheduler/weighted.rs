@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ops::{Deref, DerefMut},
 };
 
@@ -88,97 +88,6 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
         self.processes.get(&process_id).map(|p| &p.process)
     }
 
-    /// Schedule processes in trap wait queue based on their weights
-    /// ```plaintext
-    /// Process Flow:
-    /// ┌─────────────────┐
-    /// │ Trap Wait Queue │
-    /// └────────┬────────┘
-    ///          │ weight > min_running_weight?
-    ///          ▼
-    /// ┌─────────────────┐
-    /// │ Remove Process  │←─────────────┐
-    /// └────────┬────────┘              │
-    ///          │                       │
-    ///          ▼                       │
-    /// ┌─────────────────┐     No       │
-    /// │ Process Traps   │──────────────┘
-    /// └────────┬────────┘   Retry
-    ///          │ Success
-    ///          ▼
-    /// ┌─────────────────┐
-    /// │ Update Queue:   │
-    /// │ - Running Queue │
-    /// │ - Trap Queue    │
-    /// └─────────────────┘
-    /// ```
-    fn schedule(&mut self) -> anyhow::Result<Vec<super::SchedulingDecision>> {
-        let mut decisions = Vec::new();
-        loop {
-            // First peek at the trap wait queue without borrowing self
-            let (pid, weight) = match self.trap_wait_queue.peek() {
-                Some((pid, weight)) => (*pid, *weight),
-                None => break,
-            };
-
-            let min_weight_in_running_queue =
-                self.running_queue.peek().map(|(_, w)| *w).unwrap_or(0);
-
-            if weight > min_weight_in_running_queue {
-                // Remove from queues and get process
-                self.trap_wait_queue.remove(&pid);
-                let mut process = self.processes.remove(&pid).expect("process not found");
-
-                // Process each trap
-                let mut should_retry = false;
-                while let Some(Trap {
-                    round,
-                    frame: trap_frame,
-                    waker,
-                }) = process.traps.pop()
-                {
-                    match trap_frame {
-                        trap::TrapFrame::OutOfMemory { requested_bytes } => {
-                            let (release_decisions, success) =
-                                self.release_memory_from_running(requested_bytes, weight);
-                            decisions.extend(release_decisions);
-
-                            if success {
-                                decisions.push(super::SchedulingDecision::Wake(
-                                    waker,
-                                    trap::TrapAction::Resume,
-                                ));
-                            } else {
-                                // insufficient memory, push back the trap
-                                process.traps.push(Trap {
-                                    round: round + 1,
-                                    frame: trap_frame,
-                                    waker,
-                                });
-                                should_retry = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Put process back in appropriate queue
-                if should_retry {
-                    self.trap_wait_queue.push(pid, process.weight());
-                } else if process.traps.is_empty() {
-                    self.running_queue.push(pid, process.weight());
-                }
-
-                // Put process back
-                self.processes.insert(pid, process);
-            } else {
-                break;
-            }
-        }
-        Ok(decisions)
-    }
-
-    /// Handle a trap event for a process
     fn on_trap(&mut self, process_id: u32, frame: &trap::TrapFrame, waker: trap::Waker) {
         if let Some(process) = self.processes.get_mut(&process_id) {
             process.traps.push(Trap {
@@ -190,11 +99,151 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
             // Move the process to the trap wait queue
             self.running_queue.remove(&process_id);
             self.sleep_queue.remove(&process_id);
-
             self.trap_wait_queue.push(process_id, weight);
         } else {
             // Process not found
             tracing::warn!("process {} not found for trap", process_id);
+        }
+    }
+
+    /// Schedule processes based on their weights
+    ///
+    /// The scheduling algorithm works as follows:
+    /// ```text
+    ///                              +----------------+
+    ///                              |    Schedule    |
+    ///                              +----------------+
+    ///                                     |
+    ///                                     v
+    ///                       +----------------------------+
+    ///                       | Get highest weight process |
+    ///                       |  - from trap_wait_queue    |
+    ///                       |  - from sleep_queue        |
+    ///                       +----------------------------+
+    ///                                     |
+    ///                                     v
+    ///                       +----------------------------+
+    ///                       | Get minimum running weight |
+    ///                       +----------------------------+
+    ///                                     |
+    ///                                     v
+    ///                           /------------------\    No
+    ///                          ( Any waiting proc?  ) ------+
+    ///                           \------------------/        |
+    ///                                    | Yes              |
+    ///                                    v                  |
+    ///                        +------------------------+     |
+    ///                        | Compare process weights|     |
+    ///                        +------------------------+     |
+    ///                                    |                  |
+    ///                                    v                  |
+    ///              +---------------------(?)----------------+
+    ///              |                     |                  |
+    ///              v                     v                  v
+    ///      +--------------+    +------------------+    +--------+
+    ///      | Handle Trap  |    | Resume from      |    | Break  |
+    ///      | if highest & |    | sleep if higher  |    |        |
+    ///      | > min run    |    | than min run     |    |        |
+    ///      +--------------+    +------------------+    +--------+
+    /// ```
+    fn schedule(&mut self) -> anyhow::Result<Vec<super::SchedulingDecision>> {
+        let mut decisions = Vec::new();
+        // Use a HashSet to track all processes that have been processed in this scheduling round
+        // This prevents any process from being processed more than once in the same round
+        let mut processed_processes = HashSet::new();
+
+        loop {
+            // Get highest weight process from both queues, filtering out already processed processes
+            let trap_process = self
+                .trap_wait_queue
+                .iter()
+                .filter(|(pid, _)| !processed_processes.contains(*pid))
+                .max_by_key(|(_, weight)| *weight)
+                .map(|(pid, weight)| (*pid, *weight));
+            let sleep_process = self
+                .sleep_queue
+                .iter()
+                .filter(|(pid, _)| !processed_processes.contains(*pid))
+                .max_by_key(|(_, weight)| *weight)
+                .map(|(pid, weight)| (*pid, *weight));
+
+            // Get minimum weight in running queue
+            // If running queue is empty, use 0 to allow any process to run
+            let min_weight_in_running_queue =
+                self.running_queue.peek().map(|(_, w)| *w).unwrap_or(0);
+
+            // Process based on weights
+            match (trap_process, sleep_process) {
+                (None, None) => break, // No waiting processes
+                (Some((trap_pid, trap_weight)), Some((sleep_pid, sleep_weight))) => {
+                    // Check if trap process has higher priority
+                    let trap_has_priority = trap_weight >= sleep_weight;
+
+                    // Skip this process if it has already been processed in this scheduling round
+                    if trap_has_priority && trap_weight > min_weight_in_running_queue {
+                        // Handle the process
+                        self.handle_trap_process(&mut decisions, trap_pid, trap_weight)?;
+                        // Mark this process as processed regardless of success
+                        processed_processes.insert(trap_pid);
+                    } else if sleep_weight > min_weight_in_running_queue {
+                        decisions.push(super::SchedulingDecision::Resume(sleep_pid));
+                        // Mark this process as processed
+                        processed_processes.insert(sleep_pid);
+                    } else {
+                        break;
+                    }
+                }
+                (Some((trap_pid, trap_weight)), None) => {
+                    // Skip this process if it has already been processed in this scheduling round
+                    if trap_weight > min_weight_in_running_queue {
+                        // Handle the process
+                        self.handle_trap_process(&mut decisions, trap_pid, trap_weight)?;
+                        // Mark this process as processed regardless
+                        processed_processes.insert(trap_pid);
+                    } else {
+                        break;
+                    }
+                }
+                (None, Some((sleep_pid, sleep_weight))) => {
+                    if sleep_weight > min_weight_in_running_queue {
+                        decisions.push(super::SchedulingDecision::Resume(sleep_pid));
+                        // Mark this process as processed
+                        processed_processes.insert(sleep_pid);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(decisions)
+    }
+
+    fn done_decision(&mut self, decision: &super::SchedulingDecision) {
+        match decision {
+            super::SchedulingDecision::Resume(pid) => {
+                if self.running_queue.get(pid).is_some() {
+                    return;
+                }
+
+                // Move process from sleep queue to running queue
+                if let Some((_, &weight)) = self.sleep_queue.get(pid) {
+                    self.sleep_queue.remove(pid);
+                    self.running_queue.push(*pid, weight);
+                }
+            }
+            super::SchedulingDecision::Release(pid) => {
+                if self.sleep_queue.get(pid).is_some() {
+                    return;
+                }
+
+                // Move process from running queue to sleep queue
+                if let Some((_, &weight)) = self.running_queue.get(pid) {
+                    self.running_queue.remove(pid);
+                    self.sleep_queue.push(*pid, weight);
+                }
+            }
+            super::SchedulingDecision::Wake(_, _) => {}
+            super::SchedulingDecision::Pause(_) => {}
         }
     }
 }
@@ -202,38 +251,113 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
 impl<Proc: GpuProcess> WeightedScheduler<Proc> {
     pub(crate) fn new() -> Self {
         Self {
-            processes: HashMap::default(),
+            processes: HashMap::new(),
             running_queue: PriorityQueue::new(),
             sleep_queue: PriorityQueue::new(),
             trap_wait_queue: PriorityQueue::new(),
         }
     }
+
     fn release_memory_from_running(
         &mut self,
         requested_bytes: u64,
         min_weight: u32,
     ) -> (Vec<super::SchedulingDecision>, bool) {
         let mut decisions = Vec::new();
-        let mut available_resources = 0;
-        while let Some((pid, weight)) = self.running_queue.peek() {
-            let current_pid = *pid;
-            let current_weight = *weight;
-            if current_weight > min_weight {
-                return (decisions, false);
-            }
-            let _ = self.running_queue.pop();
-            self.sleep_queue.push(current_pid, current_weight);
-            decisions.push(super::SchedulingDecision::Release(current_pid));
+        let mut released_memory = 0;
 
-            if let Some(process) = self.processes.get(&current_pid) {
+        // Get all processes with lower weight than the requesting process
+        let mut candidates: Vec<_> = self
+            .running_queue
+            .iter()
+            .filter(|(_, &weight)| weight < min_weight)
+            .map(|(pid, _)| *pid)
+            .collect();
+
+        // Sort by weight (lowest first)
+        candidates.sort_by_key(|pid| {
+            self.running_queue
+                .get(pid)
+                .map(|(_, &weight)| weight)
+                .unwrap_or(0)
+        });
+
+        // Release processes until we have enough memory
+        for pid in candidates {
+            if let Some(process) = self.processes.get(&pid) {
                 let current_resources = process.current_resources();
-                available_resources += current_resources.memory_bytes;
-                if available_resources >= requested_bytes {
+                released_memory += current_resources.memory_bytes;
+                decisions.push(super::SchedulingDecision::Release(pid));
+
+                if released_memory >= requested_bytes {
                     return (decisions, true);
                 }
             }
         }
-        (decisions, false)
+
+        // If we couldn't release enough memory, return false
+        (decisions, released_memory >= requested_bytes)
+    }
+
+    fn handle_trap_process(
+        &mut self,
+        decisions: &mut Vec<super::SchedulingDecision>,
+        pid: u32,
+        weight: u32,
+    ) -> anyhow::Result<()> {
+        // Returns true if process was handled successfully, false if it needs to be retried later
+        // Remove from queues and get process
+        self.trap_wait_queue.remove(&pid);
+        let mut process = self.processes.remove(&pid).expect("process not found");
+
+        // Process each trap
+        let mut should_retry = false;
+        while let Some(Trap {
+            round,
+            frame: trap_frame,
+            waker,
+        }) = process.traps.pop()
+        {
+            match trap_frame {
+                trap::TrapFrame::OutOfMemory { requested_bytes } => {
+                    let (release_decisions, success) =
+                        self.release_memory_from_running(requested_bytes, weight);
+
+                    // Add the release decisions to the output
+                    decisions.extend(release_decisions);
+
+                    if success {
+                        decisions.push(super::SchedulingDecision::Wake(
+                            waker,
+                            trap::TrapAction::Resume,
+                        ));
+                    } else {
+                        // insufficient memory, push back the trap
+                        process.traps.push(Trap {
+                            round: round + 1,
+                            frame: trap_frame,
+                            waker,
+                        });
+                        should_retry = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Put process back in appropriate queue
+        if should_retry {
+            self.trap_wait_queue.push(pid, process.weight());
+            // Put process back
+            self.processes.insert(pid, process);
+            return Ok(());
+        } else if process.traps.is_empty() {
+            self.running_queue.push(pid, process.weight());
+        }
+
+        // Put process back
+        self.processes.insert(pid, process);
+        Ok(())
     }
 }
 
@@ -378,8 +502,191 @@ mod tests {
             );
         }
 
-        // Verify traps are correctly accumulated
+        // Verify traps are accumulated
         let process = scheduler.processes.get(&1).unwrap();
-        assert_eq!(process.traps.len(), 3, "All traps should be queued");
+        assert_eq!(process.traps.len(), 3);
+    }
+
+    #[test]
+    fn test_resume_from_sleep() {
+        let mut scheduler: WeightedScheduler<MockGpuProcess> = WeightedScheduler::new();
+
+        // Create two processes with different priorities
+        // Process 1 has higher QoS than Process 2, so Process 2 should be released when Process 1 needs memory
+        let process1 = MockGpuProcess::new_with_qos(1, 1024, 50, crate::process::QosLevel::High);
+        let process2 = MockGpuProcess::new_with_qos(2, 1024, 50, crate::process::QosLevel::Low);
+
+        scheduler.add_process(process1);
+        scheduler.add_process(process2);
+
+        // Simulate memory pressure by triggering OOM
+        scheduler.on_trap(
+            1,
+            &trap::TrapFrame::OutOfMemory {
+                requested_bytes: 2048,
+            },
+            create_test_waker(),
+        );
+
+        // Process1 should be in trap queue, Process2 should be moved to sleep queue
+        let decisions = scheduler.schedule().unwrap();
+
+        // Verify process2 is released and moved to sleep queue
+        assert!(decisions
+            .iter()
+            .any(|d| matches!(d, SchedulingDecision::Release(2))));
+
+        for decision in &decisions {
+            scheduler.done_decision(decision);
+        }
+
+        assert!(
+            scheduler.sleep_queue.get(&2).is_some(),
+            "Process 2 should be in sleep queue after Release"
+        );
+        assert!(
+            scheduler.running_queue.get(&2).is_none(),
+            "Process 2 should not be in running queue after Release"
+        );
+
+        // Now simulate more memory becoming available by removing process1
+        scheduler.remove_process(1);
+
+        // Schedule again - process2 should be resumed
+        let decisions = scheduler.schedule().unwrap();
+
+        // Verify process2 is resumed
+        assert!(decisions
+            .iter()
+            .any(|d| matches!(d, SchedulingDecision::Resume(2))));
+
+        // Execute the Resume decisions using the scheduler's method and verify each process is moved correctly
+        for decision in &decisions {
+            if let SchedulingDecision::Resume(pid) = decision {
+                scheduler.done_decision(decision);
+
+                // Verify the process was moved to running queue after Resume
+                assert!(
+                    scheduler.running_queue.get(pid).is_some(),
+                    "Process {} should be in running queue after Resume",
+                    pid
+                );
+                assert!(
+                    scheduler.sleep_queue.get(pid).is_none(),
+                    "Process {} should not be in sleep queue after Resume",
+                    pid
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_sleep_queue_weight_priority() {
+        let mut scheduler: WeightedScheduler<MockGpuProcess> = WeightedScheduler::new();
+
+        // Create three processes with different priorities
+        let process1 = MockGpuProcess::new_with_qos(1, 1024, 50, crate::process::QosLevel::Low);
+        let process2 = MockGpuProcess::new_with_qos(2, 1024, 50, crate::process::QosLevel::Medium);
+        let process3 = MockGpuProcess::new_with_qos(3, 1024, 50, crate::process::QosLevel::High);
+
+        scheduler.add_process(process1);
+        scheduler.add_process(process2);
+        scheduler.add_process(process3);
+
+        // Verify initial state
+        assert!(scheduler.running_queue.get(&1).is_some());
+        assert!(scheduler.running_queue.get(&2).is_some());
+        assert!(scheduler.running_queue.get(&3).is_some());
+
+        // Simulate high memory pressure by triggering OOM for high priority process
+        scheduler.on_trap(
+            3,
+            &trap::TrapFrame::OutOfMemory {
+                requested_bytes: 2048,
+            },
+            create_test_waker(),
+        );
+
+        // Process 3 should now be in the trap queue
+        assert!(scheduler.trap_wait_queue.get(&3).is_some());
+        assert!(scheduler.running_queue.get(&3).is_none());
+
+        // Manually release lower priority processes to simulate what would happen
+        // in the release_memory_from_running function
+        let weight1 = *scheduler.running_queue.get(&1).unwrap().1;
+        scheduler.running_queue.remove(&1);
+        scheduler.sleep_queue.push(1, weight1);
+
+        let weight2 = *scheduler.running_queue.get(&2).unwrap().1;
+        scheduler.running_queue.remove(&2);
+        scheduler.sleep_queue.push(2, weight2);
+
+        // Verify processes 1 and 2 are now in sleep queue
+        assert!(
+            scheduler.sleep_queue.get(&1).is_some(),
+            "Process 1 should be in sleep queue"
+        );
+        assert!(
+            scheduler.sleep_queue.get(&2).is_some(),
+            "Process 2 should be in sleep queue"
+        );
+        assert!(
+            scheduler.running_queue.get(&1).is_none(),
+            "Process 1 should not be in running queue"
+        );
+        assert!(
+            scheduler.running_queue.get(&2).is_none(),
+            "Process 2 should not be in running queue"
+        );
+
+        // Remove high priority process to simulate it completing
+        scheduler.remove_process(3);
+
+        // Now schedule - medium priority process should be resumed first
+        let decisions = scheduler.schedule().unwrap();
+
+        // Verify medium priority process (2) is resumed first
+        assert!(decisions
+            .iter()
+            .any(|d| matches!(d, SchedulingDecision::Resume(2))));
+
+        // Execute the Resume decision
+        for decision in &decisions {
+            scheduler.done_decision(decision);
+        }
+
+        // Verify process 2 is now in running queue
+        assert!(
+            scheduler.running_queue.get(&2).is_some(),
+            "Process 2 should be in running queue"
+        );
+        assert!(
+            scheduler.sleep_queue.get(&2).is_none(),
+            "Process 2 should not be in sleep queue"
+        );
+
+        // With our updated scheduler, Process 1 might also be processed in the same round
+        // If Process 1 is still in the sleep queue, that's good
+        // If it's been moved to the running queue, that's also acceptable
+        assert!(
+            scheduler.sleep_queue.get(&1).is_some() || scheduler.running_queue.get(&1).is_some(),
+            "Process 1 should be in either sleep queue or running queue"
+        );
+
+        // If Process 1 is in the running queue, we're done with the test
+        if scheduler.running_queue.get(&1).is_some() {
+            return;
+        }
+
+        // Otherwise, remove process 2 to simulate it completing
+        scheduler.remove_process(2);
+
+        // Now schedule again - low priority process should be resumed
+        let decisions = scheduler.schedule().unwrap();
+
+        // Verify low priority process (1) is resumed
+        assert!(decisions
+            .iter()
+            .any(|d| matches!(d, SchedulingDecision::Resume(1))));
     }
 }

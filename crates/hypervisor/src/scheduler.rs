@@ -5,8 +5,10 @@ use crate::process::GpuProcess;
 pub(crate) mod weighted;
 
 /// Scheduling decisions
+#[derive(Debug)]
 pub(crate) enum SchedulingDecision {
     /// Pause specified process
+    #[allow(dead_code)]
     Pause(u32),
     /// Pause and release memory of specified process
     Release(u32),
@@ -30,6 +32,8 @@ pub(crate) trait GpuScheduler<Proc: GpuProcess> {
     /// Execute scheduling decisions
     /// Returns a series of scheduling operations to be executed
     fn schedule(&mut self) -> Result<Vec<SchedulingDecision>>;
+
+    fn done_decision(&mut self, decision: &SchedulingDecision);
 
     /// Handle a trap event for a process
     fn on_trap(&mut self, process_id: u32, frame: &trap::TrapFrame, waker: trap::Waker);

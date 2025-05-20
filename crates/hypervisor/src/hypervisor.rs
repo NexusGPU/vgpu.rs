@@ -60,37 +60,41 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
         };
 
         // Apply scheduling decisions
-        for decision in decisions {
+        for decision in decisions.iter() {
             match decision {
                 SchedulingDecision::Pause(id) => {
                     tracing::info!("pausing process {}", id);
-                    if let Some(process) = scheduler.get_process(id) {
+                    if let Some(process) = scheduler.get_process(*id) {
                         if let Err(e) = process.pause() {
                             tracing::warn!("failed to pause process {}: {}", id, e);
+                            continue;
                         }
                     }
                 }
                 SchedulingDecision::Release(id) => {
                     tracing::info!("releasing process {}", id);
-                    if let Some(process) = scheduler.get_process(id) {
+                    if let Some(process) = scheduler.get_process(*id) {
                         if let Err(e) = process.release() {
                             tracing::warn!("failed to release process {}: {}", id, e);
+                            continue;
                         }
                     }
                 }
                 SchedulingDecision::Resume(id) => {
                     tracing::info!("resuming process {}", id);
-                    if let Some(process) = scheduler.get_process(id) {
+                    if let Some(process) = scheduler.get_process(*id) {
                         if let Err(e) = process.resume() {
                             tracing::warn!("failed to resume process {}: {}", id, e);
+                            continue;
                         }
                     }
                 }
                 SchedulingDecision::Wake(waker, arg) => {
                     tracing::info!("waking up tapped process");
-                    let _ = waker.send(arg);
+                    let _ = waker.send(arg.clone());
                 }
             }
+            scheduler.done_decision(decision);
         }
     }
 
