@@ -36,5 +36,11 @@ pub(crate) trait GpuScheduler<Proc: GpuProcess> {
     fn done_decision(&mut self, decision: &SchedulingDecision);
 
     /// Handle a trap event for a process
-    fn on_trap(&mut self, process_id: u32, trap_id: u64, frame: &trap::TrapFrame, waker: trap::Waker);
+    fn on_trap(
+        &mut self,
+        process_id: u32,
+        trap_id: u64,
+        frame: &trap::TrapFrame,
+        waker: trap::Waker,
+    );
 }

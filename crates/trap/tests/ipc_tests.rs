@@ -372,15 +372,15 @@ fn test_ipc_trap_error_handling() -> Result<(), Box<dyn std::error::Error + Send
         // Create channels for the error test
         let (frame_sender, frame_receiver) = ipc::channel()?;
         let (action_sender, action_receiver) = ipc::channel()?;
-        
+
         // Create a trap with the proper arguments
         let trap = IpcTrap::new(frame_sender, action_receiver);
-        
+
         // Explicitly drop both the frame_receiver and action_sender to ensure
         // both sides of the channel are closed
         drop(frame_receiver);
         drop(action_sender);
-        
+
         // Verify that entering trap with a broken channel produces an error
         let result = trap.enter_trap_and_wait(frame.clone());
         assert!(
@@ -388,24 +388,24 @@ fn test_ipc_trap_error_handling() -> Result<(), Box<dyn std::error::Error + Send
             "Expected error when using a broken channel"
         );
     }
-    
+
     // ===== Now test the normal path with fresh channels =====
     {
         // Create new channels for the success test
         let (good_sender, good_receiver) = ipc::channel()?;
-        
+
         // Call handle_trap directly with the handler
         handler.handle_trap(42, 1, &frame, good_sender);
-        
+
         // Verify that handle_trap was called
         assert!(handler.called.load(Ordering::SeqCst));
         assert!(handler.should_exit.load(Ordering::SeqCst));
-        
+
         // Verify we got the expected response with a timeout to prevent hanging
         match good_receiver.try_recv_timeout(std::time::Duration::from_millis(500)) {
             Ok(response) => {
                 assert!(matches!(response, (1, TrapAction::Resume)));
-            },
+            }
             Err(e) => {
                 panic!("Failed to receive response: {:?}", e);
             }

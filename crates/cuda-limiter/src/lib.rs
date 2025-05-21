@@ -14,7 +14,6 @@ mod detour;
 mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
-const GLOBAL_TRAP: OnceLock<IpcTrap> = OnceLock::new();
 
 thread_local! {
     static LIBCUDA_HOOKED: RefCell<bool> = const { RefCell::new(false) };
@@ -26,6 +25,28 @@ pub extern "C" fn set_limit(gpu: u32, mem: u64) {
     let limiter = GLOBAL_LIMITER.get().expect("get limiter");
     limiter.set_uplimit(gpu);
     limiter.set_mem_limit(mem);
+}
+
+pub fn global_trap() -> IpcTrap {
+    const GLOBAL_TRAP: OnceLock<IpcTrap> = OnceLock::new();
+
+    GLOBAL_TRAP
+        .get_or_init(|| {
+            let ipc_server_path_name = std::env::var("TENSOR_FUSION_IPC_SERVER_PATH")
+                .unwrap_or("cuda-limiter".to_string());
+            // init IpcTrap
+            if cfg!(test) {
+                IpcTrap::dummy()
+            } else {
+                match IpcTrap::connect(ipc_server_path_name) {
+                    Ok(trap) => trap,
+                    Err(e) => {
+                        panic!("failed to connect to ipc server, err: {e}");
+                    }
+                }
+            }
+        })
+        .clone()
 }
 
 #[ctor]
@@ -44,9 +65,6 @@ unsafe fn entry_point() {
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(0);
 
-    let ipc_server_path_name =
-        std::env::var("TENSOR_FUSION_IPC_SERVER_PATH").unwrap_or("cuda-limiter".to_string());
-
     let limiter = match Limiter::init(pid, 0, up_limit, mem_limit) {
         Ok(limiter) => limiter,
         Err(err) => {
@@ -55,20 +73,6 @@ unsafe fn entry_point() {
         }
     };
     GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
-
-    // init IpcTrap
-    let trap = if cfg!(test) {
-        IpcTrap::dummy()
-    } else {
-        match IpcTrap::connect(ipc_server_path_name) {
-            Ok(trap) => trap,
-            Err(e) => {
-                tracing::error!("failed to connect to ipc server, err: {e}");
-                return;
-            }
-        }
-    };
-    GLOBAL_TRAP.set(trap).expect("set trap");
 
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
