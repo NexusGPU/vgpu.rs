@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::io::Error as IoError;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex};
 use std::{fs, thread, time::Duration};
 
 /// Represents a pending trap request waiting for a response
@@ -19,7 +19,7 @@ struct PendingTrap {
 #[derive(Debug)]
 pub struct IpcTrap {
     sender: IpcSender<(u64, TrapFrame)>,
-    pending_traps: Arc<RwLock<HashMap<u64, Arc<(Mutex<PendingTrap>, Condvar)>>>>,
+    pending_traps: Arc<Mutex<HashMap<u64, Arc<(Mutex<PendingTrap>, Condvar)>>>>,
     next_trap_id: AtomicU64,
 }
 
@@ -28,10 +28,9 @@ impl IpcTrap {
         sender: IpcSender<(u64, TrapFrame)>,
         receiver: IpcReceiver<(u64, TrapAction)>,
     ) -> Self {
-        let pending_traps = Arc::new(RwLock::new(HashMap::<
-            u64,
-            Arc<(Mutex<PendingTrap>, Condvar)>,
-        >::new()));
+        let pending_traps = Arc::new(Mutex::new(
+            HashMap::<u64, Arc<(Mutex<PendingTrap>, Condvar)>>::new(),
+        ));
         let pending_traps_clone = Arc::clone(&pending_traps);
 
         // Start a dedicated thread to handle incoming messages
@@ -39,9 +38,9 @@ impl IpcTrap {
             loop {
                 match receiver.recv() {
                     Ok((id, action)) => {
-                        let traps = pending_traps_clone.read().expect("poisoning");
-                        if let Some(trap) = traps.get(&id) {
-                            let (mutex, condvar) = &**trap;
+                        let maybe_trap = pending_traps_clone.lock().expect("poisoning").remove(&id);
+                        if let Some(trap) = maybe_trap {
+                            let (mutex, condvar) = &*trap;
                             let mut pending = mutex.lock().expect("poisoning");
                             pending.action = Some(action);
                             condvar.notify_one();
@@ -145,7 +144,7 @@ impl Trap for IpcTrap {
 
         // Register this trap in our pending traps map
         {
-            let mut traps = self.pending_traps.write().expect("poisoning");
+            let mut traps = self.pending_traps.lock().expect("poisoning");
             traps.insert(trap_id, Arc::clone(&pair));
         }
 
@@ -161,12 +160,6 @@ impl Trap for IpcTrap {
         // Wait until the action is set by the receiver thread
         while pending.action.is_none() {
             pending = condvar.wait(pending).expect("poisoning");
-        }
-
-        // Remove this trap from the pending traps map
-        {
-            let mut traps = self.pending_traps.write().expect("poisoning");
-            traps.remove(&trap_id);
         }
 
         // Return the action
