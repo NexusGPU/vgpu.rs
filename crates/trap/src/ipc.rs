@@ -16,11 +16,11 @@ struct PendingTrap {
 }
 
 /// IpcTrap: IPC implementation of Trap (client side, sends TrapFrame and waits for TrapAction)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IpcTrap {
     sender: IpcSender<(u64, TrapFrame)>,
     pending_traps: Arc<Mutex<HashMap<u64, Arc<(Mutex<PendingTrap>, Condvar)>>>>,
-    next_trap_id: AtomicU64,
+    next_trap_id: Arc<AtomicU64>,
 }
 
 impl IpcTrap {
@@ -59,7 +59,7 @@ impl IpcTrap {
         Self {
             sender,
             pending_traps,
-            next_trap_id: AtomicU64::new(1),
+            next_trap_id: Arc::new(AtomicU64::new(1)),
         }
     }
 

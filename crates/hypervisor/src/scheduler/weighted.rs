@@ -88,7 +88,13 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
         self.processes.get(&process_id).map(|p| &p.process)
     }
 
-    fn on_trap(&mut self, process_id: u32, _trap_id: u64, frame: &trap::TrapFrame, waker: trap::Waker) {
+    fn on_trap(
+        &mut self,
+        process_id: u32,
+        _trap_id: u64,
+        frame: &trap::TrapFrame,
+        waker: trap::Waker,
+    ) {
         if let Some(process) = self.processes.get_mut(&process_id) {
             process.traps.push(Trap {
                 frame: frame.clone(),
