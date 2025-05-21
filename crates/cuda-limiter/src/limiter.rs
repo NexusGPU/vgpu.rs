@@ -223,7 +223,12 @@ impl Limiter {
 
 impl Limiter {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn init(pid: u32, device_idx: u32, up_limit: u32, mem_limit: u64) -> Result<Self, Error> {
+    pub(crate) fn init(
+        pid: u32,
+        device_idx: u32,
+        up_limit: u32,
+        mem_limit: u64,
+    ) -> Result<Self, Error> {
         let nvml = match Nvml::init() {
             Ok(nvml) => Ok(nvml),
             Err(_) => Nvml::builder()
