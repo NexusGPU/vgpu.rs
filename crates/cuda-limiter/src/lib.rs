@@ -4,9 +4,10 @@ use limiter::Limiter;
 use std::{
     cell::RefCell,
     ffi::{c_char, c_int, c_void, CStr},
-    sync::OnceLock,
+    sync::{LazyLock, Mutex, OnceLock},
 };
 use tf_macro::hook_fn;
+use trap::ipc::IpcTrap;
 use utils::{hooks::HookManager, logging, replace_symbol};
 
 mod detour;
@@ -26,6 +27,27 @@ pub extern "C" fn set_limit(gpu: u32, mem: u64) {
     limiter.set_mem_limit(mem);
 }
 
+pub fn global_trap() -> IpcTrap {
+    static GLOBAL_TRAP: LazyLock<Mutex<IpcTrap>> = LazyLock::new(|| {
+        let ipc_server_path_name =
+            std::env::var("TENSOR_FUSION_IPC_SERVER_PATH").unwrap_or("cuda-limiter".to_string());
+        // init IpcTrap
+        let trap = if cfg!(test) {
+            IpcTrap::dummy()
+        } else {
+            match IpcTrap::connect(ipc_server_path_name) {
+                Ok(trap) => trap,
+                Err(e) => {
+                    panic!("failed to connect to ipc server, err: {e}");
+                }
+            }
+        };
+        Mutex::new(trap)
+    });
+
+    GLOBAL_TRAP.lock().expect("poisoned").clone()
+}
+
 #[ctor]
 unsafe fn entry_point() {
     logging::init();
@@ -33,11 +55,13 @@ unsafe fn entry_point() {
 
     // Read up_limit and mem_limit from environment variables with defaults
     let up_limit = std::env::var("TENSOR_FUSION_CUDA_UP_LIMIT")
-        .map(|v| v.parse().unwrap_or(0))
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
         .unwrap_or(0);
 
     let mem_limit = std::env::var("TENSOR_FUSION_CUDA_MEM_LIMIT")
-        .map(|v| v.parse().unwrap_or(0))
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
         .unwrap_or(0);
 
     let limiter = match Limiter::init(pid, 0, up_limit, mem_limit) {

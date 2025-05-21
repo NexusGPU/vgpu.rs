@@ -2,16 +2,19 @@
 resolver = "2"
 members = [
   "crates/add-path",
-  "crates/cuda-limiter", 
+  "crates/cuda-limiter",
   "crates/hypervisor",
   "crates/macro",
-  "crates/utils"
+  "crates/utils",
+  "crates/trap",
 ]
 
 [workspace.dependencies]
+trap = { path = "crates/trap" }
 utils = { path = "crates/utils" }
 tf-macro = { path = "crates/macro" }
 tracing = "0.1"
 thiserror = "2.0"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3" }
 ctor = "0.2"
+ipc-channel = "0.19.0"

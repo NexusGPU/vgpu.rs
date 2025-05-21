@@ -1,67 +1,91 @@
 use crate::gpu_observer::GpuObserver;
 use crate::hypervisor::Hypervisor;
 use crate::process::worker::TensorFusionWorker;
-use crate::process::GpuResources;
-use notify::{Error, Event, INotifyWatcher, Watcher};
+use crate::process::{GpuResources, QosLevel};
+use crate::scheduler::GpuScheduler;
+use notify::{Error, Event, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
-use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{fs, io, thread};
 
-pub(crate) struct WorkerWatcher {
-    rx: Receiver<Result<Event, Error>>,
-    hypervisor: Arc<Hypervisor>,
-    _watcher: INotifyWatcher,
+pub(crate) struct WorkerWatcher<Sched: GpuScheduler<TensorFusionWorker>> {
+    rx: Mutex<Receiver<Result<Event, Error>>>,
+    tx: Sender<Result<Event, Error>>,
+    hypervisor: Arc<Hypervisor<TensorFusionWorker, Sched>>,
+    worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
+    #[cfg(target_os = "linux")]
+    _watcher: notify::INotifyWatcher,
 }
 
-impl WorkerWatcher {
-    pub(crate) fn new<P: AsRef<Path>>(path: P, hypervisor: Arc<Hypervisor>) -> Result<Self, Error> {
+impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
+    pub(crate) fn new<P: AsRef<Path>>(
+        path: P,
+        hypervisor: Arc<Hypervisor<TensorFusionWorker, Sched>>,
+        worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
+    ) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel::<Result<Event, Error>>();
 
-        let _ = std::thread::Builder::new()
-            .name("WorkerWatcher loop".into())
-            .spawn({
-                let tx = tx.clone();
-                let path = PathBuf::from(path.as_ref());
-                move || loop {
-                    let entries = match fs::read_dir(&path) {
-                        Ok(entries) => entries,
-                        Err(e) => {
-                            tracing::error!("failed to read directory: {:?}", e);
-                            thread::sleep(Duration::from_secs(3));
-                            continue;
-                        }
-                    };
-                    let entries = entries
-                        .filter_map(Result::ok)
-                        .map(|entry| entry.path())
-                        .collect::<Vec<_>>();
-
-                    for entry in entries {
-                        let event = Event::new(notify::event::EventKind::Create(
-                            notify::event::CreateKind::File,
-                        ))
-                        .add_path(entry);
-                        let _ = tx.send(Ok(event));
-                    }
-                    thread::sleep(Duration::from_secs(3));
-                }
-            })?;
-
-        let mut watcher = notify::recommended_watcher(tx)?;
-        watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
+        #[cfg(target_os = "linux")]
+        let watcher = {
+            // Create a watcher using the recommended watcher implementation for the current platform
+            let mut watcher = notify::recommended_watcher(tx.clone())?;
+            watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
+            watcher
+        };
         tracing::info!("watching worker sock files at: {:?}", path.as_ref());
         Ok(WorkerWatcher {
-            rx,
+            rx: Mutex::new(rx),
+            tx,
             hypervisor,
+            worker_pid_mapping,
+            #[cfg(target_os = "linux")]
             _watcher: watcher,
         })
     }
 
+    /// Run the worker watcher loop that periodically checks the directory for new files
+    /// This is meant to be called from a dedicated thread in the crossbeam scope
+    pub(crate) fn run_watcher_loop(&self, path: impl AsRef<Path>) {
+        let tx = self.tx.clone();
+        let path = PathBuf::from(path.as_ref());
+
+        loop {
+            // Read directory contents
+            let entries = match fs::read_dir(&path) {
+                Ok(entries) => entries,
+                Err(e) => {
+                    tracing::error!("failed to read directory: {:?}", e);
+                    thread::sleep(Duration::from_secs(3));
+                    continue;
+                }
+            };
+
+            // Process directory entries
+            let entries = entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .collect::<Vec<_>>();
+
+            // Send events for each entry
+            for entry in entries {
+                let event = Event::new(notify::event::EventKind::Create(
+                    notify::event::CreateKind::File,
+                ))
+                .add_path(entry);
+                let _ = tx.send(Ok(event));
+            }
+
+            // Sleep before next check
+            thread::sleep(Duration::from_secs(3));
+        }
+    }
+
     pub(crate) fn run(&self, gpu_observer: Arc<GpuObserver>) {
-        for res in self.rx.iter() {
+        let rx = self.rx.lock().expect("Failed to lock receiver");
+        for res in rx.iter() {
             match res {
                 Ok(event) => match event.kind {
                     notify::EventKind::Create(_) => {
@@ -83,18 +107,8 @@ impl WorkerWatcher {
                                 }
                             };
 
-                            let uuid = match read_process_env_vars(pid) {
-                                Ok(mut env) => {
-                                    if let Some(uuid) = env.remove("NVIDIA_VISIBLE_DEVICES") {
-                                        uuid
-                                    } else {
-                                        tracing::warn!(
-                                            "no visible device for worker: {:?}, skipped",
-                                            path
-                                        );
-                                        continue;
-                                    }
-                                }
+                            let env = match read_process_env_vars(pid) {
+                                Ok(env) => env,
                                 Err(e) => {
                                     if e.kind() == io::ErrorKind::NotFound {
                                         // remove orphan pid file
@@ -117,9 +131,27 @@ impl WorkerWatcher {
                                 }
                             };
 
-                            if self.hypervisor.get_process(pid).is_some() {
+                            // Get GPU UUID
+                            let uuid = if let Some(uuid) = env.get("NVIDIA_VISIBLE_DEVICES") {
+                                uuid.clone()
+                            } else {
+                                tracing::warn!("no visible device for worker: {:?}, skipped", path);
+                                continue;
+                            };
+
+                            if self.hypervisor.process_exists(pid) {
                                 continue;
                             }
+
+                            // Get QoS level
+                            let qos_level =
+                                match env.get("TENSOR_FUSION_QOS_LEVEL").map(String::as_str) {
+                                    Some("HIGH") | Some("high") => QosLevel::High,
+                                    Some("LOW") | Some("low") => QosLevel::Low,
+                                    Some("Medium") | Some("medium") => QosLevel::Medium,
+                                    Some("Critical") | Some("critical") => QosLevel::Critical,
+                                    _ => QosLevel::Medium,
+                                };
 
                             let worker = TensorFusionWorker::new(
                                 pid,
@@ -128,12 +160,17 @@ impl WorkerWatcher {
                                     memory_bytes: 0,
                                     compute_percentage: 0,
                                 },
+                                qos_level,
                                 uuid,
                                 gpu_observer.clone(),
                             );
 
                             tracing::info!("new worker added: {:?}", worker_name);
-                            self.hypervisor.add_process(worker_name, Arc::new(worker));
+                            self.worker_pid_mapping
+                                .write()
+                                .expect("poisoning")
+                                .insert(pid, worker_name);
+                            self.hypervisor.add_process(worker);
                         }
                     }
                     notify::EventKind::Remove(_) => {
@@ -187,6 +224,13 @@ fn extract_pid_worker_name_from_path(path: &std::path::Path) -> Result<(u32, Str
     Ok((pid, worker_name))
 }
 
+/// Read environment variables from a process by its PID
+///
+/// This function reads from /proc/{pid}/environ to get the process environment variables.
+/// Important environment variables:
+/// - NVIDIA_VISIBLE_DEVICES: Required. Specifies the GPU UUID for the worker.
+/// - TENSOR_FUSION_QOS_LEVEL: Optional. Sets the QoS level for the worker.
+///   Possible values: "HIGH", "LOW" (case insensitive). Defaults to "MEDIUM" if not set.
 fn read_process_env_vars(pid: u32) -> Result<HashMap<String, String>, io::Error> {
     let environ_path = format!("/proc/{}/environ", pid);
     let content = fs::read(&environ_path)?;

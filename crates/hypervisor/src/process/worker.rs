@@ -6,7 +6,7 @@ use std::{os::unix::net::UnixStream, sync::RwLock};
 
 use crate::gpu_observer::GpuObserver;
 
-use super::{GpuProcess, GpuResources, ProcessState};
+use super::{GpuProcess, GpuResources, ProcessState, QosLevel};
 
 #[allow(dead_code)]
 #[repr(u32)]
@@ -44,6 +44,7 @@ pub(crate) struct TensorFusionWorker {
     gpu_uuid: String,
     gpu_observer: Arc<GpuObserver>,
     unix_stream: Mutex<UnixStream>,
+    qos_level: QosLevel,
 }
 
 impl TensorFusionWorker {
@@ -51,6 +52,7 @@ impl TensorFusionWorker {
         id: u32,
         socket_path: PathBuf,
         requested: GpuResources,
+        qos_level: QosLevel,
         gpu_uuid: String,
         gpu_observer: Arc<GpuObserver>,
     ) -> TensorFusionWorker {
@@ -58,6 +60,7 @@ impl TensorFusionWorker {
         Self {
             id,
             unix_stream: Mutex::new(unix_stream),
+            qos_level,
             requested,
             state: RwLock::new(ProcessState::Running),
             gpu_uuid,
@@ -101,9 +104,9 @@ impl GpuProcess for TensorFusionWorker {
         self.id
     }
 
-    fn state(&self) -> ProcessState {
-        self.state.read().expect("poisoned").clone()
-    }
+    // fn state(&self) -> ProcessState {
+    //     *self.state.read().expect("poisoned")
+    // }
 
     fn requested_resources(&self) -> GpuResources {
         self.requested.clone()
@@ -203,7 +206,11 @@ impl GpuProcess for TensorFusionWorker {
         }
     }
 
-    fn gpu_uuid(&self) -> &str {
-        &self.gpu_uuid
+    // fn gpu_uuid(&self) -> &str {
+    //     &self.gpu_uuid
+    // }
+
+    fn qos_level(&self) -> super::QosLevel {
+        self.qos_level
     }
 }
