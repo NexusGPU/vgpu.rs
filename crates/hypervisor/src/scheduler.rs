@@ -15,7 +15,7 @@ pub(crate) enum SchedulingDecision {
     /// Resume specified process
     Resume(u32),
     /// Wake up a process
-    Wake(trap::Waker, trap::TrapAction),
+    Wake(trap::Waker, u64, trap::TrapAction),
 }
 
 /// Trait for GPU scheduler
@@ -36,5 +36,5 @@ pub(crate) trait GpuScheduler<Proc: GpuProcess> {
     fn done_decision(&mut self, decision: &SchedulingDecision);
 
     /// Handle a trap event for a process
-    fn on_trap(&mut self, process_id: u32, frame: &trap::TrapFrame, waker: trap::Waker);
+    fn on_trap(&mut self, process_id: u32, trap_id: u64, frame: &trap::TrapFrame, waker: trap::Waker);
 }

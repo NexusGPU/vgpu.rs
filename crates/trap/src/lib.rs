@@ -33,17 +33,17 @@ pub trait Trap {
 }
 
 // TODO: replace IpcSender
-pub type Waker = IpcSender<TrapAction>;
+pub type Waker = IpcSender<(u64, TrapAction)>;
 
 pub trait TrapHandler {
-    fn handle_trap(&self, pid: u32, frame: &TrapFrame, waker: Waker);
+    fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Waker);
 }
 
 impl<T> TrapHandler for Arc<T>
 where
     T: TrapHandler,
 {
-    fn handle_trap(&self, pid: u32, frame: &TrapFrame, waker: Waker) {
-        (**self).handle_trap(pid, frame, waker);
+    fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Waker) {
+        (**self).handle_trap(pid, trap_id, frame, waker);
     }
 }

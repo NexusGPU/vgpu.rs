@@ -54,7 +54,7 @@ impl TestTrapHandler {
 }
 
 impl TrapHandler for TestTrapHandler {
-    fn handle_trap(&self, pid: u32, frame: &TrapFrame, waker: Waker) {
+    fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Waker) {
         // Store the received frame
         {
             let mut frames = self.received_frames.lock().unwrap();
@@ -78,7 +78,7 @@ impl TrapHandler for TestTrapHandler {
         }
 
         // Send the response
-        let _ = waker.send(response);
+        let _ = waker.send((trap_id, response.clone()));
 
         // Signal exit for the test server
         self.should_exit.store(true, Ordering::SeqCst);
@@ -97,7 +97,7 @@ fn test_ipc_trap_direct_creation() {
     // Start a thread to respond to the trap
     let handle = thread::spawn(move || {
         // Receive the frame
-        let frame = frame_receiver.recv().unwrap();
+        let (_trap_id, frame) = frame_receiver.recv().unwrap();
 
         // Verify it's what we expect
         match frame {
@@ -106,8 +106,8 @@ fn test_ipc_trap_direct_creation() {
             }
         }
 
-        // Send a response
-        action_sender.send(TrapAction::Resume).unwrap();
+        // Send a response with trap_id (using 1 as a dummy ID)
+        action_sender.send((1, TrapAction::Resume)).unwrap();
     });
 
     // Send a trap frame and wait for a response
@@ -155,15 +155,15 @@ fn test_ipc_basic_communication() -> Result<(), Box<dyn std::error::Error + Send
     let waker = action_sender;
 
     // Call the handler directly
-    handler.handle_trap(pid, &frame, waker);
+    handler.handle_trap(pid, 1, &frame, waker);
 
     // Receive the actual response from the handler
     let action = action_receiver.recv()?;
 
     // Verify the response
     match action {
-        TrapAction::Resume => { /* Expected */ }
-        TrapAction::Fatal(msg) => panic!("Unexpected fatal action: {}", msg),
+        (_, TrapAction::Resume) => { /* Expected */ }
+        (_, TrapAction::Fatal(msg)) => panic!("Unexpected fatal action: {}", msg),
     }
 
     // Verify the frame was received
@@ -206,15 +206,15 @@ fn test_fatal_response() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     let waker = action_sender;
 
     // Call the handler directly
-    handler.handle_trap(pid, &frame, waker);
+    handler.handle_trap(pid, 1, &frame, waker);
 
     // Receive the actual response from the handler
     let action = action_receiver.recv()?;
 
     // Verify the response
     match action {
-        TrapAction::Resume => panic!("Expected Fatal action, got Resume"),
-        TrapAction::Fatal(msg) => {
+        (_, TrapAction::Resume) => panic!("Expected Fatal action, got Resume"),
+        (_, TrapAction::Fatal(msg)) => {
             assert_eq!(msg, "Memory allocation failed");
         }
     }
@@ -265,15 +265,15 @@ fn test_multiple_clients() -> Result<(), Box<dyn std::error::Error + Send + Sync
     let waker1 = action_sender1;
 
     // Call the handler directly for first client
-    handler.handle_trap(pid1, &frame1, waker1);
+    handler.handle_trap(pid1, 1, &frame1, waker1);
 
     // Receive the actual response from the handler
     let action1 = action_receiver1.recv()?;
 
     // Verify the response for the first client
     match action1 {
-        TrapAction::Resume => { /* Expected */ }
-        TrapAction::Fatal(msg) => panic!("Unexpected fatal action for client 1: {}", msg),
+        (_, TrapAction::Resume) => { /* Expected */ }
+        (_, TrapAction::Fatal(msg)) => panic!("Unexpected fatal action for client 1: {}", msg),
     }
 
     // --- Second client test ---
@@ -290,15 +290,15 @@ fn test_multiple_clients() -> Result<(), Box<dyn std::error::Error + Send + Sync
     let waker2 = action_sender2;
 
     // Call the handler directly for second client
-    handler.handle_trap(pid2, &frame2, waker2);
+    handler.handle_trap(pid2, 2, &frame2, waker2);
 
     // Receive the actual response from the handler
     let action2 = action_receiver2.recv()?;
 
     // Verify the response for the second client
     match action2 {
-        TrapAction::Resume => panic!("Expected Fatal action for client 2, got Resume"),
-        TrapAction::Fatal(msg) => {
+        (_, TrapAction::Resume) => panic!("Expected Fatal action for client 2, got Resume"),
+        (_, TrapAction::Fatal(msg)) => {
             assert_eq!(msg, "Second client error");
         }
     }
@@ -347,7 +347,7 @@ fn test_ipc_trap_error_handling() -> Result<(), Box<dyn std::error::Error + Send
     }
 
     impl TrapHandler for SimpleHandler {
-        fn handle_trap(&self, _pid: u32, _frame: &TrapFrame, waker: Waker) {
+        fn handle_trap(&self, _pid: u32, trap_id: u64, _frame: &TrapFrame, waker: Waker) {
             // Mark that this function was called
             self.called.store(true, Ordering::SeqCst);
 
@@ -355,7 +355,7 @@ fn test_ipc_trap_error_handling() -> Result<(), Box<dyn std::error::Error + Send
             self.should_exit.store(true, Ordering::SeqCst);
 
             // Send a response
-            let _ = waker.send(TrapAction::Resume);
+            let _ = waker.send((trap_id, TrapAction::Resume));
         }
     }
 
@@ -367,37 +367,50 @@ fn test_ipc_trap_error_handling() -> Result<(), Box<dyn std::error::Error + Send
         requested_bytes: 1024,
     };
 
-    // Test error handling scenario - create and drop the receiver to simulate a broken pipe
-    let (frame_sender, _frame_receiver) = ipc::channel()?;
-    let (action_sender, action_receiver) = ipc::channel()?;
-
-    // Create a trap with the proper arguments
-    let trap = IpcTrap::new(frame_sender, action_receiver);
-
-    // Store action_sender in a block so it goes out of scope and is dropped
-    // This will cause the next operation to fail with a broken pipe
-    drop(action_sender);
-
-    // Verify that entering trap with a broken channel produces an error
-    let result = trap.enter_trap_and_wait(frame.clone());
-    assert!(
-        result.is_err(),
-        "Expected error when using a broken channel"
-    );
-
-    // Now test the normal path to ensure the handler works
-    let (good_sender, good_receiver) = ipc::channel()?;
-
-    // Call handle_trap directly
-    handler.handle_trap(42, &frame, good_sender);
-
-    // Verify that handle_trap was called
-    assert!(handler.called.load(Ordering::SeqCst));
-    assert!(handler.should_exit.load(Ordering::SeqCst));
-
-    // Verify we got the expected response
-    let response = good_receiver.recv()?;
-    assert!(matches!(response, TrapAction::Resume));
+    // ===== Test the error path first =====
+    {
+        // Create channels for the error test
+        let (frame_sender, frame_receiver) = ipc::channel()?;
+        let (action_sender, action_receiver) = ipc::channel()?;
+        
+        // Create a trap with the proper arguments
+        let trap = IpcTrap::new(frame_sender, action_receiver);
+        
+        // Explicitly drop both the frame_receiver and action_sender to ensure
+        // both sides of the channel are closed
+        drop(frame_receiver);
+        drop(action_sender);
+        
+        // Verify that entering trap with a broken channel produces an error
+        let result = trap.enter_trap_and_wait(frame.clone());
+        assert!(
+            result.is_err(),
+            "Expected error when using a broken channel"
+        );
+    }
+    
+    // ===== Now test the normal path with fresh channels =====
+    {
+        // Create new channels for the success test
+        let (good_sender, good_receiver) = ipc::channel()?;
+        
+        // Call handle_trap directly with the handler
+        handler.handle_trap(42, 1, &frame, good_sender);
+        
+        // Verify that handle_trap was called
+        assert!(handler.called.load(Ordering::SeqCst));
+        assert!(handler.should_exit.load(Ordering::SeqCst));
+        
+        // Verify we got the expected response with a timeout to prevent hanging
+        match good_receiver.try_recv_timeout(std::time::Duration::from_millis(500)) {
+            Ok(response) => {
+                assert!(matches!(response, (1, TrapAction::Resume)));
+            },
+            Err(e) => {
+                panic!("Failed to receive response: {:?}", e);
+            }
+        }
+    }
 
     Ok(())
 }

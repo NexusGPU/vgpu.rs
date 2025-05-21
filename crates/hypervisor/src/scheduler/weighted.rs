@@ -88,7 +88,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
         self.processes.get(&process_id).map(|p| &p.process)
     }
 
-    fn on_trap(&mut self, process_id: u32, frame: &trap::TrapFrame, waker: trap::Waker) {
+    fn on_trap(&mut self, process_id: u32, _trap_id: u64, frame: &trap::TrapFrame, waker: trap::Waker) {
         if let Some(process) = self.processes.get_mut(&process_id) {
             process.traps.push(Trap {
                 frame: frame.clone(),
@@ -242,7 +242,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                     self.sleep_queue.push(*pid, weight);
                 }
             }
-            super::SchedulingDecision::Wake(_, _) => {}
+            super::SchedulingDecision::Wake(_, _, _) => {}
             super::SchedulingDecision::Pause(_) => {}
         }
     }
@@ -329,6 +329,7 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
                     if success {
                         decisions.push(super::SchedulingDecision::Wake(
                             waker,
+                            round as u64, // Convert round to u64 for trap_id
                             trap::TrapAction::Resume,
                         ));
                     } else {
@@ -428,6 +429,7 @@ mod tests {
         // Trigger a trap
         scheduler.on_trap(
             1,
+            1,
             &trap::TrapFrame::OutOfMemory {
                 requested_bytes: 1024,
             },
@@ -458,6 +460,7 @@ mod tests {
 
         // Trigger memory trap
         scheduler.on_trap(
+            1,
             1,
             &trap::TrapFrame::OutOfMemory {
                 requested_bytes: 5120,
@@ -495,6 +498,7 @@ mod tests {
         for _ in 0..3 {
             scheduler.on_trap(
                 1,
+                1, // Using the same trap_id for simplicity in tests
                 &trap::TrapFrame::OutOfMemory {
                     requested_bytes: 512,
                 },
@@ -521,6 +525,7 @@ mod tests {
 
         // Simulate memory pressure by triggering OOM
         scheduler.on_trap(
+            1,
             1,
             &trap::TrapFrame::OutOfMemory {
                 requested_bytes: 2048,
@@ -601,6 +606,7 @@ mod tests {
         // Simulate high memory pressure by triggering OOM for high priority process
         scheduler.on_trap(
             3,
+            1,
             &trap::TrapFrame::OutOfMemory {
                 requested_bytes: 2048,
             },

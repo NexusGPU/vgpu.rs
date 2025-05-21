@@ -5,18 +5,63 @@ use signal_hook::iterator::Signals;
 use std::collections::HashMap;
 use std::io::Error as IoError;
 use std::path::Path;
-use std::{fs, sync::Mutex, thread, time::Duration};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::{fs, thread, time::Duration};
+
+/// Represents a pending trap request waiting for a response
+#[derive(Debug)]
+struct PendingTrap {
+    action: Option<TrapAction>,
+}
 
 /// IpcTrap: IPC implementation of Trap (client side, sends TrapFrame and waits for TrapAction)
 #[derive(Debug)]
 pub struct IpcTrap {
-    sender: IpcSender<TrapFrame>,
-    receiver: IpcReceiver<TrapAction>,
+    sender: IpcSender<(u64, TrapFrame)>,
+    pending_traps: Arc<RwLock<HashMap<u64, Arc<(Mutex<PendingTrap>, Condvar)>>>>,
+    next_trap_id: AtomicU64,
 }
 
 impl IpcTrap {
-    pub fn new(sender: IpcSender<TrapFrame>, receiver: IpcReceiver<TrapAction>) -> Self {
-        Self { sender, receiver }
+    pub fn new(
+        sender: IpcSender<(u64, TrapFrame)>,
+        receiver: IpcReceiver<(u64, TrapAction)>,
+    ) -> Self {
+        let pending_traps = Arc::new(RwLock::new(HashMap::<
+            u64,
+            Arc<(Mutex<PendingTrap>, Condvar)>,
+        >::new()));
+        let pending_traps_clone = Arc::clone(&pending_traps);
+
+        // Start a dedicated thread to handle incoming messages
+        thread::spawn(move || {
+            loop {
+                match receiver.recv() {
+                    Ok((id, action)) => {
+                        let traps = pending_traps_clone.read().expect("poisoning");
+                        if let Some(trap) = traps.get(&id) {
+                            let (mutex, condvar) = &**trap;
+                            let mut pending = mutex.lock().expect("poisoning");
+                            pending.action = Some(action);
+                            condvar.notify_one();
+                        }
+                        // If trap not found, it might have timed out or been cancelled
+                    }
+                    Err(e) => {
+                        // Channel closed or error occurred
+                        tracing::error!("IPC receiver error: {:?}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self {
+            sender,
+            pending_traps,
+            next_trap_id: AtomicU64::new(1),
+        }
     }
 
     /// Creates a client-side IpcTrap by connecting to a server.
@@ -68,8 +113,8 @@ impl IpcTrap {
         let tx = IpcSender::connect(server_name)?;
 
         // Create channels for sending frames and receiving actions
-        let (frame_sender, frame_receiver) = ipc::channel()?;
-        let (action_sender, action_receiver) = ipc::channel()?;
+        let (frame_sender, frame_receiver): (IpcSender<(u64, TrapFrame)>, _) = ipc::channel()?;
+        let (action_sender, action_receiver): (IpcSender<(u64, TrapAction)>, _) = ipc::channel()?;
 
         // Send our channel endpoints to the server
         tx.send((action_sender, frame_receiver))?;
@@ -79,21 +124,58 @@ impl IpcTrap {
     }
 
     pub fn dummy() -> Self {
-        let (frame_sender, _) = ipc::channel().unwrap();
-        let (_, action_receiver) = ipc::channel().unwrap();
+        let (frame_sender, _): (IpcSender<(u64, TrapFrame)>, _) =
+            ipc::channel().expect("poisoning");
+        let (_, action_receiver): (_, IpcReceiver<(u64, TrapAction)>) =
+            ipc::channel().expect("poisoning");
         Self::new(frame_sender, action_receiver)
     }
 }
 
 impl Trap for IpcTrap {
     fn enter_trap_and_wait(&self, frame: TrapFrame) -> Result<TrapAction, crate::TrapError> {
-        self.sender.send(frame).map_err(crate::TrapError::Ipc)?;
-        self.receiver.recv().map_err(crate::TrapError::IpcRecv)
+        // Generate a unique ID for this trap request
+        let trap_id = self.next_trap_id.fetch_add(1, Ordering::SeqCst);
+
+        // Create a new pending trap entry
+        let pending_trap = PendingTrap { action: None };
+
+        // Create a mutex and condvar pair for this trap
+        let pair = Arc::new((Mutex::new(pending_trap), Condvar::new()));
+
+        // Register this trap in our pending traps map
+        {
+            let mut traps = self.pending_traps.write().expect("poisoning");
+            traps.insert(trap_id, Arc::clone(&pair));
+        }
+
+        // Send the frame with its ID to the server
+        self.sender
+            .send((trap_id, frame))
+            .map_err(crate::TrapError::Ipc)?;
+
+        // Wait for the response using the condvar
+        let (mutex, condvar) = &*pair;
+        let mut pending = mutex.lock().expect("poisoning");
+
+        // Wait until the action is set by the receiver thread
+        while pending.action.is_none() {
+            pending = condvar.wait(pending).expect("poisoning");
+        }
+
+        // Remove this trap from the pending traps map
+        {
+            let mut traps = self.pending_traps.write().expect("poisoning");
+            traps.remove(&trap_id);
+        }
+
+        // Return the action
+        Ok(pending.action.take().expect("poisoning"))
     }
 }
 
 struct Client {
-    sender: IpcSender<TrapAction>,
+    sender: IpcSender<(u64, TrapAction)>,
     pid: u32,
 }
 
@@ -160,15 +242,20 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
             for event in events {
                 match event {
                     ipc::IpcSelectionResult::MessageReceived(id, msg) => {
-                        // Extract the pid and trap frame from the message
-                        let frame: TrapFrame = msg.to()?;
-
-                        // Get the client associated with this receiver ID
-                        let clients = self.clients.lock().unwrap();
-                        if let Some(client) = clients.get(&id) {
-                            // Handle the trap using the provided handler
-                            self.handler
-                                .handle_trap(client.pid, &frame, client.sender.clone());
+                        // Extract the trap ID and frame from the message
+                        if let Ok((trap_id, frame)) = msg.to::<(u64, TrapFrame)>() {
+                            // Get the client associated with this receiver ID
+                            let clients = self.clients.lock().expect("poisoning");
+                            if let Some(client) = clients.get(&id) {
+                                // Handle the trap using the provided handler
+                                // The handler will now need to include the trap_id when sending the response
+                                self.handler.handle_trap(
+                                    client.pid,
+                                    trap_id,
+                                    &frame,
+                                    client.sender.clone(),
+                                );
+                            }
                         }
                     }
                     ipc::IpcSelectionResult::ChannelClosed(id) => {
@@ -199,14 +286,15 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
                     for event in events {
                         match event {
                             ipc::IpcSelectionResult::MessageReceived(id, msg) => {
-                                // Extract the pid and trap frame from the message
-                                if let Ok(frame) = msg.to::<TrapFrame>() {
+                                // Extract the trap ID and frame from the message
+                                if let Ok((trap_id, frame)) = msg.to::<(u64, TrapFrame)>() {
                                     // Get the client associated with this receiver ID
-                                    let clients = self.clients.lock().unwrap();
+                                    let clients = self.clients.lock().expect("poisoning");
                                     if let Some(client) = clients.get(&id) {
                                         // Handle the trap using the provided handler
                                         self.handler.handle_trap(
                                             client.pid,
+                                            trap_id,
                                             &frame,
                                             client.sender.clone(),
                                         );
