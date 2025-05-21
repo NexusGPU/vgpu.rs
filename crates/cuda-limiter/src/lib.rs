@@ -4,7 +4,7 @@ use limiter::Limiter;
 use std::{
     cell::RefCell,
     ffi::{c_char, c_int, c_void, CStr},
-    sync::OnceLock,
+    sync::{LazyLock, Mutex, OnceLock},
 };
 use tf_macro::hook_fn;
 use trap::ipc::IpcTrap;
@@ -28,25 +28,24 @@ pub extern "C" fn set_limit(gpu: u32, mem: u64) {
 }
 
 pub fn global_trap() -> IpcTrap {
-    const GLOBAL_TRAP: OnceLock<IpcTrap> = OnceLock::new();
-
-    GLOBAL_TRAP
-        .get_or_init(|| {
-            let ipc_server_path_name = std::env::var("TENSOR_FUSION_IPC_SERVER_PATH")
-                .unwrap_or("cuda-limiter".to_string());
-            // init IpcTrap
-            if cfg!(test) {
-                IpcTrap::dummy()
-            } else {
-                match IpcTrap::connect(ipc_server_path_name) {
-                    Ok(trap) => trap,
-                    Err(e) => {
-                        panic!("failed to connect to ipc server, err: {e}");
-                    }
+    static GLOBAL_TRAP: LazyLock<Mutex<IpcTrap>> = LazyLock::new(|| {
+        let ipc_server_path_name =
+            std::env::var("TENSOR_FUSION_IPC_SERVER_PATH").unwrap_or("cuda-limiter".to_string());
+        // init IpcTrap
+        let trap = if cfg!(test) {
+            IpcTrap::dummy()
+        } else {
+            match IpcTrap::connect(ipc_server_path_name) {
+                Ok(trap) => trap,
+                Err(e) => {
+                    panic!("failed to connect to ipc server, err: {e}");
                 }
             }
-        })
-        .clone()
+        };
+        Mutex::new(trap)
+    });
+
+    GLOBAL_TRAP.lock().expect("poisoned").clone()
 }
 
 #[ctor]

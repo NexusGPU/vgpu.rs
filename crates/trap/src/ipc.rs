@@ -15,11 +15,17 @@ struct PendingTrap {
     action: Option<TrapAction>,
 }
 
+/// Type alias for a mutex and condvar pair containing a pending trap
+type PendingTrapPair = Arc<(Mutex<PendingTrap>, Condvar)>;
+
+/// Type alias for a map of trap IDs to pending trap pairs
+type PendingTrapsMap = HashMap<u64, PendingTrapPair>;
+
 /// IpcTrap: IPC implementation of Trap (client side, sends TrapFrame and waits for TrapAction)
 #[derive(Debug, Clone)]
 pub struct IpcTrap {
     sender: IpcSender<(u64, TrapFrame)>,
-    pending_traps: Arc<Mutex<HashMap<u64, Arc<(Mutex<PendingTrap>, Condvar)>>>>,
+    pending_traps: Arc<Mutex<PendingTrapsMap>>,
     next_trap_id: Arc<AtomicU64>,
 }
 
