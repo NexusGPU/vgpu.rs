@@ -21,10 +21,14 @@ thread_local! {
 }
 
 #[no_mangle]
-pub extern "C" fn set_limit(gpu: u32, mem: u64) {
+pub extern "C" fn set_limit(gpu: u32, up_limit: u32, mem_limit: u64) {
     let limiter = GLOBAL_LIMITER.get().expect("get limiter");
-    limiter.set_uplimit(gpu);
-    limiter.set_mem_limit(mem);
+    if let Err(e) = limiter.set_uplimit(gpu, up_limit) {
+        tracing::error!("Failed to set up_limit: {}", e);
+    }
+    if let Err(e) = limiter.set_mem_limit(gpu, mem_limit) {
+        tracing::error!("Failed to set mem_limit: {}", e);
+    }
 }
 
 pub fn global_trap() -> IpcTrap {
