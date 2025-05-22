@@ -4,6 +4,23 @@ pub(crate) mod gpu;
 pub(crate) mod mem;
 pub(crate) mod nvml;
 
+/// macro: get current device and execute expression
+#[macro_export]
+macro_rules! with_device {
+    ($expr:expr) => {{
+        let mut device: i32 = 0;
+        unsafe {
+            // Call the CUDA API to get the current device
+            let result = ::cudarc::driver::sys::cuCtxGetDevice(&mut device as *mut i32);
+
+            if result != ::cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
+                panic!("Failed to get current CUDA device: error code {:?}", result);
+            }
+        }
+        $expr(device as u32)
+    }};
+}
+
 #[inline]
 pub(crate) fn round_up(n: usize, base: usize) -> usize {
     if n % base != 0 {
@@ -26,7 +43,6 @@ pub(crate) struct CustreamSt {
 
 pub(crate) type CUstream = *mut CustreamSt;
 pub(crate) type CUfunction = *mut CufuncSt;
-pub(crate) type CUresult = c_uint;
 
 pub(crate) type CUdeviceptrV2 = std::ffi::c_ulonglong;
 pub(crate) type CUdeviceptr = CUdeviceptrV2;
@@ -119,7 +135,6 @@ pub(crate) type CudaArrayDescriptor = CudaArrayDescriptorSt;
 // Return codes for NVML functions
 pub(crate) type NvmlReturnT = c_uint;
 pub(crate) const NVML_SUCCESS: NvmlReturnT = 0;
-pub(crate) const NVML_ERROR_UNKNOWN: NvmlReturnT = 999;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
