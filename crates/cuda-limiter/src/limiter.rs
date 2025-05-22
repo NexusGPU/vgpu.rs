@@ -571,3 +571,68 @@ pub(crate) fn unix_as_millis() -> u64 {
         .unwrap()
         .as_millis() as u64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{sync::atomic::Ordering, thread, time::Duration};
+
+    #[test]
+    fn test_rate_limiter() {
+        // Create a limiter instance
+        let pid = std::process::id();
+        let device_config = DeviceConfig {
+            device_idx: 0,
+            up_limit: 80,
+            mem_limit: 1024 * 1024 * 1024, // 1GB
+        };
+
+        // Create a shared limiter that can be used across threads
+        let limiter = std::sync::Arc::new(Limiter::new(pid, &[device_config]).unwrap());
+
+        // Get the device and set available cores to 0 initially
+        let device = limiter.get_device(0).unwrap();
+        device.available_cuda_cores.store(0, Ordering::Release);
+
+        // Set up a flag to track if the rate_limiter call completed
+        let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let completed_clone = completed.clone();
+
+        // Clone the limiter for the thread
+        let limiter_clone = limiter.clone();
+
+        // Start a thread that will call rate_limiter
+        let handle = thread::spawn(move || {
+            // This should block until cores are available
+            limiter_clone.rate_limiter(0, 10, 1);
+            completed_clone.store(true, Ordering::SeqCst);
+        });
+
+        // Wait a short time to ensure the thread has started
+        thread::sleep(Duration::from_millis(50));
+
+        // At this point, the thread should be blocked in the rate_limiter loop
+        // Check that it hasn't completed yet
+        assert!(!completed.load(Ordering::SeqCst));
+
+        // Now make cores available to unblock the thread
+        device.available_cuda_cores.store(100, Ordering::Release);
+
+        // Wait for the thread to complete or timeout
+        let timeout = Duration::from_secs(2);
+        let start = SystemTime::now();
+
+        while !completed.load(Ordering::SeqCst) {
+            if SystemTime::now().duration_since(start).unwrap() > timeout {
+                panic!("Test timed out waiting for rate_limiter to complete");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        // If we got here, the rate_limiter completed
+        handle.join().unwrap();
+
+        // Check if cores were subtracted
+        assert_eq!(device.available_cuda_cores.load(Ordering::Acquire), 90);
+    }
+}
