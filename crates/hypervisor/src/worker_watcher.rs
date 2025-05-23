@@ -3,7 +3,7 @@ use crate::hypervisor::Hypervisor;
 use crate::process::worker::TensorFusionWorker;
 use crate::process::{GpuResources, QosLevel};
 use crate::scheduler::GpuScheduler;
-use notify::{Error, Event, Watcher};
+use notify::{Error, Event};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
