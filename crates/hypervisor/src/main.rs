@@ -5,6 +5,7 @@ mod metrics;
 mod process;
 mod scheduler;
 mod worker_watcher;
+mod config;
 
 use anyhow::Result;
 use clap::{command, Parser};
@@ -56,14 +57,19 @@ fn main() -> Result<()> {
 
     // Create a FIFO scheduler with GPU resource limits for all available GPUs
     let mut gpu_limits = HashMap::new();
+    let mut gpu_name_to_uuid_map = HashMap::new();
     let device_count = nvml.device_count()?;
 
     for i in 0..device_count {
         let device = nvml.device_by_index(i)?;
         let memory_info = device.memory_info()?;
         let uuid = device.uuid()?;
+        let name = device.name()?;
 
-        tracing::info!("Found GPU {}: {}", i, uuid);
+        tracing::info!("Found GPU {}: {} ({})", i, uuid, name);
+        
+        // Store GPU name and UUID mapping for config lookup
+        gpu_name_to_uuid_map.insert(name.clone(), uuid.clone());
 
         gpu_limits.insert(
             uuid,
@@ -72,6 +78,11 @@ fn main() -> Result<()> {
                 compute_percentage: 100,
             },
         );
+    }
+    
+    // Load GPU information from config file
+    if let Err(e) = config::load_gpu_info(gpu_name_to_uuid_map) {
+        tracing::warn!("Failed to load GPU information: {}", e);
     }
 
     let scheduler = WeightedScheduler::new();
