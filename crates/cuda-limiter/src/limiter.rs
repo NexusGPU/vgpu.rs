@@ -556,6 +556,7 @@ pub(crate) fn unix_as_millis() -> u64 {
 mod tests {
     use super::*;
     use std::{
+        path,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -566,6 +567,12 @@ mod tests {
 
     #[test]
     fn test_rate_limiter() {
+        // Skip test if NVIDIA drivers are not available
+        if !path::Path::new("/dev/nvidia0").exists() {
+            println!("Skipping test_rate_limiter: NVIDIA device not found");
+            return;
+        }
+
         // Create a limiter instance
         let pid = std::process::id();
         let device_config = DeviceConfig {
