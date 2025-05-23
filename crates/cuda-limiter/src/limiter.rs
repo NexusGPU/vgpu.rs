@@ -109,31 +109,31 @@ struct Utilization {
 
 impl LimiterBuilder {
     /// Create a new LimiterBuilder with default settings
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Set the process ID to monitor
-    pub fn with_pid(mut self, pid: u32) -> Self {
+    pub(crate) fn with_pid(mut self, pid: u32) -> Self {
         self.pid = Some(pid);
         self
     }
 
     /// Add a device configuration
-    pub fn with_device_config(mut self, config: DeviceConfig) -> Self {
+    pub(crate) fn with_device_config(mut self, config: DeviceConfig) -> Self {
         self.device_configs.push(config);
         self
     }
 
     /// Set the NVML library path
     #[allow(dead_code)]
-    pub fn with_nvml_lib_path(mut self, path: impl Into<String>) -> Self {
+    pub(crate) fn with_nvml_lib_path(mut self, path: impl Into<String>) -> Self {
         self.nvml_lib_path = Some(path.into());
         self
     }
 
     /// Build the Limiter
-    pub fn build(self) -> Result<Limiter, Error> {
+    pub(crate) fn build(self) -> Result<Limiter, Error> {
         let pid = self.pid.unwrap_or_else(std::process::id);
 
         // Initialize NVML
@@ -200,7 +200,7 @@ impl LimiterBuilder {
 
 impl Limiter {
     /// Create a new Limiter with the given process ID and device configurations
-    pub fn new(pid: u32, device_configs: &[DeviceConfig]) -> Result<Self, Error> {
+    pub(crate) fn new(pid: u32, device_configs: &[DeviceConfig]) -> Result<Self, Error> {
         let mut builder = LimiterBuilder::new().with_pid(pid);
 
         for config in device_configs {
