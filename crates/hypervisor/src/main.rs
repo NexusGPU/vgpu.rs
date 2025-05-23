@@ -6,6 +6,7 @@ mod metrics;
 mod process;
 mod scheduler;
 mod worker_watcher;
+mod config;
 
 use anyhow::Result;
 use clap::{command, Parser};
@@ -73,7 +74,6 @@ fn main() -> Result<()> {
         let name = device.name()?;
 
         tracing::info!("Found GPU {}: {} ({})", i, uuid, name);
-
         // Store GPU name and UUID mapping for config lookup
         gpu_name_to_uuid_map.insert(name.clone(), uuid.clone());
 
@@ -84,6 +84,11 @@ fn main() -> Result<()> {
                 compute_percentage: 100,
             },
         );
+    }
+    
+    // Load GPU information from config file
+    if let Err(e) = config::load_gpu_info(gpu_name_to_uuid_map) {
+        tracing::warn!("Failed to load GPU information: {}", e);
     }
 
     // Load GPU information from config file
