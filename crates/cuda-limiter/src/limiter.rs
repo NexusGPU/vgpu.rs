@@ -539,26 +539,6 @@ impl Limiter {
             Ok(Some(current))
         }
     }
-
-    /// Initialize a new Limiter with the given process ID and device configuration
-    ///
-    /// This is a compatibility method for the existing API in lib.rs
-    pub(crate) fn init(
-        pid: u32,
-        device_idx: u32,
-        up_limit: u32,
-        mem_limit: u64,
-    ) -> Result<Self, Error> {
-        // Create a DeviceConfig from the parameters
-        let config = DeviceConfig {
-            device_idx,
-            up_limit,
-            mem_limit,
-        };
-
-        // Pass a slice with the single config
-        Self::new(pid, &[config])
-    }
 }
 
 const fn codec_normalize(x: u32) -> u32 {
@@ -575,7 +555,14 @@ pub(crate) fn unix_as_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{sync::atomic::Ordering, thread, time::Duration};
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        thread,
+        time::Duration,
+    };
 
     #[test]
     fn test_rate_limiter() {
@@ -588,24 +575,24 @@ mod tests {
         };
 
         // Create a shared limiter that can be used across threads
-        let limiter = std::sync::Arc::new(Limiter::new(pid, &[device_config]).unwrap());
+        let limiter = Arc::new(Limiter::new(pid, &[device_config]).unwrap());
 
         // Get the device and set available cores to 0 initially
         let device = limiter.get_device(0).unwrap();
         device.available_cuda_cores.store(0, Ordering::Release);
 
         // Set up a flag to track if the rate_limiter call completed
-        let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let completed_clone = completed.clone();
-
-        // Clone the limiter for the thread
-        let limiter_clone = limiter.clone();
+        let completed = Arc::new(AtomicBool::new(false));
 
         // Start a thread that will call rate_limiter
-        let handle = thread::spawn(move || {
-            // This should block until cores are available
-            limiter_clone.rate_limiter(0, 10, 1);
-            completed_clone.store(true, Ordering::SeqCst);
+        let handle = thread::spawn({
+            let limiter = limiter.clone();
+            let completed = completed.clone();
+            move || {
+                // This should block until cores are available
+                limiter.rate_limiter(0, 10, 1);
+                completed.store(true, Ordering::SeqCst);
+            }
         });
 
         // Wait a short time to ensure the thread has started
