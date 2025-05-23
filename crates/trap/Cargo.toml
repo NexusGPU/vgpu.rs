@@ -8,5 +8,5 @@ ipc-channel = { workspace = true}
 thiserror = { workspace = true }
 serde = { version = "1.0.219", features = ["derive"] }
 tracing = { workspace = true }
-libc = "0.2.171"
+libc = "0.2.172"
 signal-hook = "0.3.17"
