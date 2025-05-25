@@ -3,7 +3,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::{config, gpu_observer::GpuObserver};
+use crate::{
+    config::{GPU_CAPACITY_MAP},
+    gpu_observer::GpuObserver,
+};
 
 #[derive(Default)]
 struct AccumulatedGpuMetrics {
@@ -47,11 +50,16 @@ pub(crate) fn run_metrics(
             acc.memory_bytes += gpu.resources.memory_bytes;
             acc.compute_percentage += gpu.resources.compute_percentage as f64;
 
-            // Estimation of TFlops (not accurate because of 
-            // a. MFU won't be 100% 
+            // Estimation of TFlops (not accurate because of
+            // a. MFU won't be 100%
             // b. memory operations also treat as utilization in NVML
             // c. nvml result is overestimated at some extent
-            acc.compute_tflops += gpu.resources.compute_percentage as f64 * config::get_device_capacity(gpu_uuid);
+            acc.compute_tflops += gpu.resources.compute_percentage as f64
+                * GPU_CAPACITY_MAP
+                    .read()
+                    .expect("poisoned")
+                    .get(gpu_uuid)
+                    .unwrap();
             acc.count += 1;
         }
 
@@ -62,7 +70,12 @@ pub(crate) fn run_metrics(
                 let acc = gpu_acc.entry(*pid).or_default();
                 acc.memory_bytes += resources.memory_bytes;
                 acc.compute_percentage += resources.compute_percentage as f64;
-                acc.compute_tflops += resources.compute_percentage as f64 * config::get_device_capacity(gpu_uuid);
+                acc.compute_tflops += resources.compute_percentage as f64
+                    * GPU_CAPACITY_MAP
+                        .read()
+                        .expect("poisoned")
+                        .get(gpu_uuid)
+                        .unwrap();
                 acc.count += 1;
             }
         }

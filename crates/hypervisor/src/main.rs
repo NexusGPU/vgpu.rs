@@ -1,3 +1,4 @@
+mod config;
 mod gpu_observer;
 mod hypervisor;
 mod logging;
@@ -5,7 +6,6 @@ mod metrics;
 mod process;
 mod scheduler;
 mod worker_watcher;
-mod config;
 
 use anyhow::Result;
 use clap::{command, Parser};
@@ -33,6 +33,9 @@ struct Cli {
 
     #[arg(long, default_value = "10")]
     metrics_batch_size: usize,
+
+    #[arg(long, env = "TENSOR_FUSION_GPU_INFO_PATH")]
+    gpu_info_path: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -67,7 +70,7 @@ fn main() -> Result<()> {
         let name = device.name()?;
 
         tracing::info!("Found GPU {}: {} ({})", i, uuid, name);
-        
+
         // Store GPU name and UUID mapping for config lookup
         gpu_name_to_uuid_map.insert(name.clone(), uuid.clone());
 
@@ -79,9 +82,12 @@ fn main() -> Result<()> {
             },
         );
     }
-    
+
     // Load GPU information from config file
-    if let Err(e) = config::load_gpu_info(gpu_name_to_uuid_map) {
+    if let Err(e) = config::load_gpu_info(
+        gpu_name_to_uuid_map,
+        cli.gpu_info_path.unwrap_or("./gpu-info.yaml".into()),
+    ) {
         tracing::warn!("Failed to load GPU information: {}", e);
     }
 
