@@ -6,7 +6,6 @@ mod metrics;
 mod process;
 mod scheduler;
 mod worker_watcher;
-mod config;
 
 use anyhow::Result;
 use clap::{command, Parser};
@@ -85,9 +84,12 @@ fn main() -> Result<()> {
             },
         );
     }
-    
+
     // Load GPU information from config file
-    if let Err(e) = config::load_gpu_info(gpu_name_to_uuid_map) {
+    if let Err(e) = config::load_gpu_info(
+        gpu_name_to_uuid_map,
+        cli.gpu_info_path.unwrap_or("./gpu-info.yaml".into()),
+    ) {
         tracing::warn!("Failed to load GPU information: {}", e);
     }
 
