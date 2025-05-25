@@ -59,6 +59,7 @@ where
 
         // Get measurement name from target
         let measurement = event.metadata().target();
+
         write!(writer, "{}", measurement.strip_prefix("metrics.").unwrap())?;
 
         // Write all tags

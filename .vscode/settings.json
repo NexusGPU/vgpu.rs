@@ -1,5 +1,6 @@
 {
     "cSpell.words": [
+        "appender",
         "CUDA",
         "libcuda",
         "libnvidia",
@@ -7,6 +8,7 @@
         "Nvml",
         "Sched",
         "serde",
+        "tflops",
         "thiserror"
     ]
 }

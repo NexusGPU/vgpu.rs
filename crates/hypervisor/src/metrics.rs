@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::gpu_observer::GpuObserver;
+use crate::{config::GPU_CAPACITY_MAP, gpu_observer::GpuObserver};
 
 #[derive(Default)]
 struct AccumulatedGpuMetrics {
@@ -12,6 +12,7 @@ struct AccumulatedGpuMetrics {
     temperature: f64,
     memory_bytes: u64,
     compute_percentage: f64,
+    compute_tflops: f64,
     count: usize,
 }
 
@@ -19,6 +20,7 @@ struct AccumulatedGpuMetrics {
 struct AccumulatedWorkerMetrics {
     memory_bytes: u64,
     compute_percentage: f64,
+    compute_tflops: f64,
     count: usize,
 }
 
@@ -44,6 +46,17 @@ pub(crate) fn run_metrics(
             acc.temperature += gpu.temperature as f64;
             acc.memory_bytes += gpu.resources.memory_bytes;
             acc.compute_percentage += gpu.resources.compute_percentage as f64;
+
+            // Estimation of TFlops (not accurate because of
+            // a. MFU won't be 100%
+            // b. memory operations also treat as utilization in NVML
+            // c. nvml result is overestimated at some extent
+            acc.compute_tflops += gpu.resources.compute_percentage as f64
+                * GPU_CAPACITY_MAP
+                    .read()
+                    .expect("poisoned")
+                    .get(gpu_uuid)
+                    .unwrap();
             acc.count += 1;
         }
 
@@ -54,6 +67,12 @@ pub(crate) fn run_metrics(
                 let acc = gpu_acc.entry(*pid).or_default();
                 acc.memory_bytes += resources.memory_bytes;
                 acc.compute_percentage += resources.compute_percentage as f64;
+                acc.compute_tflops += resources.compute_percentage as f64
+                    * GPU_CAPACITY_MAP
+                        .read()
+                        .expect("poisoned")
+                        .get(gpu_uuid)
+                        .unwrap();
                 acc.count += 1;
             }
         }
@@ -70,7 +89,8 @@ pub(crate) fn run_metrics(
                         tx=acc.tx / acc.count as f64,
                         temperature=acc.temperature / acc.count as f64,
                         memory_bytes=acc.memory_bytes / acc.count as u64,
-                        compute_percentage=acc.compute_percentage / acc.count as f64
+                        compute_percentage=acc.compute_percentage / acc.count as f64,
+                        compute_tflops=acc.compute_tflops / acc.count as f64
                     );
                 }
             }
@@ -86,7 +106,8 @@ pub(crate) fn run_metrics(
                             tag_uuid=gpu_uuid,
                             tag_worker=name.unwrap_or(&"unknown".to_string()),
                             memory_bytes=acc.memory_bytes / acc.count as u64,
-                            compute_percentage=acc.compute_percentage / acc.count as f64
+                            compute_percentage=acc.compute_percentage / acc.count as f64,
+                            compute_tflops=acc.compute_tflops / acc.count as f64
                         );
                     }
                 }

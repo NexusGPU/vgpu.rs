@@ -29,7 +29,10 @@ where
                 return result;
             }
             CUDA_ERROR_OUT_OF_MEMORY => {
-                // OOM: enter trap and wait
+                tracing::info!(
+                    "cuda memory allocation pending, request size: {}",
+                    request_size
+                );
                 match trap.enter_trap_and_wait(TrapFrame::OutOfMemory {
                     requested_bytes: request_size,
                 }) {
