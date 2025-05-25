@@ -3,10 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::{
-    config::{GPU_CAPACITY_MAP},
-    gpu_observer::GpuObserver,
-};
+use crate::{config::GPU_CAPACITY_MAP, gpu_observer::GpuObserver};
 
 #[derive(Default)]
 struct AccumulatedGpuMetrics {
