@@ -9,7 +9,7 @@ const DEFAULT_TFLOPS: f64 = 10.0;
 
 /// GPU information from the configuration file
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GpuInfo {
+pub(crate) struct GpuInfo {
     pub model: String,
     #[serde(rename = "fullModelName")]
     pub full_model_name: String,
@@ -21,11 +21,11 @@ pub struct GpuInfo {
 }
 
 /// Global GPU capacity map that maps GPU UUIDs to their fp16TFlops capacity
-pub static GPU_CAPACITY_MAP: Lazy<RwLock<HashMap<String, f64>>> =
+pub(crate) static GPU_CAPACITY_MAP: Lazy<RwLock<HashMap<String, f64>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Load GPU information from a YAML file and store it in a map
-pub fn load_gpu_info(
+pub(crate) fn load_gpu_info(
     gpu_name_to_uuid_map: HashMap<String, String>,
     file_path: PathBuf,
 ) -> Result<()> {
