@@ -14,7 +14,6 @@ clap = { version = "4.5.38", features = ["derive", "env"] }
 rand = "0.9"
 priority-queue = "2.0.0"
 trap = {workspace = true}
-crossbeam = "0.8.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 once_cell = "1.19"

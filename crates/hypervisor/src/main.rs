@@ -18,6 +18,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{Arc, RwLock},
+    thread,
     time::Duration,
 };
 use worker_watcher::WorkerWatcher;
@@ -103,13 +104,11 @@ fn main() -> Result<()> {
     // Ensure socket directory exists
     std::fs::create_dir_all(&cli.sock_path)?;
 
-    // Use crossbeam scoped threads to ensure all threads are joined before the main function ends
-    // If any thread panics, the panic will propagate to the main thread
-    crossbeam::thread::scope(|s| {
+    thread::scope(|s| {
         // Start GPU observer thread
         let gpu_observer_handle = s.spawn({
             let gpu_observer = gpu_observer.clone();
-            move |_| {
+            move || {
                 tracing::info!("Starting GPU observer thread");
                 gpu_observer.run(Duration::from_secs(1));
             }
@@ -120,7 +119,7 @@ fn main() -> Result<()> {
             let gpu_observer = gpu_observer.clone();
             let worker_pid_mapping = worker_pid_mapping.clone();
             let metrics_batch_size = cli.metrics_batch_size;
-            move |_| {
+            move || {
                 tracing::info!("Starting metrics collection thread");
                 metrics::run_metrics(gpu_observer, worker_pid_mapping, metrics_batch_size);
             }
@@ -176,7 +175,7 @@ fn main() -> Result<()> {
         let watcher_loop_handle = s.spawn({
             let watcher = watcher.clone();
             let sock_path = sock_path.clone();
-            move |_| {
+            move || {
                 tracing::info!("Starting worker watcher loop thread");
                 watcher.run_watcher_loop(sock_path);
             }
@@ -186,22 +185,27 @@ fn main() -> Result<()> {
         let worker_handle = s.spawn({
             let watcher = watcher.clone();
             let gpu_observer = gpu_observer.clone();
-            move |_| {
+            move || {
                 tracing::info!("Starting worker watcher event handler thread");
                 watcher.run(gpu_observer);
             }
         });
 
         // Start trap server thread
-        let trap_handle = s.spawn(move |_| {
-            tracing::info!("Starting trap server thread");
-            trap_server.run().expect("trap server failed");
+        let trap_handle = s.spawn({
+            let hypervisor = hypervisor.clone();
+            move || {
+                tracing::info!("Starting trap server thread");
+                let trap_server = trap::ipc::IpcTrapServer::new(hypervisor)
+                    .expect("failed to create trap server");
+                trap_server.run().expect("trap server failed");
+            }
         });
 
         // Start hypervisor in a separate thread
         let hypervisor_handle = s.spawn({
             let hypervisor = hypervisor.clone();
-            move |_| {
+            move || {
                 tracing::info!("Starting hypervisor thread");
                 hypervisor.run();
             }
@@ -226,8 +230,7 @@ fn main() -> Result<()> {
         hypervisor_handle
             .join()
             .expect("Hypervisor thread panicked");
-    })
-    .expect("thread panicked");
+    });
 
     Ok(())
 }

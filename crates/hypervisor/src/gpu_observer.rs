@@ -48,7 +48,6 @@ impl GpuObserver {
     }
 
     /// Run the GPU observer loop in the current thread
-    /// This is meant to be called from a crossbeam scope thread
     pub(crate) fn run(&self, update_interval: Duration) {
         loop {
             let last_seen_timestamp = unix_as_millis()
