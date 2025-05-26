@@ -17,7 +17,7 @@ const CUDA_SUCCESS: CUresult = 0;
 const CUDA_ERROR_OUT_OF_MEMORY: CUresult = 2;
 
 // Helper function for allocation with retry logic
-unsafe fn cuda_alloc_with_retry<T: Trap, F>(trap: T, request_size: u64, alloc_fn: F) -> CUresult
+unsafe fn cuda_alloc_with_retry<F>(request_size: u64, alloc_fn: F) -> CUresult
 where
     F: Fn() -> CUresult,
 {
@@ -33,6 +33,7 @@ where
                     "cuda memory allocation pending, request size: {}",
                     request_size
                 );
+                let trap = global_trap();
                 match trap.enter_trap_and_wait(TrapFrame::OutOfMemory {
                     requested_bytes: request_size,
                 }) {
@@ -81,9 +82,7 @@ pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u6
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult // Return OOM if limit exceeded
             } else {
                 // Proceed with allocation attempt only if within limit
-                cuda_alloc_with_retry(global_trap(), request_size, || {
-                    FN_CU_MEM_ALLOC_V2(dptr, bytesize)
-                })
+                cuda_alloc_with_retry(request_size, || FN_CU_MEM_ALLOC_V2(dptr, bytesize))
             }
         }
         Err(e) => {
@@ -116,9 +115,7 @@ pub(crate) unsafe fn cu_mem_alloc_detour(dptr: *mut CUdeviceptrV1, bytesize: u64
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(global_trap(), request_size, || {
-                    FN_CU_MEM_ALLOC(dptr, bytesize)
-                })
+                cuda_alloc_with_retry(request_size, || FN_CU_MEM_ALLOC(dptr, bytesize))
             }
         }
         Err(e) => {
@@ -152,7 +149,7 @@ pub(crate) unsafe fn cu_mem_alloc_managed_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(global_trap(), request_size, || {
+                cuda_alloc_with_retry(request_size, || {
                     FN_CU_MEM_ALLOC_MANAGED(dptr, bytesize, flags)
                 })
             }
@@ -190,7 +187,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_v2_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(global_trap(), request_size, || {
+                cuda_alloc_with_retry(request_size, || {
                     FN_CU_MEM_ALLOC_PITCH_V2(
                         dptr,
                         p_pitch,
@@ -234,7 +231,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(global_trap(), request_size, || {
+                cuda_alloc_with_retry(request_size, || {
                     FN_CU_MEM_ALLOC_PITCH(dptr, p_pitch, width_in_bytes, height, element_size_bytes)
                 })
             }
@@ -269,7 +266,7 @@ pub(crate) unsafe fn cu_array_create_v2_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(global_trap(), request_size, || {
+                cuda_alloc_with_retry(request_size, || {
                     FN_CU_ARRAY_CREATE_V2(p_handle, p_allocate_array)
                 })
             }
@@ -304,7 +301,7 @@ pub(crate) unsafe fn cu_array_create_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(global_trap(), request_size, || {
+                cuda_alloc_with_retry(request_size, || {
                     FN_CU_ARRAY_CREATE(p_handle, p_allocate_array)
                 })
             }
@@ -339,7 +336,7 @@ pub(crate) unsafe fn cu_array_3d_create_v2_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(global_trap(), request_size, || {
+                cuda_alloc_with_retry(request_size, || {
                     FN_CU_ARRAY_3D_CREATE_V2(p_handle, p_allocate_array)
                 })
             }
@@ -374,7 +371,7 @@ pub(crate) unsafe fn cu_array_3d_create_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(global_trap(), request_size, || {
+                cuda_alloc_with_retry(request_size, || {
                     FN_CU_ARRAY_3D_CREATE(p_handle, p_allocate_array)
                 })
             }
@@ -413,7 +410,7 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(global_trap(), request_size, || {
+                cuda_alloc_with_retry(request_size, || {
                     FN_CU_MIPMAPPED_ARRAY_CREATE(
                         p_handle,
                         p_mipmapped_array_desc,
@@ -454,9 +451,7 @@ pub(crate) unsafe fn cu_mem_create_detour(
                 );
                 CUDA_ERROR_OUT_OF_MEMORY as CUresult
             } else {
-                cuda_alloc_with_retry(global_trap(), request_size, || {
-                    FN_CU_MEM_CREATE(handle, size, prop, flags)
-                })
+                cuda_alloc_with_retry(request_size, || FN_CU_MEM_CREATE(handle, size, prop, flags))
             }
         }
         Err(e) => {
