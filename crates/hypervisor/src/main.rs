@@ -63,7 +63,7 @@ fn main() -> Result<()> {
     }?);
 
     let mut gpu_limits = HashMap::new();
-    let mut gpu_name_to_uuid_map = HashMap::new();
+    let mut gpu_uuid_to_name_map = HashMap::new();
     let device_count = nvml.device_count()?;
 
     for i in 0..device_count {
@@ -74,7 +74,7 @@ fn main() -> Result<()> {
 
         tracing::info!("Found GPU {}: {} ({})", i, uuid, name);
         // Store GPU name and UUID mapping for config lookup
-        gpu_name_to_uuid_map.insert(name.clone(), uuid.clone());
+        gpu_uuid_to_name_map.insert(uuid.clone(), name);
 
         gpu_limits.insert(
             uuid,
@@ -87,7 +87,7 @@ fn main() -> Result<()> {
 
     // Load GPU information from config file
     if let Err(e) = config::load_gpu_info(
-        gpu_name_to_uuid_map,
+        gpu_uuid_to_name_map,
         cli.gpu_info_path.unwrap_or("./gpu-info.yaml".into()),
     ) {
         tracing::warn!("Failed to load GPU information: {}", e);

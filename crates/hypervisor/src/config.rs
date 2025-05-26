@@ -25,13 +25,19 @@ pub(crate) static GPU_CAPACITY_MAP: Lazy<RwLock<HashMap<String, f64>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Load GPU information from a YAML file and store it in a map
-pub(crate) fn load_gpu_info(
-    gpu_name_to_uuid_map: HashMap<String, String>,
+pub fn load_gpu_info(
+    gpu_uuid_to_name_map: HashMap<String, String>,
     file_path: PathBuf,
 ) -> Result<()> {
     // Load GPU info list from YAML
-    let file_content = std::fs::read_to_string(&file_path)
-        .with_context(|| format!("Failed to read GPU info file {}", file_path.display()))?;
+    let file_content = std::fs::read_to_string(&file_path).unwrap_or_else(|err| {
+        tracing::warn!(
+            "Failed to read GPU info file {}: {}",
+            file_path.display(),
+            err
+        );
+        "[]".to_string()
+    });
 
     let gpu_info_list: Vec<GpuInfo> = serde_yaml::from_str(&file_content)
         .with_context(|| format!("Failed to parse GPU info file {}", file_path.display()))?;
@@ -54,7 +60,7 @@ pub(crate) fn load_gpu_info(
 
     // Update the global GPU capacity map
     let mut capacity_map_guard = GPU_CAPACITY_MAP.write().expect("poisoned");
-    for (gpu_name, uuid) in gpu_name_to_uuid_map {
+    for (uuid, gpu_name) in gpu_uuid_to_name_map {
         map_gpu_to_capacity(&mut capacity_map_guard, &gpu_name, &uuid, &model_mappings);
     }
     Ok(())
