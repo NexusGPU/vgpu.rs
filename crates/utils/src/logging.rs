@@ -11,18 +11,22 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Registry;
 
 const DEFAULT_LOG_PREFIX: &str = "tf.log";
+const ENABLE_LOG_ENV_VAR: &str = "TF_ENABLE_LOG";
+const LOG_PATH_ENV_VAR: &str = "TF_LOG_PATH";
+const LOG_LEVEL_ENV_VAR: &str = "TF_LOG_LEVEL";
+const LOG_OFF: &str = "off";
 
 /// initiate the global tracing subscriber
 pub fn get_fmt_layer() -> Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync> {
-    let filter = match env::var("TF_ENABLE_LOG").as_deref() {
-        Ok("0") | Ok("false") => EnvFilter::new("off"),
+    let filter = match env::var(ENABLE_LOG_ENV_VAR).as_deref() {
+        Ok(LOG_OFF) | Ok("0") | Ok("false") => EnvFilter::new(LOG_OFF),
         _ => EnvFilter::builder()
             .with_default_directive(LevelFilter::INFO.into())
-            .with_env_var("TF_LOG_LEVEL")
+            .with_env_var(LOG_LEVEL_ENV_VAR)
             .from_env_lossy(),
     };
 
-    let fmt_layer = match env::var("TF_LOG_PATH") {
+    let fmt_layer = match env::var(LOG_PATH_ENV_VAR) {
         Ok(path) => {
             // path could be a specific a/b/c.log file name, split it to get base dir and prefix
             let path = Path::new(&path);
