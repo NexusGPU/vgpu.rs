@@ -93,6 +93,8 @@ where
 pub(crate) fn init<P: AsRef<Path>>(
     gpu_metrics_file: Option<P>,
 ) -> tracing_appender::non_blocking::WorkerGuard {
+    let fmt_layer = utils::logging::get_fmt_layer();
+
     let gpu_metrics_file = gpu_metrics_file
         .as_ref()
         .map(|p| p.as_ref())
@@ -104,12 +106,9 @@ pub(crate) fn init<P: AsRef<Path>>(
         .with_default_directive(filter::LevelFilter::INFO.into())
         .from_env_lossy();
 
-    let fmt_layer = layer()
-        .with_writer(std::io::stdout)
-        .with_target(true)
-        .with_filter(env_filter.and(filter::filter_fn(|metadata| {
-            !metadata.target().contains("metrics")
-        })));
+    let fmt_layer = fmt_layer.with_filter(env_filter.and(filter::filter_fn(|metadata| {
+        !metadata.target().contains("metrics")
+    })));
 
     let file_appender = rolling::never(path, file);
     let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);

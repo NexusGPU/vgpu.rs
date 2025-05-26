@@ -19,6 +19,9 @@
                     "kind": "bin"
                 }
             },
+            "env": {
+                "TF_ENABLE_LOG": "1",
+            },
             "args": [
                 "--sock-path",
                 "/tensor-fusion/worker/sock/"
