@@ -183,7 +183,7 @@ pub struct IpcTrapServer<H: TrapHandler + Send + Sync + 'static> {
     handler: H,
     // ReceiverId -> Client
     clients: Mutex<HashMap<u64, Client>>,
-    ipc_receiver_set: IpcReceiverSet,
+    ipc_receiver_set: Mutex<IpcReceiverSet>,
 }
 
 impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
@@ -194,12 +194,12 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
         Ok(Self {
             handler,
             clients: Mutex::new(HashMap::new()),
-            ipc_receiver_set,
+            ipc_receiver_set: ipc_receiver_set.into(),
         })
     }
 
     /// Wait for a client with the specified PID to connect
-    pub fn wait_client<P: AsRef<Path>>(&mut self, path: P, pid: u32) -> Result<(), TrapError> {
+    pub fn wait_client<P: AsRef<Path>>(&self, path: P, pid: u32) -> Result<(), TrapError> {
         // Create a one-shot server that will receive the initial connection
         let (server, server_name) = IpcOneShotServer::new()?;
 
@@ -207,7 +207,11 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
         let (receiver, sender) = server.accept()?;
 
         // Add the frame receiver to our receiver set
-        let receiver_id = self.ipc_receiver_set.add(receiver)?;
+        let receiver_id = self
+            .ipc_receiver_set
+            .lock()
+            .expect("poisoning")
+            .add(receiver)?;
 
         // Store the client information
         let client = Client { sender, pid };
@@ -235,9 +239,9 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
         }
     }
 
-    pub fn run(&mut self) -> Result<(), crate::TrapError> {
+    pub fn run(&self) -> Result<(), crate::TrapError> {
         loop {
-            let events = self.ipc_receiver_set.select()?;
+            let events = self.ipc_receiver_set.lock().expect("poisoning").select()?;
             for event in events {
                 match event {
                     ipc::IpcSelectionResult::MessageReceived(id, msg) => {
@@ -260,55 +264,6 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
                     ipc::IpcSelectionResult::ChannelClosed(id) => {
                         self.clients.lock().expect("poisoned").remove(&id);
                     }
-                }
-            }
-        }
-    }
-
-    /// Runs the server until the provided stop function returns true
-    /// This is primarily useful for testing when you need to stop the server
-    pub fn run_with_stop<F>(&mut self, mut should_stop: F) -> Result<(), crate::TrapError>
-    where
-        F: FnMut() -> bool,
-    {
-        loop {
-            // Check if we should stop
-            if should_stop() {
-                return Ok(());
-            }
-
-            // Try to get events without blocking (using select would block indefinitely)
-            let events_result = self.ipc_receiver_set.select();
-
-            match events_result {
-                Ok(events) => {
-                    for event in events {
-                        match event {
-                            ipc::IpcSelectionResult::MessageReceived(id, msg) => {
-                                // Extract the trap ID and frame from the message
-                                if let Ok((trap_id, frame)) = msg.to::<(u64, TrapFrame)>() {
-                                    // Get the client associated with this receiver ID
-                                    let clients = self.clients.lock().expect("poisoning");
-                                    if let Some(client) = clients.get(&id) {
-                                        // Handle the trap using the provided handler
-                                        self.handler.handle_trap(
-                                            client.pid,
-                                            trap_id,
-                                            &frame,
-                                            client.sender.clone(),
-                                        );
-                                    }
-                                }
-                            }
-                            ipc::IpcSelectionResult::ChannelClosed(id) => {
-                                self.clients.lock().expect("poisoned").remove(&id);
-                            }
-                        }
-                    }
-                }
-                Err(_) => {
-                    // If no events, sleep a little bit to avoid busy waiting
-                    thread::sleep(Duration::from_millis(100));
                 }
             }
         }

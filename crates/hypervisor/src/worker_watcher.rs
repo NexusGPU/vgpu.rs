@@ -1,8 +1,6 @@
 use crate::gpu_observer::GpuObserver;
-use crate::hypervisor::Hypervisor;
 use crate::process::worker::TensorFusionWorker;
 use crate::process::{GpuResources, QosLevel};
-use crate::scheduler::GpuScheduler;
 use notify::{Error, Event, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,19 +9,21 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{fs, io, thread};
 
-pub(crate) struct WorkerWatcher<Sched: GpuScheduler<TensorFusionWorker>> {
+pub(crate) struct WorkerWatcher<AddCB, RemoveCB> {
     rx: Mutex<Receiver<Result<Event, Error>>>,
     tx: Sender<Result<Event, Error>>,
-    hypervisor: Arc<Hypervisor<TensorFusionWorker, Sched>>,
+    add_callback: AddCB,
+    remove_callback: RemoveCB,
     worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
     #[cfg(target_os = "linux")]
     _watcher: notify::INotifyWatcher,
 }
 
-impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
+impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB, RemoveCB> {
     pub(crate) fn new<P: AsRef<Path>>(
         path: P,
-        hypervisor: Arc<Hypervisor<TensorFusionWorker, Sched>>,
+        add_callback: AddCB,
+        remove_callback: RemoveCB,
         worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
     ) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel::<Result<Event, Error>>();
@@ -39,7 +39,8 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
         Ok(WorkerWatcher {
             rx: Mutex::new(rx),
             tx,
-            hypervisor,
+            add_callback,
+            remove_callback,
             worker_pid_mapping,
             #[cfg(target_os = "linux")]
             _watcher: watcher,
@@ -139,10 +140,6 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                                 continue;
                             };
 
-                            if self.hypervisor.process_exists(pid) {
-                                continue;
-                            }
-
                             // Get QoS level
                             let qos_level =
                                 match env.get("TENSOR_FUSION_QOS_LEVEL").map(String::as_str) {
@@ -170,7 +167,7 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                                 .write()
                                 .expect("poisoning")
                                 .insert(pid, worker_name);
-                            self.hypervisor.add_process(worker);
+                            (self.add_callback)(pid, worker);
                         }
                     }
                     notify::EventKind::Remove(_) => {
@@ -183,7 +180,7 @@ impl<Sched: GpuScheduler<TensorFusionWorker>> WorkerWatcher<Sched> {
                                     continue;
                                 }
                             };
-                            self.hypervisor.remove_process(pid);
+                            (self.remove_callback)(pid)
                         }
                     }
                     _ => {}

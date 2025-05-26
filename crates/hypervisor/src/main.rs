@@ -36,6 +36,9 @@ struct Cli {
 
     #[arg(long, env = "TENSOR_FUSION_GPU_INFO_PATH")]
     gpu_info_path: Option<PathBuf>,
+
+    #[arg(long, env = "TENSOR_FUSION_IPC_SERVER_PATH")]
+    ipc_path: PathBuf,
 }
 
 fn main() -> Result<()> {
@@ -58,7 +61,6 @@ fn main() -> Result<()> {
             .init(),
     }?);
 
-    // Create a FIFO scheduler with GPU resource limits for all available GPUs
     let mut gpu_limits = HashMap::new();
     let mut gpu_name_to_uuid_map = HashMap::new();
     let device_count = nvml.device_count()?;
@@ -124,11 +126,50 @@ fn main() -> Result<()> {
             }
         });
 
+        // create trap server
+        let trap_server = Arc::new(
+            trap::ipc::IpcTrapServer::new(hypervisor.clone())
+                .expect("failed to create trap server"),
+        );
         // Create the worker watcher instance to be shared by both threads
         let sock_path = cli.sock_path.clone();
         let watcher = Arc::new(
-            WorkerWatcher::new(&sock_path, hypervisor.clone(), worker_pid_mapping.clone())
-                .expect("new worker watcher"),
+            WorkerWatcher::new(
+                &sock_path,
+                {
+                    let hypervisor = hypervisor.clone();
+                    let trap_server = trap_server.clone();
+                    move |pid, worker| {
+                        if hypervisor.process_exists(pid) {
+                            tracing::warn!("Process {} already exists", pid);
+                            return;
+                        }
+                        hypervisor.add_process(worker);
+                        // Spawn a standalone thread to wait for client connection
+                        let trap_server = trap_server.clone();
+                        let ipc_path = cli.ipc_path.clone();
+                        std::thread::spawn(move || {
+                            tracing::info!("Waiting for client with PID: {}", pid);
+                            match trap_server.wait_client(ipc_path, pid) {
+                                Ok(_) => tracing::info!("Client with PID {} connected", pid),
+                                Err(e) => tracing::error!(
+                                    "Failed to wait for client with PID {}: {}",
+                                    pid,
+                                    e
+                                ),
+                            }
+                        });
+                    }
+                },
+                {
+                    let hypervisor = hypervisor.clone();
+                    move |pid| {
+                        hypervisor.remove_process(pid);
+                    }
+                },
+                worker_pid_mapping.clone(),
+            )
+            .expect("new worker watcher"),
         );
 
         // Start worker watcher loop thread (directory polling)
@@ -152,14 +193,9 @@ fn main() -> Result<()> {
         });
 
         // Start trap server thread
-        let trap_handle = s.spawn({
-            let hypervisor = hypervisor.clone();
-            move |_| {
-                tracing::info!("Starting trap server thread");
-                let mut trap_server = trap::ipc::IpcTrapServer::new(hypervisor)
-                    .expect("failed to create trap server");
-                trap_server.run().expect("trap server failed");
-            }
+        let trap_handle = s.spawn(move |_| {
+            tracing::info!("Starting trap server thread");
+            trap_server.run().expect("trap server failed");
         });
 
         // Start hypervisor in a separate thread
