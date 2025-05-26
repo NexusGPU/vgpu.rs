@@ -245,7 +245,7 @@ impl Limiter {
 
         let total_cuda_cores = sm_count * max_thread_per_sm * FACTOR;
 
-        tracing::trace!("sm_count: {sm_count}, max_thread_per_sm: {max_thread_per_sm}, mem_limit: {mem_limit} bytes");
+        tracing::info!("sm_count: {sm_count}, max_thread_per_sm: {max_thread_per_sm}, mem_limit: {mem_limit} bytes");
         Ok(Self {
             nvml,
             device_idx,
