@@ -48,7 +48,6 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
     }
 
     /// Run the worker watcher loop that periodically checks the directory for new files
-    /// This is meant to be called from a dedicated thread in the crossbeam scope
     pub(crate) fn run_watcher_loop(&self, path: impl AsRef<Path>) {
         let tx = self.tx.clone();
         let path = PathBuf::from(path.as_ref());

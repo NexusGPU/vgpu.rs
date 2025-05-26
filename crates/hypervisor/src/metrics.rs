@@ -25,7 +25,6 @@ struct AccumulatedWorkerMetrics {
 }
 
 /// Run metrics collection in the current thread
-/// This is meant to be called from a crossbeam scope thread
 pub(crate) fn run_metrics(
     gpu_observer: Arc<GpuObserver>,
     worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
