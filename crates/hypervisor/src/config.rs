@@ -25,7 +25,7 @@ pub(crate) static GPU_CAPACITY_MAP: Lazy<RwLock<HashMap<String, f64>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Load GPU information from a YAML file and store it in a map
-pub fn load_gpu_info(
+pub(crate) fn load_gpu_info(
     gpu_uuid_to_name_map: HashMap<String, String>,
     file_path: PathBuf,
 ) -> Result<()> {
