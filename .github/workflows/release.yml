@@ -22,14 +22,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       published: ${{ github.event_name == 'workflow_dispatch' || steps.semantic.outputs.new_release_published }}
-      version: ${{ github.event_name == 'workflow_dispatch' && github.sha || steps.semantic.outputs.new_release_version }}
+      version: ${{ github.event_name == 'workflow_dispatch' && steps.set_tag.outputs.tag || steps.semantic.outputs.new_release_version }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create manual release
+      - name: Set Tag
         if: github.event_name == 'workflow_dispatch'
-        id: manual
-        run: echo "Creating release for commit ${{ github.sha }}"
+        id: set_tag
+        run: echo "tag=dev-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Semantic Release
         if: github.event_name != 'workflow_dispatch'
@@ -134,7 +134,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: commit-${{ github.sha }}
+          tag_name: ${{ needs.release.outputs.version }}
           files: |
             libcuda_limiter-x64.tar.gz
             libcuda_limiter-arm64.tar.gz
