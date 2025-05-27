@@ -32,13 +32,25 @@ struct Cli {
     #[arg(long, value_hint = clap::ValueHint::FilePath, help = "Path for printing GPU and worker metrics, e.g. /logs/metrics.log")]
     gpu_metrics_file: Option<PathBuf>,
 
-    #[arg(long, default_value = "10", help = "Number of metrics to aggregate before printing, default to 10 means aggregated every 10 seconds")]
+    #[arg(
+        long,
+        default_value = "10",
+        help = "Number of metrics to aggregate before printing, default to 10 means aggregated every 10 seconds"
+    )]
     metrics_batch_size: usize,
 
-    #[arg(long, env = "TENSOR_FUSION_GPU_INFO_PATH", help = "Path for GPU info list, e.g. /etc/tensor-fusion/gpu-info.yaml")]
+    #[arg(
+        long,
+        env = "TENSOR_FUSION_GPU_INFO_PATH",
+        help = "Path for GPU info list, e.g. /etc/tensor-fusion/gpu-info.yaml"
+    )]
     gpu_info_path: Option<PathBuf>,
 
-    #[arg(long, env = "TENSOR_FUSION_IPC_SERVER_PATH", help = "Path for the IPC pipe used for communication between the hypervisor and worker processes, e.g. /tensor-fusion/worker/ipc")]
+    #[arg(
+        long,
+        env = "TENSOR_FUSION_IPC_SERVER_PATH",
+        help = "Path for the IPC pipe used for communication between the hypervisor and worker processes, e.g. /tensor-fusion/worker/ipc"
+    )]
     ipc_path: PathBuf,
 }
 
