@@ -1893,6 +1893,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "trap",
+ "utils",
 ]
 
 [[package]]
@@ -2239,9 +2240,9 @@ name = "utils"
 version = "0.1.0"
 dependencies = [
  "frida-gum",
- "lazy_static",
  "thiserror 2.0.12",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
 ]
 
