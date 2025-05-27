@@ -36,11 +36,13 @@ pub fn get_fmt_layer() -> Box<dyn tracing_subscriber::Layer<Registry> + Send + S
                 layer()
                     .with_writer(rolling::daily(base_dir, DEFAULT_LOG_PREFIX))
                     .with_target(true)
+                    .with_ansi(false) // Disable colors when writing to file
                     .boxed()
             } else {
                 layer()
                     .with_writer(rolling::daily(base_dir, prefix))
                     .with_target(true)
+                    .with_ansi(false) // Disable colors when writing to file
                     .boxed()
             }
         }

@@ -26,19 +26,19 @@ use worker_watcher::WorkerWatcher;
 #[derive(Parser)]
 #[command(about, long_about)]
 struct Cli {
-    #[arg(long, value_hint = clap::ValueHint::DirPath)]
+    #[arg(long, value_hint = clap::ValueHint::DirPath, help = "Socket path for hypervisor to control vGPU workers, e.g. /tensor-fusion/worker/sock/")]
     sock_path: PathBuf,
 
-    #[arg(long, value_hint = clap::ValueHint::FilePath)]
+    #[arg(long, value_hint = clap::ValueHint::FilePath, help = "Path for printing GPU and worker metrics, e.g. /logs/metrics.log")]
     gpu_metrics_file: Option<PathBuf>,
 
-    #[arg(long, default_value = "10")]
+    #[arg(long, default_value = "10", help = "Number of metrics to aggregate before printing, default to 10 means aggregated every 10 seconds")]
     metrics_batch_size: usize,
 
-    #[arg(long, env = "TENSOR_FUSION_GPU_INFO_PATH")]
+    #[arg(long, env = "TENSOR_FUSION_GPU_INFO_PATH", help = "Path for GPU info list, e.g. /etc/tensor-fusion/gpu-info.yaml")]
     gpu_info_path: Option<PathBuf>,
 
-    #[arg(long, env = "TENSOR_FUSION_IPC_SERVER_PATH")]
+    #[arg(long, env = "TENSOR_FUSION_IPC_SERVER_PATH", help = "Path for the IPC pipe used for communication between the hypervisor and worker processes, e.g. /tensor-fusion/worker/ipc")]
     ipc_path: PathBuf,
 }
 
@@ -88,14 +88,6 @@ fn main() -> Result<()> {
     // Load GPU information from config file
     if let Err(e) = config::load_gpu_info(
         gpu_uuid_to_name_map,
-        cli.gpu_info_path.unwrap_or("./gpu-info.yaml".into()),
-    ) {
-        tracing::warn!("Failed to load GPU information: {}", e);
-    }
-
-    // Load GPU information from config file
-    if let Err(e) = config::load_gpu_info(
-        gpu_name_to_uuid_map,
         cli.gpu_info_path.unwrap_or("./gpu-info.yaml".into()),
     ) {
         tracing::warn!("Failed to load GPU information: {}", e);
