@@ -21,12 +21,18 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-latest
     outputs:
-      published: ${{ steps.semantic.outputs.new_release_published }}
-      version: ${{ steps.semantic.outputs.new_release_version }}
+      published: ${{ github.event_name == 'workflow_dispatch' || steps.semantic.outputs.new_release_published }}
+      version: ${{ github.event_name == 'workflow_dispatch' && github.sha || steps.semantic.outputs.new_release_version }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Create manual release
+        if: github.event_name == 'workflow_dispatch'
+        id: manual
+        run: echo "Creating release for commit ${{ github.sha }}"
+
       - name: Semantic Release
+        if: github.event_name != 'workflow_dispatch'
         id: semantic
         uses: cycjimmy/semantic-release-action@v4.2.0
         with:
@@ -124,7 +130,19 @@ jobs:
           tar -czf libadd_path-x64.tar.gz -C artifacts/libadd_path-linux-x64 libadd_path.so
           tar -czf libadd_path-arm64.tar.gz -C artifacts/libadd_path-linux-arm64 libadd_path.so
       
-      - name: Add assets to release
+      - name: Add assets to manual release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: commit-${{ github.sha }}
+          files: |
+            libcuda_limiter-x64.tar.gz
+            libcuda_limiter-arm64.tar.gz
+            libadd_path-x64.tar.gz
+            libadd_path-arm64.tar.gz
+
+      - name: Add assets to semantic release
+        if: github.event_name != 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.release.outputs.version }}
@@ -269,10 +287,19 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Create and push manifest
+      - name: Create and push manifest for auto release
+        if: github.event_name != 'workflow_dispatch'
         run: |
           docker buildx imagetools create \
             -t tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }} \
             -t tensorfusion/tensor-fusion-hypervisor:latest \
+            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64 \
+            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
+
+      - name: Create and push manifest for manual release
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          docker buildx imagetools create \
+            -t tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }} \
             tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64 \
             tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
