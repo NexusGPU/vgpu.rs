@@ -103,7 +103,6 @@ impl Limiter {
 
     pub(crate) fn run_watcher(&self, watch_duration: Duration) {
         let mut share: i32 = 0;
-        let mut failed_count = 0;
         loop {
             sleep(watch_duration);
             let util = loop {
@@ -112,15 +111,15 @@ impl Limiter {
                     Ok(None) => {
                         continue;
                     }
-                    Err(err) => {
+                    Err(NvmlError::NotFound) => {
+                        // not found means this gpu is not using by any process
                         sleep(watch_duration * 2);
-                        failed_count += 1;
-                        if failed_count > 30 {
-                            failed_count = 0;
-                            tracing::warn!(
-                                "continuously failed to get_used_gpu_utilization, err: {err}"
-                            );
-                        }
+                        continue;
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to get_used_gpu_utilization, err: {err}");
+                        sleep(watch_duration * 2);
+                        continue;
                     }
                 }
             };
