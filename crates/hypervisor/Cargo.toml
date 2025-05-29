@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-nvml-wrapper = "0.10.0"
+nvml-wrapper = "0.11.0"
 anyhow = "1.0.98"
 tracing = { workspace = true }
 notify = "8.0.0"
