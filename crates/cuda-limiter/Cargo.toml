@@ -13,7 +13,7 @@ tracing = { workspace = true }
 utils = { workspace = true }
 ctor = { workspace = true }
 thiserror = { workspace = true }
-nvml-wrapper = "0.10.0"
+nvml-wrapper = "0.11.0"
 cudarc = { version = "0.16.4", default-features = false, features = [
   "std",
   "driver",
