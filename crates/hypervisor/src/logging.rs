@@ -8,11 +8,10 @@ use tracing::{
     field::{Field, Visit},
     Event, Subscriber,
 };
-use tracing_subscriber::fmt::FormatEvent;
-
-use tracing_appender::rolling;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::{self, FilterExt};
 use tracing_subscriber::fmt::layer;
+use tracing_subscriber::fmt::FormatEvent;
 use tracing_subscriber::{prelude::*, registry};
 
 struct InfluxDBFormatter;
@@ -110,8 +109,14 @@ pub(crate) fn init<P: AsRef<Path>>(
         !metadata.target().contains("metrics")
     })));
 
-    let file_appender = rolling::never(path, file);
-    let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
+    let appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix(file.to_str().expect("metrics file name"))
+        .max_log_files(3)
+        .build(path)
+        .expect("failed to create rolling file appender");
+
+    let (file_writer, file_guard) = tracing_appender::non_blocking(appender);
 
     let metrics_layer = layer()
         .event_format(InfluxDBFormatter {})
