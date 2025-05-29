@@ -50,11 +50,11 @@ pub fn get_fmt_layer() -> Box<dyn tracing_subscriber::Layer<Registry> + Send + S
                 .build(if is_dir { path } else { base_dir })
                 .expect("failed to create rolling file appender");
 
-            let (file_writer, _guard) = tracing_appender::non_blocking(appender);
+            let (file_writer, guard) = tracing_appender::non_blocking(appender);
 
             // keep non blocking write thread alive in global scope
             LOG_WORKER_GUARD
-                .set(_guard)
+                .set(guard)
                 .expect("failed to set log worker guard");
 
             layer()
