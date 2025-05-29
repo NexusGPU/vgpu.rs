@@ -4,6 +4,7 @@ use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
 use tracing::level_filters::LevelFilter;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::RollingFileAppender;
 use tracing_appender::rolling::Rotation;
 use tracing_subscriber::fmt::layer;
@@ -18,7 +19,7 @@ const LOG_PATH_ENV_VAR: &str = "TF_LOG_PATH";
 const LOG_LEVEL_ENV_VAR: &str = "TF_LOG_LEVEL";
 const LOG_OFF: &str = "off";
 
-static LOG_WORKER_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
+static LOG_WORKER_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 /// initiate the global tracing subscriber
 pub fn get_fmt_layer() -> Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync> {
@@ -52,7 +53,9 @@ pub fn get_fmt_layer() -> Box<dyn tracing_subscriber::Layer<Registry> + Send + S
             let (file_writer, _guard) = tracing_appender::non_blocking(appender);
 
             // keep non blocking write thread alive in global scope
-            LOG_WORKER_GUARD.set(_guard).expect("failed to set log worker guard");
+            LOG_WORKER_GUARD
+                .set(_guard)
+                .expect("failed to set log worker guard");
 
             layer()
                 .with_writer(file_writer)
@@ -66,7 +69,7 @@ pub fn get_fmt_layer() -> Box<dyn tracing_subscriber::Layer<Registry> + Send + S
             .boxed(),
     };
 
-    fmt_layer.with_filter(filter).boxed()   
+    fmt_layer.with_filter(filter).boxed()
 }
 
 pub fn init() {
