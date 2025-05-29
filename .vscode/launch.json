@@ -21,7 +21,7 @@
             },
             "env": {
                 "TF_ENABLE_LOG": "1",
-                "TF_LOG_PATH": "./tf.log",
+                "TF_LOG_PATH": "logs/tf.log",
             },
             "args": [
                 "--sock-path",
