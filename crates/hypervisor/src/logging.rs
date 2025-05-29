@@ -3,21 +3,16 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
-
-use tracing::field::Field;
-use tracing::field::Visit;
-use tracing::Event;
-use tracing::Subscriber;
-use tracing_appender::rolling::RollingFileAppender;
-use tracing_appender::rolling::Rotation;
-use tracing_subscriber::filter;
-use tracing_subscriber::filter::FilterExt;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{
+    field::{Field, Visit},
+    Event, Subscriber,
+};
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::filter::{self, FilterExt};
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::fmt::FormatEvent;
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::registry;
+use tracing_subscriber::{prelude::*, registry};
 
 struct InfluxDBFormatter;
 

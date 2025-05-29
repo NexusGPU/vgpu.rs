@@ -3,7 +3,6 @@
 use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
-
 use tracing::level_filters::LevelFilter;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::RollingFileAppender;
