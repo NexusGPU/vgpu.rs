@@ -64,11 +64,7 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
             };
 
             // Process directory entries
-            let entries = entries
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .collect::<Vec<_>>();
-
+            let entries = entries.filter_map(Result::ok).map(|entry| entry.path());
             // Send events for each entry
             for entry in entries {
                 let event = Event::new(notify::event::EventKind::Create(
@@ -161,7 +157,6 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
                                 gpu_observer.clone(),
                             );
 
-                            tracing::info!("new worker added: {:?}", worker_name);
                             self.worker_pid_mapping
                                 .write()
                                 .expect("poisoning")

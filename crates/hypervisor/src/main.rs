@@ -149,21 +149,27 @@ fn main() -> Result<()> {
                 {
                     let hypervisor = hypervisor.clone();
                     let trap_server = trap_server.clone();
-                    move |pid, worker| {
+                    move |pid, mut worker| {
                         if hypervisor.process_exists(pid) {
-                            tracing::warn!("Process {} already exists", pid);
                             return;
                         }
+
+                        if let Err(e) = worker.connect() {
+                            tracing::error!("failed to connect to worker: {e}, skipped");
+                            return;
+                        }
+
                         hypervisor.add_process(worker);
+                        tracing::info!("new worker added: {pid}");
                         // Spawn a standalone thread to wait for client connection
                         let trap_server = trap_server.clone();
                         let ipc_path = cli.ipc_path.clone();
-                        std::thread::spawn(move || {
-                            tracing::info!("Waiting for client with PID: {}", pid);
+                        thread::spawn(move || {
+                            tracing::info!("waiting for client with PID: {}", pid);
                             match trap_server.wait_client(ipc_path, pid) {
-                                Ok(_) => tracing::info!("Client with PID {} connected", pid),
+                                Ok(_) => tracing::info!("client with PID {} connected", pid),
                                 Err(e) => tracing::error!(
-                                    "Failed to wait for client with PID {}: {}",
+                                    "failed to wait for client with PID {}: {}",
                                     pid,
                                     e
                                 ),
@@ -183,35 +189,44 @@ fn main() -> Result<()> {
         );
 
         // Start worker watcher loop thread (directory polling)
-        let watcher_loop_handle = s.spawn({
-            let watcher = watcher.clone();
-            let sock_path = sock_path.clone();
-            move || {
-                tracing::info!("Starting worker watcher loop thread");
-                watcher.run_watcher_loop(sock_path);
-            }
-        });
+        let watcher_loop_handle = thread::Builder::new()
+            .name("worker-watcher-loop".into())
+            .spawn_scoped(s, {
+                let watcher = watcher.clone();
+                let sock_path = sock_path.clone();
+                move || {
+                    tracing::info!("Starting worker watcher loop thread");
+                    watcher.run_watcher_loop(sock_path);
+                }
+            })
+            .expect("failed to spawn worker watcher loop thread");
 
         // Start worker watcher event handling thread
-        let worker_handle = s.spawn({
-            let watcher = watcher.clone();
-            let gpu_observer = gpu_observer.clone();
-            move || {
-                tracing::info!("Starting worker watcher event handler thread");
-                watcher.run(gpu_observer);
-            }
-        });
+        let worker_handle = thread::Builder::new()
+            .name("worker-watcher-event-handler".into())
+            .spawn_scoped(s, {
+                let watcher = watcher.clone();
+                let gpu_observer = gpu_observer.clone();
+                move || {
+                    tracing::info!("Starting worker watcher event handler thread");
+                    watcher.run(gpu_observer);
+                }
+            })
+            .expect("failed to spawn worker watcher event handler thread");
 
         // Start trap server thread
-        let trap_handle = s.spawn({
-            let hypervisor = hypervisor.clone();
-            move || {
-                tracing::info!("Starting trap server thread");
-                let trap_server = trap::ipc::IpcTrapServer::new(hypervisor)
-                    .expect("failed to create trap server");
-                trap_server.run().expect("trap server failed");
-            }
-        });
+        let trap_handle = thread::Builder::new()
+            .name("trap-server".into())
+            .spawn_scoped(s, {
+                let hypervisor = hypervisor.clone();
+                move || {
+                    tracing::info!("Starting trap server thread");
+                    let trap_server = trap::ipc::IpcTrapServer::new(hypervisor)
+                        .expect("failed to create trap server");
+                    trap_server.run().expect("trap server failed");
+                }
+            })
+            .expect("failed to spawn trap server thread");
 
         // Start hypervisor in a separate thread
         let hypervisor_handle = s.spawn({

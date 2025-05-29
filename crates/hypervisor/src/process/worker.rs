@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::io::{Read, Write};
+use std::mem::MaybeUninit;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::{os::unix::net::UnixStream, sync::RwLock};
@@ -40,10 +41,11 @@ pub(crate) struct TensorFusionWorker {
     id: u32,
     #[allow(dead_code)]
     requested: GpuResources,
+    socket_path: PathBuf,
     state: RwLock<ProcessState>,
     gpu_uuid: String,
     gpu_observer: Arc<GpuObserver>,
-    unix_stream: Mutex<UnixStream>,
+    unix_stream: MaybeUninit<Mutex<UnixStream>>,
     qos_level: QosLevel,
 }
 
@@ -56,10 +58,10 @@ impl TensorFusionWorker {
         gpu_uuid: String,
         gpu_observer: Arc<GpuObserver>,
     ) -> TensorFusionWorker {
-        let unix_stream = UnixStream::connect(&socket_path).unwrap();
         Self {
             id,
-            unix_stream: Mutex::new(unix_stream),
+            socket_path,
+            unix_stream: MaybeUninit::uninit(),
             qos_level,
             requested,
             state: RwLock::new(ProcessState::Running),
@@ -68,8 +70,17 @@ impl TensorFusionWorker {
         }
     }
 
+    pub(crate) fn connect(&mut self) -> Result<()> {
+        let unix_stream = UnixStream::connect(&self.socket_path)?;
+
+        self.unix_stream = MaybeUninit::new(Mutex::new(unix_stream));
+        Ok(())
+    }
+
     fn send_message(&self, message: ControlMessage) -> Result<bool> {
-        let mut unix_stream = self.unix_stream.lock().unwrap();
+        let mut unix_stream = unsafe { self.unix_stream.assume_init_ref() }
+            .lock()
+            .unwrap();
         // Send the message
         let message_bytes = unsafe {
             std::slice::from_raw_parts(
