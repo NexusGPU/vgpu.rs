@@ -135,10 +135,3 @@ pub(crate) type CudaArrayDescriptor = CudaArrayDescriptorSt;
 // Return codes for NVML functions
 pub(crate) type NvmlReturnT = c_uint;
 pub(crate) const NVML_SUCCESS: NvmlReturnT = 0;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub(crate) struct NvmlDeviceSt {
-    _unused: [u8; 0],
-}
-pub(crate) type NvmlDeviceT = *mut NvmlDeviceSt;

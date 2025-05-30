@@ -1,5 +1,6 @@
 use cudarc::driver::{sys::CUdevice_attribute, CudaContext, DriverError};
-use nvml_wrapper::{enums::device::UsedGpuMemory, error::NvmlError, Nvml};
+use nvml_wrapper::{enums::device::UsedGpuMemory, error::NvmlError, Device, Nvml};
+use nvml_wrapper_sys::bindings::{nvmlDevice_st, nvmlDevice_t};
 use std::{
     sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     thread::sleep,
@@ -7,8 +8,6 @@ use std::{
 };
 use thiserror::Error;
 use trap::TrapError;
-
-use crate::detour::NvmlDeviceT;
 
 // Configuration constant
 const FACTOR: u32 = 1;
@@ -71,6 +70,8 @@ struct DeviceInfo {
     up_limit: AtomicU32,
     /// Memory limit in bytes
     mem_limit: AtomicU64,
+    /// NVML device handle
+    nvml_dev_handle: nvmlDevice_st,
     /// Block dimensions set by cuFuncSetBlockShape
     pub(crate) block_x: AtomicU32,
     pub(crate) block_y: AtomicU32,
@@ -169,6 +170,9 @@ impl LimiterBuilder {
                     available_cuda_cores: AtomicI32::new(0),
                     up_limit: AtomicU32::new(config.up_limit),
                     mem_limit: AtomicU64::new(config.mem_limit),
+                    nvml_dev_handle: unsafe {
+                        *self.nvml.device_by_index(config.device_idx)?.handle()
+                    },
                     block_x: AtomicU32::new(0),
                     block_y: AtomicU32::new(0),
                     block_z: AtomicU32::new(0),
@@ -208,6 +212,7 @@ impl Limiter {
             .get(device_idx as usize)
             .ok_or(Error::InvalidDevice(device_idx))
     }
+
     /// Set the utilization limit for a specific device
     pub(crate) fn set_uplimit(&self, device_idx: u32, up_limit: u32) -> Result<(), Error> {
         let device = self.get_device(device_idx)?;
@@ -249,8 +254,7 @@ impl Limiter {
         }
 
         // Get device and process information
-        let dev = self.nvml.device_by_index(device_idx).map_err(Error::from)?;
-
+        let dev = self.device_by_idx(device_idx);
         let process_info = dev.running_compute_processes().map_err(|err| {
             tracing::warn!("Failed to get running compute processes: {:?}", err);
             Error::Nvml(NvmlError::Unknown)
@@ -429,17 +433,16 @@ impl Limiter {
     }
 
     /// Get the NVML device handle for a specific device
-    pub(crate) fn device_handle(&self, device_idx: u32) -> Result<NvmlDeviceT, Error> {
-        // Validate device index
-        if device_idx as usize >= self.devices.len() {
-            return Err(Error::InvalidDevice(device_idx));
-        }
-
-        // Get device handle
-        self.nvml
-            .device_by_index(device_idx)
-            .map(|dev| unsafe { dev.handle() as NvmlDeviceT })
-            .map_err(Error::from)
+    pub(crate) fn device_idx_by_handle(&self, device_handle: nvmlDevice_t) -> Option<u32> {
+        self.devices
+            .iter()
+            .enumerate()
+            .map(|(idx, device)| (idx, &device.nvml_dev_handle))
+            .find(|(_idx, handle)| {
+                // Compare the handle addresses (pointer equality)
+                std::ptr::eq(*handle as *const nvmlDevice_st, device_handle as *const nvmlDevice_st)
+            })
+            .map(|(idx, _)| idx as u32)
     }
 
     /// Get the block dimensions for a specific device
@@ -483,8 +486,7 @@ impl Limiter {
     /// * `Err(NvmlError)` - Error occurred while getting utilization data
     fn get_used_gpu_utilization(&self, device_idx: u32) -> Result<Option<Utilization>, NvmlError> {
         // Get the device
-        let dev = self.nvml.device_by_index(device_idx)?;
-
+        let dev = self.device_by_idx(device_idx);
         // Calculate timestamp for recent samples (last second)
         let last_seen_timestamp = unix_as_millis()
             .saturating_mul(1000) // Convert to microseconds
@@ -529,6 +531,16 @@ impl Limiter {
             Ok(None)
         } else {
             Ok(Some(current))
+        }
+    }
+
+    fn device_by_idx(&self, device_idx: u32) -> Device {
+        unsafe {
+            // TODO: verify whether nvml_dev_handle will be modified
+            Device::new(
+                &self.devices[device_idx as usize].nvml_dev_handle as *const _ as nvmlDevice_t,
+                &self.nvml,
+            )
         }
     }
 }
