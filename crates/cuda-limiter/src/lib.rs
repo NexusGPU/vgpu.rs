@@ -1,10 +1,11 @@
 use ctor::ctor;
 
 use limiter::{DeviceConfig, Limiter};
+use nvml_wrapper::Nvml;
 use std::{
     cell::RefCell,
     collections::HashMap,
-    ffi::{c_char, c_int, c_void, CStr},
+    ffi::{self, c_char, c_int, c_void, CStr},
     sync::{Mutex, OnceLock},
 };
 use tf_macro::hook_fn;
@@ -87,28 +88,13 @@ unsafe fn entry_point() {
         }
     };
 
-    // Get device info to map device indices to UUIDs
-    let nvml = match nvml_wrapper::Nvml::init() {
+    // Initialize NVML
+    let nvml = match Nvml::init() {
         Ok(nvml) => nvml,
-        Err(_) => {
-            // Default configuration with no limits if NVML fails
-            let limiter = match Limiter::new(
-                pid,
-                &[DeviceConfig {
-                    device_idx: 0,
-                    up_limit: 0,
-                    mem_limit: 0,
-                }],
-            ) {
-                Ok(limiter) => limiter,
-                Err(err) => {
-                    tracing::error!("failed to init limiter, err: {err}");
-                    return;
-                }
-            };
-            GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
-            return;
-        }
+        Err(_) => Nvml::builder()
+            .lib_path(ffi::OsStr::new("libnvidia-ml.so.1"))
+            .init()
+            .expect("Failed to initialize NVML"),
     };
 
     // Create device configurations based on UUIDs
@@ -166,7 +152,7 @@ unsafe fn entry_point() {
         });
     }
 
-    let limiter = match Limiter::new(pid, &device_configs) {
+    let limiter = match Limiter::new(pid, nvml, &device_configs) {
         Ok(limiter) => limiter,
         Err(err) => {
             tracing::error!("failed to init limiter, err: {err}");

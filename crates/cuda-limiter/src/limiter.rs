@@ -89,11 +89,11 @@ pub(crate) struct Limiter {
 }
 
 /// Builder for creating a Limiter with custom configuration
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct LimiterBuilder {
     pid: Option<u32>,
     device_configs: Vec<DeviceConfig>,
-    nvml_lib_path: Option<String>,
+    nvml: Nvml,
 }
 
 /// GPU utilization statistics
@@ -109,8 +109,12 @@ struct Utilization {
 
 impl LimiterBuilder {
     /// Create a new LimiterBuilder with default settings
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(nvml: Nvml) -> Self {
+        Self {
+            pid: None,
+            device_configs: Vec::new(),
+            nvml: nvml,
+        }
     }
 
     /// Set the process ID to monitor
@@ -125,29 +129,9 @@ impl LimiterBuilder {
         self
     }
 
-    /// Set the NVML library path
-    #[allow(dead_code)]
-    pub(crate) fn with_nvml_lib_path(mut self, path: impl Into<String>) -> Self {
-        self.nvml_lib_path = Some(path.into());
-        self
-    }
-
     /// Build the Limiter
     pub(crate) fn build(self) -> Result<Limiter, Error> {
         let pid = self.pid.unwrap_or_else(std::process::id);
-
-        // Initialize NVML
-        let nvml = match Nvml::init() {
-            Ok(nvml) => Ok(nvml),
-            Err(_) => {
-                let lib_path = self
-                    .nvml_lib_path
-                    .unwrap_or_else(|| "libnvidia-ml.so.1".to_string());
-                Nvml::builder()
-                    .lib_path(std::ffi::OsStr::new(&lib_path))
-                    .init()
-            }
-        }?;
 
         let mut devices = vec![];
         let configs = if self.device_configs.is_empty() {
@@ -194,14 +178,22 @@ impl LimiterBuilder {
             }
         }
 
-        Ok(Limiter { nvml, pid, devices })
+        Ok(Limiter {
+            nvml: self.nvml,
+            pid,
+            devices,
+        })
     }
 }
 
 impl Limiter {
     /// Create a new Limiter with the given process ID and device configurations
-    pub(crate) fn new(pid: u32, device_configs: &[DeviceConfig]) -> Result<Self, Error> {
-        let mut builder = LimiterBuilder::new().with_pid(pid);
+    pub(crate) fn new(
+        pid: u32,
+        nvml: Nvml,
+        device_configs: &[DeviceConfig],
+    ) -> Result<Self, Error> {
+        let mut builder = LimiterBuilder::new(nvml).with_pid(pid);
 
         for config in device_configs {
             builder = builder.with_device_config(config.clone());
@@ -556,7 +548,7 @@ pub(crate) fn unix_as_millis() -> u64 {
 mod tests {
     use super::*;
     use std::{
-        path,
+        ffi, path,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -581,8 +573,17 @@ mod tests {
             mem_limit: 1024 * 1024 * 1024, // 1GB
         };
 
+        // Initialize NVML
+        let nvml = match Nvml::init() {
+            Ok(nvml) => nvml,
+            Err(_) => Nvml::builder()
+                .lib_path(ffi::OsStr::new("libnvidia-ml.so.1"))
+                .init()
+                .expect("Failed to initialize NVML"),
+        };
+
         // Create a shared limiter that can be used across threads
-        let limiter = Arc::new(Limiter::new(pid, &[device_config]).unwrap());
+        let limiter = Arc::new(Limiter::new(pid, nvml, &[device_config]).unwrap());
 
         // Get the device and set available cores to 0 initially
         let device = limiter.get_device(0).unwrap();
