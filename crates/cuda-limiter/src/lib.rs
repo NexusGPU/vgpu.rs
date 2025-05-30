@@ -90,8 +90,7 @@ unsafe fn entry_point() {
     // Get device info to map device indices to UUIDs
     let nvml = match nvml_wrapper::Nvml::init() {
         Ok(nvml) => nvml,
-        Err(e) => {
-            tracing::error!("Failed to initialize NVML: {}", e);
+        Err(_) => {
             // Default configuration with no limits if NVML fails
             let limiter = match Limiter::new(
                 pid,
