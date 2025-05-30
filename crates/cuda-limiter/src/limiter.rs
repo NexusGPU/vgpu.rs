@@ -113,7 +113,7 @@ impl LimiterBuilder {
         Self {
             pid: None,
             device_configs: Vec::new(),
-            nvml: nvml,
+            nvml,
         }
     }
 
