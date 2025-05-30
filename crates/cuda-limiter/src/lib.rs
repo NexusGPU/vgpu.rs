@@ -121,7 +121,7 @@ unsafe fn entry_point() {
         };
 
         let uuid = match device.uuid() {
-            Ok(uuid) => uuid,
+            Ok(uuid) => uuid.to_lowercase(),
             Err(e) => {
                 tracing::error!("Failed to get UUID for device {}: {}", device_idx, e);
                 continue;

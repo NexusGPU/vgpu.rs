@@ -78,7 +78,7 @@ impl GpuObserver {
 
         for i in 0..self.nvml.device_count()? {
             let device = self.nvml.device_by_index(i)?;
-            let gpu_uuid = device.uuid()?.to_string();
+            let gpu_uuid = device.uuid()?.to_lowercase();
 
             let mut process_metrics = HashMap::new();
 
