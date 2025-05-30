@@ -1,6 +1,8 @@
 pub mod hooks;
 pub mod logging;
 pub mod macros;
+pub mod version;
+mod build_info;
 
 use thiserror::Error;
 

@@ -9,3 +9,7 @@ tracing-appender = "0.2"
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 frida-gum = { git = "https://github.com/frida/frida-rust", rev = "e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f", features = ["auto-download", "std"] }
 thiserror = { workspace = true }
+
+[build-dependencies]
+anyhow = { workspace = true }
+vergen-git2 = { workspace = true, features = ["build", "cargo", "rustc", "si"] }

@@ -21,10 +21,11 @@ use std::{
     thread,
     time::Duration,
 };
+use utils::version;
 use worker_watcher::WorkerWatcher;
 
 #[derive(Parser)]
-#[command(about, long_about)]
+#[command(about, long_about, version = &**version::VERSION)]
 struct Cli {
     #[arg(long, value_hint = clap::ValueHint::DirPath, help = "Socket path for hypervisor to control vGPU workers, e.g. /tensor-fusion/worker/sock/")]
     sock_path: PathBuf,
@@ -66,6 +67,8 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let _guard = logging::init(cli.gpu_metrics_file);
+
+    tracing::info!("Starting tensor-fusion-hypervisor {}", &**version::VERSION);
 
     let nvml = Arc::new(match Nvml::init() {
         Ok(nvml) => Ok(nvml),
