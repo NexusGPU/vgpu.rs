@@ -89,12 +89,16 @@ unsafe fn entry_point() {
     };
 
     // Initialize NVML
-    let nvml = match Nvml::init() {
-        Ok(nvml) => nvml,
-        Err(_) => Nvml::builder()
+    let nvml = match Nvml::init().and(
+        Nvml::builder()
             .lib_path(ffi::OsStr::new("libnvidia-ml.so.1"))
-            .init()
-            .expect("Failed to initialize NVML"),
+            .init(),
+    ) {
+        Ok(nvml) => nvml,
+        Err(e) => {
+            tracing::error!("Failed to initialize NVML: {}", e);
+            return;
+        }
     };
 
     // Create device configurations based on UUIDs
