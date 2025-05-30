@@ -227,7 +227,8 @@ pub(crate) unsafe fn cu_mem_create_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, device: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    limiter.get_mem_limit_cu(device)
+    limiter
+        .get_mem_limit_cu(device)
         .map(|limit| {
             *bytes = limit;
             CUresult::CUDA_SUCCESS
@@ -238,7 +239,8 @@ pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, device: CUde
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, device: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    limiter.get_mem_limit_cu(device)
+    limiter
+        .get_mem_limit_cu(device)
         .map(|limit| {
             *bytes = limit;
             CUresult::CUDA_SUCCESS

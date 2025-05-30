@@ -437,7 +437,9 @@ impl Limiter {
 
     /// Get the memory limit for a specific device
     pub(crate) fn get_mem_limit_cu(&self, cu_device: CUdevice) -> Result<u64, Error> {
-        let device = self.devices.iter()
+        let device = self
+            .devices
+            .iter()
             .find(|d| d.cu_device == cu_device)
             .ok_or(Error::InvalidCuDevice(cu_device))?;
         let mem_limit = device.mem_limit.load(Ordering::Acquire);

@@ -48,7 +48,7 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
     let new_used = used;
 
     let new_free = if new_total > new_used {
-        new_total - new_used
+        new_total.saturating_sub(new_used)
     } else {
         0 // Ensure free memory is not negative
     };
@@ -82,7 +82,7 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     let new_total = mem_limit;
     let new_used = used;
     let new_free = if new_total > new_used {
-        new_total - new_used
+        new_total.saturating_sub(new_used)
     } else {
         0 // Ensure free memory is not negative
     };
