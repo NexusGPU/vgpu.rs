@@ -9,6 +9,8 @@ use std::{
 use thiserror::Error;
 use trap::TrapError;
 
+use crate::detour::CUdevice;
+
 // Configuration constant
 const FACTOR: u32 = 1;
 // Default sleep duration when waiting for resources
@@ -29,6 +31,9 @@ pub(crate) enum Error {
 
     #[error("Invalid device index: {0}")]
     InvalidDevice(u32),
+
+    #[error("Invalid CUDA device: {0}")]
+    InvalidCuDevice(CUdevice),
 
     #[error("Resource not available: {0}")]
     ResourceNotAvailable(String),
@@ -72,6 +77,8 @@ struct DeviceInfo {
     mem_limit: AtomicU64,
     /// Total available memory in bytes
     total_mem: u64,
+
+    cu_device: CUdevice,
     /// Block dimensions set by cuFuncSetBlockShape
     pub(crate) block_x: AtomicU32,
     pub(crate) block_y: AtomicU32,
@@ -176,6 +183,7 @@ impl LimiterBuilder {
                     up_limit: AtomicU32::new(config.up_limit),
                     mem_limit: AtomicU64::new(config.mem_limit),
                     total_mem,
+                    cu_device: ctx.cu_device(),
                     block_x: AtomicU32::new(0),
                     block_y: AtomicU32::new(0),
                     block_z: AtomicU32::new(0),
@@ -425,6 +433,19 @@ impl Limiter {
         }
 
         increment
+    }
+
+    /// Get the memory limit for a specific device
+    pub(crate) fn get_mem_limit_cu(&self, cu_device: CUdevice) -> Result<u64, Error> {
+        let device = self.devices.iter()
+            .find(|d| d.cu_device == cu_device)
+            .ok_or(Error::InvalidCuDevice(cu_device))?;
+        let mem_limit = device.mem_limit.load(Ordering::Acquire);
+        Ok(if mem_limit == 0 {
+            device.total_mem
+        } else {
+            mem_limit
+        })
     }
 
     /// Get the memory limit for a specific device
