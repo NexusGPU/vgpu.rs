@@ -1,6 +1,6 @@
 use cudarc::driver::{sys::CUdevice_attribute, CudaContext, DriverError};
-use nvml_wrapper::{enums::device::UsedGpuMemory, error::NvmlError, Device, Nvml};
-use nvml_wrapper_sys::bindings::{nvmlDevice_st, nvmlDevice_t};
+use nvml_wrapper::{enums::device::UsedGpuMemory, error::NvmlError, Nvml};
+use nvml_wrapper_sys::bindings::nvmlDevice_t;
 use std::{
     sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     thread::sleep,
@@ -70,8 +70,8 @@ struct DeviceInfo {
     up_limit: AtomicU32,
     /// Memory limit in bytes
     mem_limit: AtomicU64,
-    /// NVML device handle
-    nvml_dev_handle: nvmlDevice_st,
+    /// Total available memory in bytes
+    total_mem: u64,
     /// Block dimensions set by cuFuncSetBlockShape
     pub(crate) block_x: AtomicU32,
     pub(crate) block_y: AtomicU32,
@@ -153,14 +153,19 @@ impl LimiterBuilder {
                     CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR,
                 )? as u32;
 
+                let total_mem =
+                    unsafe { cudarc::driver::result::device::total_mem(ctx.cu_device()) }? as u64;
                 let total_cuda_cores = sm_count * max_thread_per_sm * FACTOR;
-
+                self.nvml
+                    .device_by_index(devices.len() as u32)
+                    .map_err(Error::Nvml)?;
                 tracing::info!(
-                    "Device {}: sm_count: {}, max_thread_per_sm: {}, mem_limit: {} bytes",
+                    "Device {}: sm_count: {}, max_thread_per_sm: {}, mem_limit: {} bytes, total_mem: {} bytes",
                     devices.len(),
                     sm_count,
                     max_thread_per_sm,
-                    config.mem_limit
+                    config.mem_limit,
+                    total_mem
                 );
 
                 let device_info = DeviceInfo {
@@ -170,9 +175,7 @@ impl LimiterBuilder {
                     available_cuda_cores: AtomicI32::new(0),
                     up_limit: AtomicU32::new(config.up_limit),
                     mem_limit: AtomicU64::new(config.mem_limit),
-                    nvml_dev_handle: unsafe {
-                        *self.nvml.device_by_index(config.device_idx)?.handle()
-                    },
+                    total_mem,
                     block_x: AtomicU32::new(0),
                     block_y: AtomicU32::new(0),
                     block_z: AtomicU32::new(0),
@@ -254,7 +257,7 @@ impl Limiter {
         }
 
         // Get device and process information
-        let dev = self.device_by_idx(device_idx);
+        let dev = self.nvml.device_by_index(device_idx)?;
         let process_info = dev.running_compute_processes().map_err(|err| {
             tracing::warn!("Failed to get running compute processes: {:?}", err);
             Error::Nvml(NvmlError::Unknown)
@@ -425,24 +428,34 @@ impl Limiter {
     }
 
     /// Get the memory limit for a specific device
-    /// Returns u64::MAX if no limit is set (mem_limit = 0)
     pub(crate) fn get_mem_limit(&self, device_idx: u32) -> Result<u64, Error> {
         let device = self.get_device(device_idx)?;
         let mem_limit = device.mem_limit.load(Ordering::Acquire);
-        Ok(if mem_limit == 0 { u64::MAX } else { mem_limit })
+        Ok(if mem_limit == 0 {
+            device.total_mem
+        } else {
+            mem_limit
+        })
     }
 
     /// Get the NVML device handle for a specific device
     pub(crate) fn device_idx_by_handle(&self, device_handle: nvmlDevice_t) -> Option<u32> {
-        self.devices
-            .iter()
-            .enumerate()
-            .map(|(idx, device)| (idx, &device.nvml_dev_handle))
-            .find(|(_idx, handle)| {
-                // Compare the handle addresses (pointer equality)
-                std::ptr::eq(*handle as *const nvmlDevice_st, device_handle as *const nvmlDevice_st)
-            })
-            .map(|(idx, _)| idx as u32)
+        for idx in 0..self.devices.len() {
+            let dev = self.nvml.device_by_index(idx as u32);
+            match dev {
+                Ok(dev) => {
+                    let handle = unsafe { dev.handle() };
+                    if handle == device_handle {
+                        return Some(idx as u32);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("failed to get device by index {}: {}, skipped", idx, e);
+                    continue;
+                }
+            }
+        }
+        None
     }
 
     /// Get the block dimensions for a specific device
@@ -486,7 +499,7 @@ impl Limiter {
     /// * `Err(NvmlError)` - Error occurred while getting utilization data
     fn get_used_gpu_utilization(&self, device_idx: u32) -> Result<Option<Utilization>, NvmlError> {
         // Get the device
-        let dev = self.device_by_idx(device_idx);
+        let dev = self.nvml.device_by_index(device_idx)?;
         // Calculate timestamp for recent samples (last second)
         let last_seen_timestamp = unix_as_millis()
             .saturating_mul(1000) // Convert to microseconds
@@ -531,16 +544,6 @@ impl Limiter {
             Ok(None)
         } else {
             Ok(Some(current))
-        }
-    }
-
-    fn device_by_idx(&self, device_idx: u32) -> Device {
-        unsafe {
-            // TODO: verify whether nvml_dev_handle will be modified
-            Device::new(
-                &self.devices[device_idx as usize].nvml_dev_handle as *const _ as nvmlDevice_t,
-                &self.nvml,
-            )
         }
     }
 }

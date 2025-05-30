@@ -42,16 +42,20 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
         .get_used_gpu_memory(device_idx)
         .expect("Failed to get used GPU memory");
 
-    if mem_limit < u64::MAX {
-        let memory_ref = &mut *memory;
-        // Modify the memory info to reflect our limits
-        let new_total = mem_limit;
-        let new_used = used;
-        let new_free = new_total.saturating_sub(new_used);
-        memory_ref.total = new_total;
-        memory_ref.used = new_used;
-        memory_ref.free = new_free;
-    }
+    let memory_ref = &mut *memory;
+    // Modify the memory info to reflect our limits
+    let new_total = mem_limit;
+    let new_used = used;
+
+    let new_free = if new_total > new_used {
+        new_total - new_used
+    } else {
+        0 // Ensure free memory is not negative
+    };
+
+    memory_ref.total = new_total;
+    memory_ref.used = new_used;
+    memory_ref.free = new_free;
     NVML_SUCCESS
 }
 
@@ -73,17 +77,19 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
         .get_used_gpu_memory(device_idx)
         .expect("Failed to get used GPU memory");
 
-    if mem_limit < u64::MAX {
-        let memory_ref = &mut *memory;
-        // Modify the memory info to reflect our limits
-        let new_total = mem_limit;
-        let new_used = used;
-        let new_free = new_total.saturating_sub(new_used);
+    let memory_ref = &mut *memory;
+    // Modify the memory info to reflect our limits
+    let new_total = mem_limit;
+    let new_used = used;
+    let new_free = if new_total > new_used {
+        new_total - new_used
+    } else {
+        0 // Ensure free memory is not negative
+    };
 
-        memory_ref.total = new_total;
-        memory_ref.used = new_used;
-        memory_ref.free = new_free;
-    }
+    memory_ref.total = new_total;
+    memory_ref.used = new_used;
+    memory_ref.free = new_free;
     NVML_SUCCESS
 }
 
