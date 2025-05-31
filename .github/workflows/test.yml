@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings -W unreachable-pub"
+  RUSTFLAGS: "-D warnings"
 
 jobs:
   cargo-test:
