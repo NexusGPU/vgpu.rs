@@ -84,7 +84,7 @@ fn main() -> Result<()> {
     for i in 0..device_count {
         let device = nvml.device_by_index(i)?;
         let memory_info = device.memory_info()?;
-        let uuid = device.uuid()?;
+        let uuid = device.uuid()?.to_lowercase();
         let name = device.name()?;
 
         tracing::info!("Found GPU {}: {} ({})", i, uuid, name);

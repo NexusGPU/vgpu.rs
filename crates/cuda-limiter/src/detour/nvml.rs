@@ -1,9 +1,10 @@
+use nvml_wrapper_sys::bindings::nvmlDevice_t;
 use tf_macro::hook_fn;
 use utils::{hooks::HookManager, replace_symbol};
 
 use crate::GLOBAL_LIMITER;
 
-use super::{NvmlDeviceT, NvmlReturnT, NVML_ERROR_UNKNOWN, NVML_SUCCESS};
+use super::{NvmlReturnT, NVML_SUCCESS};
 
 // NVML Memory Info structure
 #[repr(C)]
@@ -25,87 +26,74 @@ pub(crate) struct NvmlMemoryV2T {
 
 #[hook_fn]
 pub(crate) unsafe fn nvml_device_get_memory_info_detour(
-    device: NvmlDeviceT,
+    device: nvmlDevice_t,
     memory: *mut NvmlMemoryT,
 ) -> NvmlReturnT {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
-
-    match limiter.device_handle() {
-        Ok(device_handle) => {
-            if device_handle != device {
-                return FN_NVML_DEVICE_GET_MEMORY_INFO(device, memory);
-            }
-        }
-        Err(err) => {
-            tracing::error!("get device handle failed: {}", err);
-            return NVML_ERROR_UNKNOWN;
-        }
-    }
-
-    let mem_limit = limiter.get_mem_limit();
-    let used = match limiter.get_used_gpu_memory() {
-        Ok(used) => used,
-        Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            return NVML_ERROR_UNKNOWN;
-        }
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let device_idx = match limiter.device_idx_by_handle(device) {
+        Some(device_idx) => device_idx,
+        None => return FN_NVML_DEVICE_GET_MEMORY_INFO(device, memory),
     };
-    if mem_limit < u64::MAX {
-        let memory_ref = &mut *memory;
-        // Modify the memory info to reflect our limits
-        let new_total = mem_limit;
-        let new_used = used;
-        let new_free = new_total.saturating_sub(new_used);
-        memory_ref.total = new_total;
-        memory_ref.used = new_used;
-        memory_ref.free = new_free;
-    }
+    let mem_limit = limiter
+        .get_mem_limit(device_idx)
+        .expect("Failed to get memory limit");
+
+    let used = limiter
+        .get_used_gpu_memory(device_idx)
+        .expect("Failed to get used GPU memory");
+
+    let memory_ref = &mut *memory;
+    // Modify the memory info to reflect our limits
+    let new_total = mem_limit;
+    let new_used = used;
+
+    let new_free = if new_total > new_used {
+        new_total.saturating_sub(new_used)
+    } else {
+        0 // Ensure free memory is not negative
+    };
+
+    memory_ref.total = new_total;
+    memory_ref.used = new_used;
+    memory_ref.free = new_free;
     NVML_SUCCESS
 }
 
 #[hook_fn]
 pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
-    device: NvmlDeviceT,
+    device: nvmlDevice_t,
     memory: *mut NvmlMemoryV2T,
 ) -> NvmlReturnT {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
-
-    match limiter.device_handle() {
-        Ok(device_handle) => {
-            if device_handle != device {
-                return FN_NVML_DEVICE_GET_MEMORY_INFO_V2(device, memory);
-            }
-        }
-        Err(err) => {
-            tracing::error!("get device handle failed: {}", err);
-            return NVML_ERROR_UNKNOWN;
-        }
-    }
-
-    let mem_limit = limiter.get_mem_limit();
-    let used = match limiter.get_used_gpu_memory() {
-        Ok(used) => used,
-        Err(e) => {
-            tracing::warn!("Failed to get used GPU memory: {:?}", e);
-            return NVML_ERROR_UNKNOWN;
-        }
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let device_idx = match limiter.device_idx_by_handle(device) {
+        Some(device_idx) => device_idx,
+        None => return FN_NVML_DEVICE_GET_MEMORY_INFO_V2(device, memory),
     };
-    if mem_limit < u64::MAX {
-        let memory_ref = &mut *memory;
-        // Modify the memory info to reflect our limits
-        let new_total = mem_limit;
-        let new_used = used;
-        let new_free = new_total.saturating_sub(new_used);
+    let mem_limit = limiter
+        .get_mem_limit(device_idx)
+        .expect("Failed to get memory limit");
 
-        memory_ref.total = new_total;
-        memory_ref.used = new_used;
-        memory_ref.free = new_free;
-    }
+    let used = limiter
+        .get_used_gpu_memory(device_idx)
+        .expect("Failed to get used GPU memory");
+
+    let memory_ref = &mut *memory;
+    // Modify the memory info to reflect our limits
+    let new_total = mem_limit;
+    let new_used = used;
+    let new_free = if new_total > new_used {
+        new_total.saturating_sub(new_used)
+    } else {
+        0 // Ensure free memory is not negative
+    };
+
+    memory_ref.total = new_total;
+    memory_ref.used = new_used;
+    memory_ref.free = new_free;
     NVML_SUCCESS
 }
 
 pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
-    // Add hooks for NVML memory info functions
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),

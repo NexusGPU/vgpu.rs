@@ -10,4 +10,4 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-void set_limit(uint32_t gpu, uint64_t mem);
+void set_limit(uint32_t gpu, uint32_t up_limit, uint64_t mem_limit);

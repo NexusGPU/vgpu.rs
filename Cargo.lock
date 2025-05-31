@@ -362,6 +362,8 @@ dependencies = [
  "ctor",
  "cudarc",
  "nvml-wrapper",
+ "nvml-wrapper-sys",
+ "serde_json",
  "tf-macro",
  "thiserror 2.0.12",
  "tracing",
