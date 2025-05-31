@@ -171,7 +171,7 @@ jobs:
           target: x86_64-unknown-linux-gnu
 
       - name: Configure cache
-        uses: redstoneproject/rust-cache@master
+        uses: Swatinem/rust-cache@v2
 
 
       - name: Build for amd64
@@ -224,7 +224,7 @@ jobs:
           target: aarch64-unknown-linux-gnu
 
       - name: Configure cache
-        uses: redstoneproject/rust-cache@master
+        uses: Swatinem/rust-cache@v2
 
       - name: Install cross
         run: |
