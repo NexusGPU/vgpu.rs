@@ -88,7 +88,7 @@ jobs:
           shared-key: "build-${{ matrix.target }}"
 
       - name: Build cuda-limiter
-        run: VERSION={{ needs.release.outputs.version }} cargo build -p cuda-limiter --release --target ${{ matrix.target }}
+        run: VERSION=${{ needs.release.outputs.version }} cargo build -p cuda-limiter --release --target ${{ matrix.target }}
 
       - name: Upload cuda-limiter artifact
         uses: actions/upload-artifact@v4
@@ -97,7 +97,7 @@ jobs:
           path: target/${{ matrix.target }}/release/libcuda_limiter.so
 
       - name: Build add-path
-        run: VERSION={{ needs.release.outputs.version }} cargo build -p add-path --release --target ${{ matrix.target }}
+        run: VERSION=${{ needs.release.outputs.version }} cargo build -p add-path --release --target ${{ matrix.target }}
 
       - name: Upload add-path artifact
         uses: actions/upload-artifact@v4
@@ -175,7 +175,7 @@ jobs:
 
 
       - name: Build for amd64
-        run: VERSION={{ needs.release.outputs.version }} cargo build -p tensor-fusion-hypervisor --release --target x86_64-unknown-linux-gnu
+        run: VERSION=${{ needs.release.outputs.version }} cargo build -p tensor-fusion-hypervisor --release --target x86_64-unknown-linux-gnu
       
       - id: meta
         uses: docker/metadata-action@v5
@@ -235,7 +235,7 @@ jobs:
           fi
 
       - name: Build for arm64
-        run: VERSION={{ needs.release.outputs.version }} cross build -p tensor-fusion-hypervisor --release --target aarch64-unknown-linux-gnu
+        run: VERSION=${{ needs.release.outputs.version }} cross build -p tensor-fusion-hypervisor --release --target aarch64-unknown-linux-gnu
 
       - id: meta
         uses: docker/metadata-action@v5
