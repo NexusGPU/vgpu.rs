@@ -1,11 +1,18 @@
-use cudarc::driver::{sys::CUdevice_attribute, CudaContext, DriverError};
-use nvml_wrapper::{enums::device::UsedGpuMemory, error::NvmlError, Nvml};
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::thread::sleep;
+use std::time::Duration;
+use std::time::SystemTime;
+
+use cudarc::driver::sys::CUdevice_attribute;
+use cudarc::driver::CudaContext;
+use cudarc::driver::DriverError;
+use nvml_wrapper::enums::device::UsedGpuMemory;
+use nvml_wrapper::error::NvmlError;
+use nvml_wrapper::Nvml;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
-use std::{
-    sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
-    thread::sleep,
-    time::{Duration, SystemTime},
-};
 use thiserror::Error;
 use trap::TrapError;
 
@@ -584,16 +591,15 @@ pub(crate) fn unix_as_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi;
+    use std::path;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
     use super::*;
-    use std::{
-        ffi, path,
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        },
-        thread,
-        time::Duration,
-    };
 
     #[test]
     fn test_rate_limiter() {

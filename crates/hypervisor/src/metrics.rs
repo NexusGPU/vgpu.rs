@@ -1,9 +1,9 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::RwLock;
 
-use crate::{config::GPU_CAPACITY_MAP, gpu_observer::GpuObserver};
+use crate::config::GPU_CAPACITY_MAP;
+use crate::gpu_observer::GpuObserver;
 
 #[derive(Default)]
 struct AccumulatedGpuMetrics {

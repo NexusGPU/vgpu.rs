@@ -1,13 +1,28 @@
-use crate::{Trap, TrapAction, TrapError, TrapFrame, TrapHandler};
-use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcReceiverSet, IpcSender};
-use signal_hook::consts::signal::SIGUSR1;
-use signal_hook::iterator::Signals;
 use std::collections::HashMap;
+use std::fs;
 use std::io::Error as IoError;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
-use std::{fs, thread, time::Duration};
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+
+use ipc_channel::ipc::IpcOneShotServer;
+use ipc_channel::ipc::IpcReceiver;
+use ipc_channel::ipc::IpcReceiverSet;
+use ipc_channel::ipc::IpcSender;
+use ipc_channel::ipc::{self};
+use signal_hook::consts::signal::SIGUSR1;
+use signal_hook::iterator::Signals;
+
+use crate::Trap;
+use crate::TrapAction;
+use crate::TrapError;
+use crate::TrapFrame;
+use crate::TrapHandler;
 
 /// Represents a pending trap request waiting for a response
 #[derive(Debug)]

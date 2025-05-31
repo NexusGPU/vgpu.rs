@@ -1,16 +1,26 @@
-use std::ffi::{c_uint, c_ulonglong};
+use std::ffi::c_uint;
+use std::ffi::c_ulonglong;
 
 use cudarc::driver::sys::CUresult;
 use tf_macro::hook_fn;
-use trap::{Trap, TrapFrame};
-use utils::{hooks::HookManager, replace_symbol};
+use trap::Trap;
+use trap::TrapFrame;
+use utils::hooks::HookManager;
+use utils::replace_symbol;
 
-use crate::{detour::round_up, global_trap, limiter::Error, with_device, GLOBAL_LIMITER};
-
-use super::{
-    CUarray, CUdevice, CUdeviceptr, CUdeviceptrV1, CUmipmappedArray, CuarrayFormatEnum,
-    CudaArray3dDescriptor, CudaArrayDescriptor,
-};
+use super::CUarray;
+use super::CUdevice;
+use super::CUdeviceptr;
+use super::CUdeviceptrV1;
+use super::CUmipmappedArray;
+use super::CuarrayFormatEnum;
+use super::CudaArray3dDescriptor;
+use super::CudaArrayDescriptor;
+use crate::detour::round_up;
+use crate::global_trap;
+use crate::limiter::Error;
+use crate::with_device;
+use crate::GLOBAL_LIMITER;
 
 /// macro: check memory allocation and execute allocation
 ///
@@ -49,9 +59,7 @@ macro_rules! check_and_alloc {
 
 // Helper function for allocation with retry logic
 unsafe fn cuda_alloc_with_retry<F>(request_size: u64, alloc_fn: F) -> CUresult
-where
-    F: Fn() -> CUresult,
-{
+where F: Fn() -> CUresult {
     loop {
         let result = alloc_fn();
         match result {

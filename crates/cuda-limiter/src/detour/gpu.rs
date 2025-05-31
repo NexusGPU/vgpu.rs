@@ -1,14 +1,18 @@
-use std::{
-    ffi::{c_int, c_uint, c_void},
-    time::Duration,
-};
+use std::ffi::c_int;
+use std::ffi::c_uint;
+use std::ffi::c_void;
+use std::time::Duration;
 
-use crate::{with_device, GLOBAL_LIMITER};
-use cudarc::driver::sys::{cuDeviceGetCount, CUresult};
+use cudarc::driver::sys::cuDeviceGetCount;
+use cudarc::driver::sys::CUresult;
 use tf_macro::hook_fn;
-use utils::{hooks::HookManager, replace_symbol};
+use utils::hooks::HookManager;
+use utils::replace_symbol;
 
-use super::{CUfunction, CUstream};
+use super::CUfunction;
+use super::CUstream;
+use crate::with_device;
+use crate::GLOBAL_LIMITER;
 
 #[hook_fn]
 pub(crate) unsafe extern "C" fn cu_launch_kernel_ptsz_detour(

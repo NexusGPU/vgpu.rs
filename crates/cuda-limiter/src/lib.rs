@@ -1,16 +1,22 @@
-use ctor::ctor;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ffi::c_char;
+use std::ffi::c_int;
+use std::ffi::c_void;
+use std::ffi::CStr;
+use std::ffi::{self};
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
-use limiter::{DeviceConfig, Limiter};
+use ctor::ctor;
+use limiter::DeviceConfig;
+use limiter::Limiter;
 use nvml_wrapper::Nvml;
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    ffi::{self, c_char, c_int, c_void, CStr},
-    sync::{Mutex, OnceLock},
-};
 use tf_macro::hook_fn;
 use trap::ipc::IpcTrap;
-use utils::{hooks::HookManager, logging, replace_symbol};
+use utils::hooks::HookManager;
+use utils::logging;
+use utils::replace_symbol;
 
 mod detour;
 mod limiter;

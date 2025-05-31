@@ -1,10 +1,14 @@
 use std::collections::HashMap;
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::sync::RwLock;
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+use std::time::SystemTime;
 
 use anyhow::Result;
-use nvml_wrapper::enum_wrappers::device::{PcieUtilCounter, TemperatureSensor};
+use nvml_wrapper::enum_wrappers::device::PcieUtilCounter;
+use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::Nvml;
 
@@ -93,20 +97,15 @@ impl GpuObserver {
 
             for process_info in running_compute_processes {
                 if let UsedGpuMemory::Used(used) = process_info.used_gpu_memory {
-                    process_metrics.insert(
-                        process_info.pid,
-                        GpuResources {
-                            memory_bytes: used,
-                            compute_percentage: match utilizations.get(&process_info.pid) {
-                                Some(utilization) => {
-                                    utilization.sm_util
-                                        + utilization.enc_util
-                                        + utilization.dec_util
-                                }
-                                None => 0,
-                            },
+                    process_metrics.insert(process_info.pid, GpuResources {
+                        memory_bytes: used,
+                        compute_percentage: match utilizations.get(&process_info.pid) {
+                            Some(utilization) => {
+                                utilization.sm_util + utilization.enc_util + utilization.dec_util
+                            }
+                            None => 0,
                         },
-                    );
+                    });
                 }
             }
 
@@ -121,18 +120,15 @@ impl GpuObserver {
             // Get GPU utilization info
             let utilization = device.utilization_rates()?;
 
-            gpu_metrics.insert(
-                gpu_uuid.clone(),
-                GpuMetrics {
-                    rx,
-                    tx,
-                    temperature,
-                    resources: GpuResources {
-                        memory_bytes: memory_info.used,
-                        compute_percentage: utilization.gpu,
-                    },
+            gpu_metrics.insert(gpu_uuid.clone(), GpuMetrics {
+                rx,
+                tx,
+                temperature,
+                resources: GpuResources {
+                    memory_bytes: memory_info.used,
+                    compute_percentage: utilization.gpu,
                 },
-            );
+            });
             gpu_process_metrics.insert(gpu_uuid, process_metrics);
         }
 
