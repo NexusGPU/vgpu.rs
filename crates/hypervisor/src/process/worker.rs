@@ -1,13 +1,19 @@
-use anyhow::Result;
-use std::io::{Read, Write};
+use std::io::Read;
+use std::io::Write;
 use std::mem::MaybeUninit;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::{os::unix::net::UnixStream, sync::RwLock};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::RwLock;
 
+use anyhow::Result;
+
+use super::GpuProcess;
+use super::GpuResources;
+use super::ProcessState;
+use super::QosLevel;
 use crate::gpu_observer::GpuObserver;
-
-use super::{GpuProcess, GpuResources, ProcessState, QosLevel};
 
 #[allow(dead_code)]
 #[repr(u32)]

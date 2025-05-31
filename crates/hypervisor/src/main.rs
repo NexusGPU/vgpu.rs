@@ -7,20 +7,21 @@ mod process;
 mod scheduler;
 mod worker_watcher;
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::RwLock;
+use std::thread;
+use std::time::Duration;
+
 use anyhow::Result;
-use clap::{command, Parser};
+use clap::command;
+use clap::Parser;
 use gpu_observer::GpuObserver;
 use hypervisor::Hypervisor;
 use nvml_wrapper::Nvml;
 use process::GpuResources;
 use scheduler::weighted::WeightedScheduler;
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::{Arc, RwLock},
-    thread,
-    time::Duration,
-};
 use utils::version;
 use worker_watcher::WorkerWatcher;
 
@@ -91,13 +92,10 @@ fn main() -> Result<()> {
         // Store GPU name and UUID mapping for config lookup
         gpu_uuid_to_name_map.insert(uuid.clone(), name);
 
-        gpu_limits.insert(
-            uuid,
-            GpuResources {
-                memory_bytes: memory_info.total,
-                compute_percentage: 100,
-            },
-        );
+        gpu_limits.insert(uuid, GpuResources {
+            memory_bytes: memory_info.total,
+            compute_percentage: 100,
+        });
     }
 
     // Load GPU information from config file

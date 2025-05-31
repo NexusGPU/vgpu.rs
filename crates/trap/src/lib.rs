@@ -3,7 +3,8 @@ pub mod ipc;
 use std::sync::Arc;
 
 use ipc_channel::ipc::IpcSender;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error; // Use alias to avoid potential confusion
 
 /// TrapFrame: context of a trap
@@ -40,8 +41,7 @@ pub trait TrapHandler {
 }
 
 impl<T> TrapHandler for Arc<T>
-where
-    T: TrapHandler,
+where T: TrapHandler
 {
     fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Waker) {
         (**self).handle_trap(pid, trap_id, frame, waker);

@@ -1,12 +1,12 @@
-use std::{
-    marker::PhantomData,
-    sync::{Arc, Mutex},
-    thread,
-    time::Duration,
-};
+use std::marker::PhantomData;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 use crate::process::GpuProcess;
-use crate::scheduler::{GpuScheduler, SchedulingDecision};
+use crate::scheduler::GpuScheduler;
+use crate::scheduler::SchedulingDecision;
 
 pub(crate) struct Hypervisor<Proc: GpuProcess, Sched: GpuScheduler<Proc>> {
     scheduler: Arc<Mutex<Sched>>,

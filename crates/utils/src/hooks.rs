@@ -1,10 +1,15 @@
+use std::ffi::c_void;
+use std::ops::Deref;
+use std::sync::LazyLock;
+use std::sync::OnceLock;
+
+use frida_gum::interceptor::Interceptor;
+use frida_gum::Gum;
+use frida_gum::Module;
+use frida_gum::ModuleMap;
+use frida_gum::NativePointer;
+
 use crate::Error;
-use frida_gum::{interceptor::Interceptor, Gum, Module, ModuleMap, NativePointer};
-use std::{
-    ffi::c_void,
-    ops::Deref,
-    sync::{LazyLock, OnceLock},
-};
 
 static GUM: LazyLock<Gum> = LazyLock::new(Gum::obtain);
 

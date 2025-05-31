@@ -1,10 +1,11 @@
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
 use tf_macro::hook_fn;
-use utils::{hooks::HookManager, replace_symbol};
+use utils::hooks::HookManager;
+use utils::replace_symbol;
 
+use super::NvmlReturnT;
+use super::NVML_SUCCESS;
 use crate::GLOBAL_LIMITER;
-
-use super::{NvmlReturnT, NVML_SUCCESS};
 
 // NVML Memory Info structure
 #[repr(C)]

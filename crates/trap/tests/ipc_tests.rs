@@ -1,19 +1,24 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 
 use ipc_channel::ipc;
-
 use trap::ipc::IpcTrap;
-use trap::{Trap, TrapAction, TrapFrame, TrapHandler, Waker};
+use trap::Trap;
+use trap::TrapAction;
+use trap::TrapFrame;
+use trap::TrapHandler;
+use trap::Waker;
 
 /// A test handler that tracks received frames and provides configurable responses
 struct TestTrapHandler {
     // Track received frames for verification
     received_frames: Mutex<HashMap<u32, TrapFrame>>,
     // Store responses for each PID
-    responses: Mutex<HashMap<u32, String>>, // Store message string for Fatal responses or empty for Resume
+    responses: Mutex<HashMap<u32, String>>, /* Store message string for Fatal responses or empty for Resume */
     // Flag to signal when the handler should exit
     should_exit: Arc<AtomicBool>,
     // Count of processed traps

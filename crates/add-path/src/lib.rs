@@ -1,5 +1,6 @@
-use ctor::ctor;
 use std::env;
+
+use ctor::ctor;
 
 fn set_env_var(env_var: &str, tf_var: &str) {
     if let Ok(tf_value) = env::var(tf_var) {
@@ -31,8 +32,9 @@ unsafe fn entry_point() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::env;
+
+    use super::*;
 
     #[test]
     fn test_set_env_var_if_not_exists_adds_new_var() {

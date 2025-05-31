@@ -1,13 +1,13 @@
-use std::{
-    collections::{HashMap, HashSet},
-    ops::{Deref, DerefMut},
-};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::ops::Deref;
+use std::ops::DerefMut;
 
-use crate::process::GpuProcess;
 use priority_queue::PriorityQueue;
 use trap::{self};
 
 use super::GpuScheduler;
+use crate::process::GpuProcess;
 
 struct Trap {
     pub frame: trap::TrapFrame,
@@ -370,10 +370,11 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
 
 #[cfg(test)]
 mod tests {
+    use ipc_channel::ipc;
+
     use super::*;
     use crate::process::tests::MockGpuProcess;
     use crate::scheduler::SchedulingDecision;
-    use ipc_channel::ipc;
 
     fn create_test_waker() -> trap::Waker {
         let (sender, _receiver) = ipc::channel().unwrap();

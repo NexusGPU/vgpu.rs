@@ -1,13 +1,25 @@
+use std::collections::HashMap;
+use std::fs;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::RwLock;
+use std::thread;
+use std::time::Duration;
+
+use notify::Error;
+use notify::Event;
+use notify::Watcher;
+
 use crate::gpu_observer::GpuObserver;
 use crate::process::worker::TensorFusionWorker;
-use crate::process::{GpuResources, QosLevel};
-use notify::{Error, Event, Watcher};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
-use std::{fs, io, thread};
+use crate::process::GpuResources;
+use crate::process::QosLevel;
 
 pub(crate) struct WorkerWatcher<AddCB, RemoveCB> {
     rx: Mutex<Receiver<Result<Event, Error>>>,
@@ -242,8 +254,9 @@ fn read_process_env_vars(pid: u32) -> Result<HashMap<String, String>, io::Error>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::PathBuf;
+
+    use super::*;
 
     #[test]
     fn test_extract_pid_worker_name_from_path() {
