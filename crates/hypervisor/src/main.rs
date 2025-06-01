@@ -180,8 +180,10 @@ fn main() -> Result<()> {
                 },
                 {
                     let hypervisor = hypervisor.clone();
+                    let trap_server = trap_server.clone();
                     move |pid| {
                         hypervisor.remove_process(pid);
+                        trap_server.remove_client(pid);
                     }
                 },
                 worker_pid_mapping.clone(),

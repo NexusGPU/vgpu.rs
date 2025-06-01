@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::Error as IoError;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -10,13 +10,11 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
+use ipc_channel::ipc;
 use ipc_channel::ipc::IpcOneShotServer;
 use ipc_channel::ipc::IpcReceiver;
 use ipc_channel::ipc::IpcReceiverSet;
 use ipc_channel::ipc::IpcSender;
-use ipc_channel::ipc::{self};
-use signal_hook::consts::signal::SIGUSR1;
-use signal_hook::iterator::Signals;
 
 use crate::Trap;
 use crate::TrapAction;
@@ -37,7 +35,7 @@ type PendingTrapPair = Arc<(Mutex<PendingTrap>, Condvar)>;
 type PendingTrapsMap = HashMap<u64, PendingTrapPair>;
 
 /// IpcTrap: IPC implementation of Trap (client side, sends TrapFrame and waits for TrapAction)
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct IpcTrap {
     sender: IpcSender<(u64, TrapFrame)>,
     pending_traps: Arc<Mutex<PendingTrapsMap>>,
@@ -89,7 +87,7 @@ impl IpcTrap {
     /// This method waits for a SIGUSR1 signal or the server name file to appear, with a timeout.
     pub fn connect<P: AsRef<Path>>(path: P) -> Result<Self, crate::TrapError> {
         // Get our process ID
-        let pid = unsafe { libc::getpid() } as u32;
+        let pid = std::process::id();
 
         // Construct the expected filename where the server name is stored
         let filename = path.as_ref().join(format!("trap_server_{}.addr", pid));
@@ -98,28 +96,12 @@ impl IpcTrap {
         let poll_interval = Duration::from_millis(300); // How often to check if no signal
 
         if !filename.exists() {
-            // Register a signal handler for SIGUSR1.
-            // The `Signals` instance handles registration and unregistration on drop.
-            let mut signals = Signals::new([SIGUSR1]).map_err(TrapError::Io)?;
-
             loop {
-                // Priority 1: Check if file exists
+                //  Check if file exists
                 if filename.exists() {
                     break;
                 }
-
-                // Priority 3: Check for pending signals (non-blocking)
-                let mut signal_received_this_iteration = false;
-                if let Some(_signal) = signals.pending().next() {
-                    // SIGUSR1 received, loop will immediately check filename.exists()
-                    signal_received_this_iteration = true;
-                }
-
-                // If no signal was pending and file still doesn't exist, sleep.
-                if !signal_received_this_iteration {
-                    thread::sleep(poll_interval);
-                }
-                // If a signal was received, we loop immediately to re-check filename.
+                thread::sleep(poll_interval);
             }
         }
 
@@ -188,9 +170,27 @@ impl Trap for IpcTrap {
     }
 }
 
+#[derive(Debug)]
 struct Client {
     sender: IpcSender<(u64, TrapAction)>,
     pid: u32,
+}
+
+#[derive(Debug)]
+struct AddressFileGuard {
+    ipc_path: PathBuf,
+    pid: u32,
+}
+
+impl Drop for AddressFileGuard {
+    fn drop(&mut self) {
+        let filename = self.ipc_path.join(format!("trap_server_{}.addr", self.pid));
+        if filename.exists() {
+            if let Err(e) = fs::remove_file(&filename) {
+                tracing::warn!("Failed to remove IPC addr file for PID {}: {}", self.pid, e);
+            }
+        }
+    }
 }
 
 /// IpcTrapServer: IPC implementation of TrapHandler (server side, receives TrapFrame, processes and returns TrapAction)
@@ -199,6 +199,7 @@ pub struct IpcTrapServer<H: TrapHandler + Send + Sync + 'static> {
     // ReceiverId -> Client
     clients: Mutex<HashMap<u64, Client>>,
     ipc_receiver_set: Mutex<IpcReceiverSet>,
+    addr_guards: Mutex<Vec<AddressFileGuard>>,
 }
 
 impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
@@ -210,46 +211,80 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
             handler,
             clients: Mutex::new(HashMap::new()),
             ipc_receiver_set: ipc_receiver_set.into(),
+            addr_guards: Mutex::new(Vec::new()),
         })
     }
 
     /// Wait for a client with the specified PID to connect
     pub fn wait_client<P: AsRef<Path>>(&self, path: P, pid: u32) -> Result<(), TrapError> {
         // Create a one-shot server that will receive the initial connection
-        let (server, server_name) = IpcOneShotServer::new()?;
+        let (server, server_name) =
+            IpcOneShotServer::<(IpcSender<(u64, TrapAction)>, IpcReceiver<(u64, TrapFrame)>)>::new(
+            )?;
+
+        // Write the server_name to the file before accepting connections
+        let filename = path.as_ref().join(format!("trap_server_{}.addr", pid));
+        fs::write(&filename, server_name)?;
+        let addr_guard = AddressFileGuard {
+            ipc_path: path.as_ref().to_path_buf(),
+            pid,
+        };
+        self.addr_guards.lock().expect("poisoning").push(addr_guard);
 
         // Wait for the client to connect and send its channels
-        let (receiver, sender) = server.accept()?;
+        let (_, channel_pair) = server.accept()?;
+        // extract the two channels
+        let (action_sender, frame_receiver) = channel_pair;
 
         // Add the frame receiver to our receiver set
         let receiver_id = self
             .ipc_receiver_set
             .lock()
             .expect("poisoning")
-            .add(receiver)?;
+            .add(frame_receiver)?;
 
-        // Store the client information
-        let client = Client { sender, pid };
+        // Create a new client entry
+        let client = Client {
+            sender: action_sender,
+            pid,
+        };
 
         self.clients
             .lock()
             .expect("poisoned")
             .insert(receiver_id, client);
 
-        let filename = path.as_ref().join(format!("trap_server_{}.addr", pid));
-        if let Ok(mut file) = fs::File::create(&filename) {
-            use std::io::Write;
-            let _ = file.write_all(server_name.as_bytes());
-        }
+        Ok(())
+    }
 
-        // Send a signal to notify the process that the server name is available
-        // Using libc kill function to send SIGUSR1 (signal 10)
-        unsafe {
-            let ret = libc::kill(pid as libc::pid_t, libc::SIGUSR1);
-            if ret == -1 {
-                Err(TrapError::Io(IoError::last_os_error()))
-            } else {
-                Ok(())
+    /// Remove a client by PID
+    /// This will remove the client from internal tracking and trigger the Drop implementation
+    /// which will clean up associated resources like the addr file
+    pub fn remove_client(&self, pid: u32) {
+        self.addr_guards
+            .lock()
+            .expect("poisoning")
+            .retain(|guard| guard.pid != pid);
+
+        let receiver_id = {
+            let clients_lock = self.clients.lock().expect("poisoned");
+            clients_lock
+                .iter()
+                .find(|(_, client)| client.pid == pid)
+                .map(|(id, _)| *id)
+        };
+
+        if let Some(id) = receiver_id {
+            let removed = {
+                let mut clients_lock = self.clients.lock().expect("poisoned");
+                clients_lock.remove(&id).is_some()
+            };
+
+            // The receiver will be automatically removed from the set when the channel is closed
+            // We don't need to explicitly remove it as IpcReceiverSet doesn't provide a removal method
+            // It will detect closed channels in the next select() call
+            if removed {
+                tracing::debug!("Removed client with PID {}", pid);
             }
         }
     }
