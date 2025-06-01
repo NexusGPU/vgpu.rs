@@ -1,7 +1,7 @@
 //! provides logging helpers
 
 use std::collections::HashMap;
-use std::fmt::{self};
+use std::fmt;
 use std::path::Path;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -12,8 +12,8 @@ use tracing::Event;
 use tracing::Subscriber;
 use tracing_appender::rolling::RollingFileAppender;
 use tracing_appender::rolling::Rotation;
+use tracing_subscriber::filter;
 use tracing_subscriber::filter::FilterExt;
-use tracing_subscriber::filter::{self};
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::fmt::FormatEvent;
 use tracing_subscriber::prelude::*;

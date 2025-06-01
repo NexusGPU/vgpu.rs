@@ -4,9 +4,12 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
+use std::time;
 
 use ipc_channel::ipc;
+use tempfile;
 use trap::ipc::IpcTrap;
+use trap::ipc::IpcTrapServer;
 use trap::Trap;
 use trap::TrapAction;
 use trap::TrapFrame;
@@ -407,7 +410,7 @@ fn test_ipc_trap_error_handling() -> Result<(), Box<dyn std::error::Error + Send
         assert!(handler.should_exit.load(Ordering::SeqCst));
 
         // Verify we got the expected response with a timeout to prevent hanging
-        match good_receiver.try_recv_timeout(std::time::Duration::from_millis(500)) {
+        match good_receiver.try_recv_timeout(time::Duration::from_millis(500)) {
             Ok(response) => {
                 assert!(matches!(response, (1, TrapAction::Resume)));
             }
@@ -418,4 +421,49 @@ fn test_ipc_trap_error_handling() -> Result<(), Box<dyn std::error::Error + Send
     }
 
     Ok(())
+}
+
+#[test]
+fn test_wait_client_creates_addr_file_and_accepts() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().to_path_buf();
+    let server = Arc::new(IpcTrapServer::new(TestTrapHandler::new()).unwrap());
+
+    // fork child process
+    unsafe {
+        let pid = libc::fork();
+        assert!(pid >= 0, "Fork failed");
+
+        if pid == 0 {
+            // child process
+            let child_pid = std::process::id();
+            let addr_file = path.join(format!("trap_server_{}.addr", child_pid));
+            // wait for addr file
+            let mut attempts = 0;
+            while !addr_file.exists() && attempts < 50 {
+                thread::sleep(time::Duration::from_millis(100));
+                attempts += 1;
+            }
+            assert!(addr_file.exists(), "Address file should exist");
+            // try to connect
+            match trap::ipc::IpcTrap::connect(&path) {
+                Ok(_trap) => {
+                    std::process::exit(0);
+                }
+                Err(_) => {
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            let child_pid = pid as u32;
+            server.wait_client(&path, child_pid).unwrap();
+            // wait for child process to finish
+            let mut status = 0;
+            let wait_result = libc::waitpid(pid, &mut status, 0);
+            assert!(wait_result > 0, "Failed to wait for child process");
+
+            // check if child process exited successfully
+            assert_eq!(status, 0, "Child process failed");
+        }
+    }
 }

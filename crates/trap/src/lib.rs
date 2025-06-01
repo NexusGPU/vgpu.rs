@@ -27,6 +27,8 @@ pub enum TrapError {
     IpcRecv(#[from] ipc_channel::ipc::IpcError),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Invalid IPC message format")]
+    InvalidIpcMessage,
 }
 
 pub trait Trap {
