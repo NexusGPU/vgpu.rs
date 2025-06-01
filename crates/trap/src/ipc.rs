@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -34,7 +35,7 @@ type PendingTrapPair = Arc<(Mutex<PendingTrap>, Condvar)>;
 type PendingTrapsMap = HashMap<u64, PendingTrapPair>;
 
 /// IpcTrap: IPC implementation of Trap (client side, sends TrapFrame and waits for TrapAction)
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct IpcTrap {
     sender: IpcSender<(u64, TrapFrame)>,
     pending_traps: Arc<Mutex<PendingTrapsMap>>,
@@ -169,9 +170,27 @@ impl Trap for IpcTrap {
     }
 }
 
+#[derive(Debug)]
 struct Client {
     sender: IpcSender<(u64, TrapAction)>,
     pid: u32,
+}
+
+#[derive(Debug)]
+struct AddressFileGuard {
+    ipc_path: PathBuf,
+    pid: u32,
+}
+
+impl Drop for AddressFileGuard {
+    fn drop(&mut self) {
+        let filename = self.ipc_path.join(format!("trap_server_{}.addr", self.pid));
+        if filename.exists() {
+            if let Err(e) = fs::remove_file(&filename) {
+                tracing::warn!("Failed to remove IPC addr file for PID {}: {}", self.pid, e);
+            }
+        }
+    }
 }
 
 /// IpcTrapServer: IPC implementation of TrapHandler (server side, receives TrapFrame, processes and returns TrapAction)
@@ -180,6 +199,7 @@ pub struct IpcTrapServer<H: TrapHandler + Send + Sync + 'static> {
     // ReceiverId -> Client
     clients: Mutex<HashMap<u64, Client>>,
     ipc_receiver_set: Mutex<IpcReceiverSet>,
+    addr_guards: Mutex<Vec<AddressFileGuard>>,
 }
 
 impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
@@ -191,6 +211,7 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
             handler,
             clients: Mutex::new(HashMap::new()),
             ipc_receiver_set: ipc_receiver_set.into(),
+            addr_guards: Mutex::new(Vec::new()),
         })
     }
 
@@ -204,9 +225,14 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
         // Write the server_name to the file before accepting connections
         let filename = path.as_ref().join(format!("trap_server_{}.addr", pid));
         fs::write(&filename, server_name)?;
+        let addr_guard = AddressFileGuard {
+            ipc_path: path.as_ref().to_path_buf(),
+            pid,
+        };
+        self.addr_guards.lock().expect("poisoning").push(addr_guard);
 
         // Wait for the client to connect and send its channels
-        let (_receiver, channel_pair) = server.accept()?;
+        let (_, channel_pair) = server.accept()?;
         // extract the two channels
         let (action_sender, frame_receiver) = channel_pair;
 
@@ -229,6 +255,39 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
             .insert(receiver_id, client);
 
         Ok(())
+    }
+
+    /// Remove a client by PID
+    /// This will remove the client from internal tracking and trigger the Drop implementation
+    /// which will clean up associated resources like the addr file
+    pub fn remove_client(&self, pid: u32) {
+        self.addr_guards
+            .lock()
+            .expect("poisoning")
+            .retain(|guard| guard.pid != pid);
+
+        let receiver_id = {
+            let clients_lock = self.clients.lock().expect("poisoned");
+            clients_lock
+                .iter()
+                .find(|(_, client)| client.pid == pid)
+                .map(|(id, _)| *id)
+        };
+
+        if let Some(id) = receiver_id {
+            let removed = {
+                let mut clients_lock = self.clients.lock().expect("poisoned");
+                clients_lock.remove(&id).is_some()
+            };
+
+            // The receiver will be automatically removed from the set when the channel is closed
+            // We don't need to explicitly remove it as IpcReceiverSet doesn't provide a removal method
+            // It will detect closed channels in the next select() call
+            if removed {
+                tracing::debug!("Removed client with PID {}", pid);
+                return;
+            }
+        }
     }
 
     pub fn run(&self) -> Result<(), crate::TrapError> {

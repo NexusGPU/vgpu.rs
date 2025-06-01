@@ -424,6 +424,50 @@ fn test_ipc_trap_error_handling() -> Result<(), Box<dyn std::error::Error + Send
 }
 
 #[test]
+fn test_cleanup_resources_without_client() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().to_path_buf();
+    let server = Arc::new(IpcTrapServer::new(TestTrapHandler::new()).unwrap());
+
+    // use a fake pid
+    let fake_pid = 12345;
+
+    thread::spawn({
+        let path = path.clone();
+        let server = server.clone();
+        move || {
+            // call wait_client
+            server.wait_client(&path, fake_pid).unwrap();
+        }
+    });
+
+    let file = path.join(format!("trap_server_{}.addr", fake_pid));
+    loop {
+        if file.exists() {
+            break;
+        }
+        thread::sleep(time::Duration::from_millis(100));
+    }
+    // check addr file is created
+    assert!(
+        file.exists(),
+        "Address file should be created after wait_client"
+    );
+
+    // immediately call remove_client
+    server.remove_client(fake_pid);
+
+    // wait for a short time to let Drop implement cleanup
+    thread::sleep(time::Duration::from_millis(100));
+
+    // check addr file is cleaned up
+    assert!(
+        !file.exists(),
+        "Address file should be cleaned up after remove_client"
+    );
+}
+
+#[test]
 fn test_wait_client_creates_addr_file_and_accepts() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = temp_dir.path().to_path_buf();
