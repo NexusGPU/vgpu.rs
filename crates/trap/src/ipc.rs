@@ -285,7 +285,6 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
             // It will detect closed channels in the next select() call
             if removed {
                 tracing::debug!("Removed client with PID {}", pid);
-                return;
             }
         }
     }

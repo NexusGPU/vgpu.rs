@@ -4,7 +4,6 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 
 use priority_queue::PriorityQueue;
-use trap;
 
 use super::GpuScheduler;
 use crate::process::GpuProcess;

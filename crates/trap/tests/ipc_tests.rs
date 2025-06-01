@@ -7,7 +7,6 @@ use std::thread;
 use std::time;
 
 use ipc_channel::ipc;
-use tempfile;
 use trap::ipc::IpcTrap;
 use trap::ipc::IpcTrapServer;
 use trap::Trap;
