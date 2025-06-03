@@ -85,11 +85,12 @@ where F: Fn() -> CUresult {
                         );
                         continue;
                     }
-                    Err(_) => {
+                    Err(e) => {
                         // Wait failed or interrupted
                         tracing::warn!(
-                            "OOM trap wait failed or interrupted for request size {}.",
-                            request_size
+                            "OOM trap wait failed or interrupted for request size {}, err: {}.",
+                            request_size,
+                            e
                         );
                         return CUresult::CUDA_ERROR_OUT_OF_MEMORY;
                     }

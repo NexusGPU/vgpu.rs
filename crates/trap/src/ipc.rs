@@ -124,14 +124,6 @@ impl IpcTrap {
         // Return a new IpcTrap with our side of the channels
         Ok(Self::new(frame_sender, action_receiver))
     }
-
-    pub fn dummy() -> Self {
-        let (frame_sender, _): (IpcSender<(u64, TrapFrame)>, _) =
-            ipc::channel().expect("poisoning");
-        let (_, action_receiver): (_, IpcReceiver<(u64, TrapAction)>) =
-            ipc::channel().expect("poisoning");
-        Self::new(frame_sender, action_receiver)
-    }
 }
 
 impl Trap for IpcTrap {
@@ -169,6 +161,8 @@ impl Trap for IpcTrap {
         Ok(pending.action.take().expect("poisoning"))
     }
 }
+
+
 
 #[derive(Debug)]
 struct Client {
