@@ -12,12 +12,10 @@ vgpu.rs is the fractional GPU & vgpu-hypervisor implementation written in Rust
 
 You can download the latest release binaries from the
 [GitHub Releases page](https://github.com/NexusGPU/vgpu.rs/releases). Use the
-following command to automatically download the appropriate version for your
-platform:
+following command to automatically download the appropriate version
 
 ```bash
 # Download and extract the latest release
-# First determine the architecture
 ARCH=$(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/')
 
 # Download the libraries
@@ -131,6 +129,10 @@ with specific responsibilities:
   CUDA API calls to enforce resource limits. Built as a
   `cdylib` that can be preloaded into CUDA applications to control their
   resource usage.
+  
+  > **Implementation Reference**: The cuda-limiter module's design and implementation is based on research from
+  > [GaiaGPU: Sharing GPUs in Container Clouds](https://ieeexplore.ieee.org/document/8672318). This paper introduces
+  > innovative techniques for GPU resource management and isolation in container environments.
 
 - [**add-path**](crates/add-path): A utility library that modifies environment
   variables like `PATH`, `LD_PRELOAD`, and `LD_LIBRARY_PATH` to ensure proper
