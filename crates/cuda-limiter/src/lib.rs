@@ -100,17 +100,27 @@ unsafe fn entry_point() {
     let mem_limit_json =
         std::env::var("TENSOR_FUSION_CUDA_MEM_LIMIT").unwrap_or_else(|_| "{}".to_string());
 
-    // Parse JSON objects
-    let up_limit_map: HashMap<String, u32> = match serde_json::from_str(&up_limit_json) {
-        Ok(map) => map,
+    // Parse JSON objects and convert keys to lowercase
+    let up_limit_map = match serde_json::from_str::<HashMap<String, u32>>(&up_limit_json) {
+        Ok(map) => {
+            // Convert all keys to lowercase
+            map.into_iter()
+                .map(|(k, v)| (k.to_lowercase(), v))
+                .collect()
+        }
         Err(e) => {
             tracing::error!("Failed to parse TENSOR_FUSION_CUDA_UP_LIMIT as JSON: {}", e);
             HashMap::new()
         }
     };
 
-    let mem_limit_map: HashMap<String, u64> = match serde_json::from_str(&mem_limit_json) {
-        Ok(map) => map,
+    let mem_limit_map = match serde_json::from_str::<HashMap<String, u64>>(&mem_limit_json) {
+        Ok(map) => {
+            // Convert all keys to lowercase
+            map.into_iter()
+                .map(|(k, v)| (k.to_lowercase(), v))
+                .collect()
+        }
         Err(e) => {
             tracing::error!(
                 "Failed to parse TENSOR_FUSION_CUDA_MEM_LIMIT as JSON: {}",
