@@ -13,6 +13,7 @@ use limiter::DeviceConfig;
 use limiter::Limiter;
 use nvml_wrapper::Nvml;
 use tf_macro::hook_fn;
+use trap::dummy::DummyTrap;
 use trap::ipc::IpcTrap;
 use utils::hooks::HookManager;
 use utils::logging;
@@ -39,24 +40,49 @@ pub extern "C" fn set_limit(gpu: u32, up_limit: u32, mem_limit: u64) {
     }
 }
 
-pub fn global_trap() -> IpcTrap {
-    static GLOBAL_TRAP: OnceLock<Mutex<IpcTrap>> = OnceLock::new();
+enum TrapImpl {
+    Dummy(DummyTrap),
+    Ipc(IpcTrap),
+}
+
+impl trap::Trap for TrapImpl {
+    fn enter_trap_and_wait(
+        &self,
+        frame: trap::TrapFrame,
+    ) -> Result<trap::TrapAction, trap::TrapError> {
+        match self {
+            TrapImpl::Dummy(t) => t.enter_trap_and_wait(frame),
+            TrapImpl::Ipc(t) => t.enter_trap_and_wait(frame),
+        }
+    }
+}
+
+impl Clone for TrapImpl {
+    fn clone(&self) -> Self {
+        match self {
+            TrapImpl::Dummy(_) => TrapImpl::Dummy(DummyTrap {}),
+            TrapImpl::Ipc(t) => TrapImpl::Ipc(t.clone()),
+        }
+    }
+}
+
+pub fn global_trap() -> impl trap::Trap {
+    static GLOBAL_TRAP: OnceLock<Mutex<TrapImpl>> = OnceLock::new();
 
     let trap = GLOBAL_TRAP.get_or_init(|| {
-        let ipc_server_path_name =
-            std::env::var("TENSOR_FUSION_IPC_SERVER_PATH").unwrap_or("cuda-limiter".to_string());
-        // init IpcTrap
-        let trap = if cfg!(test) {
-            IpcTrap::dummy()
-        } else {
-            match IpcTrap::connect(ipc_server_path_name) {
-                Ok(trap) => trap,
+        let ipc_server_path_name = std::env::var("TENSOR_FUSION_IPC_SERVER_PATH");
+        match ipc_server_path_name {
+            Ok(path) => match IpcTrap::connect(path) {
+                Ok(trap) => TrapImpl::Ipc(trap).into(),
                 Err(e) => {
                     panic!("failed to connect to ipc server, err: {e}");
                 }
+            },
+            Err(_) => {
+                tracing::warn!("using dummy trap");
+                TrapImpl::Dummy(DummyTrap {}).into()
             }
-        };
-        Mutex::new(trap)
+        }
     });
 
     trap.lock().expect("poisoned").clone()

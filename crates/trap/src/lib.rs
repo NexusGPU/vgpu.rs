@@ -1,3 +1,4 @@
+pub mod dummy;
 pub mod ipc;
 
 use std::sync::Arc;
