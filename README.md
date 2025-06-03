@@ -36,8 +36,7 @@ rm libadd_path-${ARCH}.tar.gz libcuda_limiter-${ARCH}.tar.gz
 
 ### Using cuda-limiter
 
-The `cuda-limiter` library intercepts CUDA API calls to enforce resource limits
-and scheduling policies. After downloading and extracting the library, you can
+The `cuda-limiter` library intercepts CUDA API calls to enforce resource limits. After downloading and extracting the library, you can
 use it as follows:
 
 ```bash
@@ -129,7 +128,7 @@ with specific responsibilities:
   Library) to track GPU utilization and optimize CUDA workload scheduling.
 
 - [**cuda-limiter**](crates/cuda-limiter): A dynamic library that intercepts
-  CUDA API calls to enforce resource limits and scheduling policies. Built as a
+  CUDA API calls to enforce resource limits. Built as a
   `cdylib` that can be preloaded into CUDA applications to control their
   resource usage.
 

@@ -81,7 +81,7 @@ unsafe fn entry_point() {
             map.into_iter()
                 .map(|(k, v)| (k.to_lowercase(), v))
                 .collect()
-        },
+        }
         Err(e) => {
             tracing::error!("Failed to parse TENSOR_FUSION_CUDA_UP_LIMIT as JSON: {}", e);
             HashMap::new()
@@ -94,7 +94,7 @@ unsafe fn entry_point() {
             map.into_iter()
                 .map(|(k, v)| (k.to_lowercase(), v))
                 .collect()
-        },
+        }
         Err(e) => {
             tracing::error!(
                 "Failed to parse TENSOR_FUSION_CUDA_MEM_LIMIT as JSON: {}",
