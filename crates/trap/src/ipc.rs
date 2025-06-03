@@ -162,8 +162,6 @@ impl Trap for IpcTrap {
     }
 }
 
-
-
 #[derive(Debug)]
 struct Client {
     sender: IpcSender<(u64, TrapAction)>,
