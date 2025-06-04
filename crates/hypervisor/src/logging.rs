@@ -1,10 +1,7 @@
 //! provides logging helpers
 
-use std::collections::HashMap;
-use std::fmt;
+use std::fmt::{self};
 use std::path::Path;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use tracing::field::Field;
 use tracing::field::Visit;
@@ -12,8 +9,8 @@ use tracing::Event;
 use tracing::Subscriber;
 use tracing_appender::rolling::RollingFileAppender;
 use tracing_appender::rolling::Rotation;
-use tracing_subscriber::filter;
 use tracing_subscriber::filter::FilterExt;
+use tracing_subscriber::filter::{self};
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::fmt::FormatEvent;
 use tracing_subscriber::prelude::*;
@@ -21,26 +18,17 @@ use tracing_subscriber::registry;
 
 struct InfluxDBFormatter;
 
-struct FieldVisitor<'a> {
-    tags: HashMap<&'a str, String>,
-    fields: HashMap<&'a str, String>,
+struct FieldVisitor {
+    msg: String,
 }
 
-impl Visit for FieldVisitor<'_> {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name().starts_with("tag_") {
-            self.tags.insert(&field.name()[4..], value.to_string());
-        } else {
-            self.fields.insert(field.name(), value.to_string());
-        }
+impl Visit for FieldVisitor {
+    fn record_str(&mut self, _: &Field, value: &str) {
+        self.msg.push_str(value);
     }
 
-    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        if field.name().starts_with("tag_") {
-            self.tags.insert(&field.name()[4..], format!("{:?}", value));
-        } else {
-            self.fields.insert(field.name(), format!("{:?}", value));
-        }
+    fn record_debug(&mut self, _: &Field, value: &dyn fmt::Debug) {
+        self.msg.push_str(&format!("{:?}", value));
     }
 }
 
@@ -55,40 +43,9 @@ where
         mut writer: tracing_subscriber::fmt::format::Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
-        let mut visitor = FieldVisitor {
-            tags: HashMap::new(),
-            fields: HashMap::new(),
-        };
+        let mut visitor = FieldVisitor { msg: String::new() };
         event.record(&mut visitor);
-
-        // Get measurement name from target
-        let measurement = event.metadata().target();
-
-        write!(writer, "{}", measurement.strip_prefix("metrics.").unwrap())?;
-
-        // Write all tags
-        for (key, value) in visitor.tags.iter() {
-            write!(writer, ",{}={}", key, value)?;
-        }
-
-        // Write fields
-        write!(writer, " ")?;
-        let mut first = true;
-        for (key, value) in visitor.fields.iter() {
-            if !first {
-                write!(writer, ",")?;
-            }
-            write!(writer, "{}={}", key, value)?;
-            first = false;
-        }
-
-        // Write timestamp in nanoseconds
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        writeln!(writer, " {}", timestamp)?;
-
+        write!(writer, "{}", visitor.msg)?;
         Ok(())
     }
 }

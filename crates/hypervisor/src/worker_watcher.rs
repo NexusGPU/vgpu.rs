@@ -26,7 +26,7 @@ pub(crate) struct WorkerWatcher<AddCB, RemoveCB> {
     tx: Sender<Result<Event, Error>>,
     add_callback: AddCB,
     remove_callback: RemoveCB,
-    worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
+    worker_pid_mapping: Arc<RwLock<HashMap<u32, (String, String)>>>,
     #[cfg(target_os = "linux")]
     _watcher: notify::INotifyWatcher,
 }
@@ -36,7 +36,7 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
         path: P,
         add_callback: AddCB,
         remove_callback: RemoveCB,
-        worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
+        worker_pid_mapping: Arc<RwLock<HashMap<u32, (String, String)>>>,
     ) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel::<Result<Event, Error>>();
 
@@ -98,8 +98,8 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
                 Ok(event) => match event.kind {
                     notify::EventKind::Create(_) => {
                         if let Some(path) = event.paths.first() {
-                            let (pid, worker_name) = match extract_pid_worker_name_from_path(path) {
-                                Ok(pid_worker_name) => pid_worker_name,
+                            let pid = match extract_pid_from_path(path) {
+                                Ok(pid) => pid,
                                 Err(msg) => {
                                     tracing::warn!("{}", msg);
                                     // remove invalid pid file
@@ -139,6 +139,15 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
                                 }
                             };
 
+                            let worker_name = env
+                                .get("POD_NAME")
+                                .cloned()
+                                .unwrap_or_else(|| String::from("unknown"));
+                            let workload_name = env
+                                .get("TENSOR_FUSION_WORKLOAD_NAME")
+                                .cloned()
+                                .unwrap_or_else(|| String::from("unknown"));
+
                             // Get GPU UUID
                             let uuid = if let Some(uuid) = env.get("NVIDIA_VISIBLE_DEVICES") {
                                 uuid.clone()
@@ -150,8 +159,8 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
                             // Get QoS level
                             let qos_level =
                                 match env.get("TENSOR_FUSION_QOS_LEVEL").map(String::as_str) {
-                                    Some("HIGH") | Some("high") => QosLevel::High,
-                                    Some("LOW") | Some("low") => QosLevel::Low,
+                                    Some("High") | Some("high") => QosLevel::High,
+                                    Some("Low") | Some("low") => QosLevel::Low,
                                     Some("Medium") | Some("medium") => QosLevel::Medium,
                                     Some("Critical") | Some("critical") => QosLevel::Critical,
                                     _ => QosLevel::Medium,
@@ -172,14 +181,14 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
                             self.worker_pid_mapping
                                 .write()
                                 .expect("poisoning")
-                                .insert(pid, worker_name);
+                                .insert(pid, (worker_name, workload_name));
                             (self.add_callback)(pid, worker);
                         }
                     }
                     notify::EventKind::Remove(_) => {
                         tracing::info!("worker sock file removed: {:?}", event.paths);
                         if let Some(path) = event.paths.first() {
-                            let (pid, _) = match extract_pid_worker_name_from_path(path) {
+                            let pid = match extract_pid_from_path(path) {
                                 Ok(pid_worker_name) => pid_worker_name,
                                 Err(msg) => {
                                     tracing::warn!("{}", msg);
@@ -197,7 +206,7 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
     }
 }
 
-fn extract_pid_worker_name_from_path(path: &std::path::Path) -> Result<(u32, String), String> {
+fn extract_pid_from_path(path: &std::path::Path) -> Result<u32, String> {
     // Extract PID from filename
     let pid = path
         .file_name()
@@ -212,19 +221,7 @@ fn extract_pid_worker_name_from_path(path: &std::path::Path) -> Result<(u32, Str
             })
         })?;
 
-    // Extract worker name from parent directory
-    let worker_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(String::from)
-        .ok_or_else(|| {
-            format!(
-                "could not extract worker name from path: {:?}, skipped",
-                path
-            )
-        })?;
-
-    Ok((pid, worker_name))
+    Ok(pid)
 }
 
 /// Read environment variables from a process by its PID
@@ -263,13 +260,7 @@ mod tests {
         // Define test cases for extracting PID and worker name from path
         let cases = [
             // Test case: Valid PID
-            (
-                "/some/path/12345",
-                true,
-                Some((12345, "12345".to_string())),
-                None,
-                "Valid PID",
-            ),
+            ("/some/path/12345", true, Some(12345), None, "Valid PID"),
             // Test case: Invalid PID (non-numeric filename)
             (
                 "/some/path/not_a_number",
@@ -289,18 +280,12 @@ mod tests {
             // Test case: Empty path
             ("", false, None, Some("could not extract PID"), "Empty path"),
             // Test case: Edge case - PID is 0
-            (
-                "/some/path/0",
-                true,
-                Some((0, "0".to_string())),
-                None,
-                "Edge case - PID is 0",
-            ),
+            ("/some/path/0", true, Some(0), None, "Edge case - PID is 0"),
             // Test case: Edge case - Maximum u32 value
             (
                 &format!("/some/path/{}", u32::MAX),
                 true,
-                Some((u32::MAX, u32::MAX.to_string())),
+                Some(u32::MAX),
                 None,
                 "Edge case - Maximum u32 value",
             ),
@@ -310,7 +295,7 @@ mod tests {
         for (path_str, should_succeed, expected_result, error_fragment, description) in cases {
             println!("Testing case: {}", description);
             let path = PathBuf::from(path_str);
-            let result = extract_pid_worker_name_from_path(&path);
+            let result = extract_pid_from_path(&path);
 
             if should_succeed {
                 assert!(
@@ -320,16 +305,11 @@ mod tests {
                     result.unwrap_err()
                 );
 
-                if let Some((expected_pid, expected_worker_name)) = expected_result {
-                    let (pid, worker_name) = result.unwrap();
+                if let Some(expected_pid) = expected_result {
+                    let pid = result.unwrap();
                     assert_eq!(
                         pid, expected_pid,
                         "Case '{}' failed: PID mismatch",
-                        description
-                    );
-                    assert_eq!(
-                        worker_name, expected_worker_name,
-                        "Case '{}' failed: worker name mismatch",
                         description
                     );
                 }
