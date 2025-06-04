@@ -98,6 +98,9 @@ fn main() -> Result<()> {
         });
     }
 
+    let gpu_node = std::env::var("GPU_NODE_NAME").unwrap_or("unknown".to_string());
+    let gpu_pool = std::env::var("TENSOR_FUSION_POOL_NAME").unwrap_or("unknown".to_string());
+
     // Load GPU information from config file
     if let Err(e) = config::load_gpu_info(
         gpu_uuid_to_name_map,
@@ -133,7 +136,7 @@ fn main() -> Result<()> {
             let metrics_batch_size = cli.metrics_batch_size;
             move || {
                 tracing::info!("Starting metrics collection thread");
-                metrics::run_metrics(gpu_observer, worker_pid_mapping, metrics_batch_size);
+                metrics::run_metrics(gpu_observer, worker_pid_mapping, metrics_batch_size, gpu_node, gpu_pool);
             }
         });
 

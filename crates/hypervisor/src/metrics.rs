@@ -1,9 +1,12 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use crate::config::GPU_CAPACITY_MAP;
-use crate::gpu_observer::GpuObserver;
+use influxdb_line_protocol::LineProtocolBuilder;
+
+use crate::{config::GPU_CAPACITY_MAP, gpu_observer::GpuObserver};
 
 #[derive(Default)]
 struct AccumulatedGpuMetrics {
@@ -27,8 +30,10 @@ struct AccumulatedWorkerMetrics {
 /// Run metrics collection in the current thread
 pub(crate) fn run_metrics(
     gpu_observer: Arc<GpuObserver>,
-    worker_pid_mapping: Arc<RwLock<HashMap<u32, String>>>,
+    worker_pid_mapping: Arc<RwLock<HashMap<u32, (String, String)>>>,
     metrics_batch_size: usize,
+    gpu_node: String,
+    gpu_pool: String,
 ) {
     let mut gpu_acc: HashMap<String, AccumulatedGpuMetrics> = HashMap::new();
     let mut worker_acc: HashMap<String, HashMap<u32, AccumulatedWorkerMetrics>> = HashMap::new();
@@ -78,18 +83,31 @@ pub(crate) fn run_metrics(
 
         // Output averaged metrics every metrics_batch_size iterations
         if counter >= metrics_batch_size {
+            let timestamp = current_time();
             // Output averaged PCIE metrics
             for (gpu_uuid, acc) in &gpu_acc {
                 if acc.count > 0 {
+                    let lp = LineProtocolBuilder::new()
+                        .measurement("tf_gpu_usage")
+                        .tag("tag_node_name", gpu_node.as_str())
+                        .tag("tag_pool", gpu_pool.as_str())
+                        .tag("tag_uuid", gpu_uuid.as_str())
+                        .field("rx", acc.rx / acc.count as f64)
+                        .field("tx", acc.tx / acc.count as f64)
+                        .field("temperature", acc.temperature / acc.count as f64)
+                        .field("memory_bytes", acc.memory_bytes / acc.count as u64)
+                        .field(
+                            "compute_percentage",
+                            acc.compute_percentage / acc.count as f64,
+                        )
+                        .field("compute_tflops", acc.compute_tflops / acc.count as f64)
+                        .timestamp(timestamp)
+                        .close_line()
+                        .build();
+                    let lp_str = std::str::from_utf8(&lp).unwrap();
                     tracing::info!(
-                        target: "metrics.gpu_metrics_avg",
-                        tag_uuid=gpu_uuid,
-                        rx=acc.rx / acc.count as f64,
-                        tx=acc.tx / acc.count as f64,
-                        temperature=acc.temperature / acc.count as f64,
-                        memory_bytes=acc.memory_bytes / acc.count as u64,
-                        compute_percentage=acc.compute_percentage / acc.count as f64,
-                        compute_tflops=acc.compute_tflops / acc.count as f64
+                        target: "metrics",
+                        msg=lp_str,
                     );
                 }
             }
@@ -99,14 +117,28 @@ pub(crate) fn run_metrics(
             for (gpu_uuid, pid_metrics) in &worker_acc {
                 for (pid, acc) in pid_metrics {
                     if acc.count > 0 {
-                        let name = worker_pid_mapping.get(pid);
+                        let (worker_name, workload) = worker_pid_mapping
+                            .get(pid)
+                            .cloned()
+                            .unwrap_or((String::from("unknown"), String::from("unknown")));
+                        
+                        let lp = LineProtocolBuilder::new()
+                            .measurement("tf_worker_usage")
+                            .tag("tag_node_name", gpu_node.as_str())
+                            .tag("tag_pool", gpu_pool.as_str())
+                            .tag("tag_uuid", gpu_uuid.as_str())
+                            .tag("tag_worker", worker_name.as_str())
+                            .tag("tag_workload", workload.as_str())
+                            .field("memory_bytes", acc.memory_bytes / acc.count as u64)
+                            .field("compute_percentage", acc.compute_percentage / acc.count as f64)
+                            .field("compute_tflops", acc.compute_tflops / acc.count as f64)
+                            .timestamp(timestamp)
+                            .close_line()
+                            .build();
+                        let lp_str = std::str::from_utf8(&lp).unwrap();
                         tracing::info!(
-                            target: "metrics.worker_metrics_avg",
-                            tag_uuid=gpu_uuid,
-                            tag_worker=name.unwrap_or(&"unknown".to_string()),
-                            memory_bytes=acc.memory_bytes / acc.count as u64,
-                            compute_percentage=acc.compute_percentage / acc.count as f64,
-                            compute_tflops=acc.compute_tflops / acc.count as f64
+                            target: "metrics",
+                            msg=lp_str,
                         );
                     }
                 }
@@ -118,4 +150,11 @@ pub(crate) fn run_metrics(
             counter = 0;
         }
     }
+}
+
+fn current_time() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i64
 }

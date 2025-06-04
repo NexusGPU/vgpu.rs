@@ -1,9 +1,7 @@
 //! provides logging helpers
 
-use std::collections::HashMap;
-use std::fmt;
+use std::fmt::{self};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{
     field::{Field, Visit},
     Event, Subscriber,
@@ -16,26 +14,17 @@ use tracing_subscriber::{prelude::*, registry};
 
 struct InfluxDBFormatter;
 
-struct FieldVisitor<'a> {
-    tags: HashMap<&'a str, String>,
-    fields: HashMap<&'a str, String>,
+struct FieldVisitor {
+    msg: String,
 }
 
-impl Visit for FieldVisitor<'_> {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name().starts_with("tag_") {
-            self.tags.insert(&field.name()[4..], value.to_string());
-        } else {
-            self.fields.insert(field.name(), value.to_string());
-        }
+impl Visit for FieldVisitor {
+    fn record_str(&mut self, _: &Field, value: &str) {
+        self.msg.push_str(value);
     }
 
-    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        if field.name().starts_with("tag_") {
-            self.tags.insert(&field.name()[4..], format!("{:?}", value));
-        } else {
-            self.fields.insert(field.name(), format!("{:?}", value));
-        }
+    fn record_debug(&mut self, _: &Field, value: &dyn fmt::Debug) {
+        self.msg.push_str(&format!("{:?}", value));
     }
 }
 
@@ -51,39 +40,10 @@ where
         event: &Event<'_>,
     ) -> fmt::Result {
         let mut visitor = FieldVisitor {
-            tags: HashMap::new(),
-            fields: HashMap::new(),
+            msg: String::new(),
         };
         event.record(&mut visitor);
-
-        // Get measurement name from target
-        let measurement = event.metadata().target();
-
-        write!(writer, "{}", measurement.strip_prefix("metrics.").unwrap())?;
-
-        // Write all tags
-        for (key, value) in visitor.tags.iter() {
-            write!(writer, ",{}={}", key, value)?;
-        }
-
-        // Write fields
-        write!(writer, " ")?;
-        let mut first = true;
-        for (key, value) in visitor.fields.iter() {
-            if !first {
-                write!(writer, ",")?;
-            }
-            write!(writer, "{}={}", key, value)?;
-            first = false;
-        }
-
-        // Write timestamp in nanoseconds
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        writeln!(writer, " {}", timestamp)?;
-
+        write!(writer, "{}", visitor.msg)?;
         Ok(())
     }
 }
