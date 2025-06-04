@@ -139,8 +139,14 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
                                 }
                             };
 
-                            let worker_name = env.get("POD_NAME").cloned().unwrap_or_else(|| String::from("unknown"));
-                            let workload_name = env.get("TENSOR_FUSION_WORKLOAD_NAME").cloned().unwrap_or_else(|| String::from("unknown"));
+                            let worker_name = env
+                                .get("POD_NAME")
+                                .cloned()
+                                .unwrap_or_else(|| String::from("unknown"));
+                            let workload_name = env
+                                .get("TENSOR_FUSION_WORKLOAD_NAME")
+                                .cloned()
+                                .unwrap_or_else(|| String::from("unknown"));
 
                             // Get GPU UUID
                             let uuid = if let Some(uuid) = env.get("NVIDIA_VISIBLE_DEVICES") {
@@ -254,13 +260,7 @@ mod tests {
         // Define test cases for extracting PID and worker name from path
         let cases = [
             // Test case: Valid PID
-            (
-                "/some/path/12345",
-                true,
-                Some(12345),
-                None,
-                "Valid PID",
-            ),
+            ("/some/path/12345", true, Some(12345), None, "Valid PID"),
             // Test case: Invalid PID (non-numeric filename)
             (
                 "/some/path/not_a_number",
@@ -280,13 +280,7 @@ mod tests {
             // Test case: Empty path
             ("", false, None, Some("could not extract PID"), "Empty path"),
             // Test case: Edge case - PID is 0
-            (
-                "/some/path/0",
-                true,
-                Some(0),
-                None,
-                "Edge case - PID is 0",
-            ),
+            ("/some/path/0", true, Some(0), None, "Edge case - PID is 0"),
             // Test case: Edge case - Maximum u32 value
             (
                 &format!("/some/path/{}", u32::MAX),

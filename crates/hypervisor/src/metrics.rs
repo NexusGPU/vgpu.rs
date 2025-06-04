@@ -1,12 +1,13 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::RwLock;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use influxdb_line_protocol::LineProtocolBuilder;
 
-use crate::{config::GPU_CAPACITY_MAP, gpu_observer::GpuObserver};
+use crate::config::GPU_CAPACITY_MAP;
+use crate::gpu_observer::GpuObserver;
 
 #[derive(Default)]
 struct AccumulatedGpuMetrics {
@@ -121,7 +122,7 @@ pub(crate) fn run_metrics(
                             .get(pid)
                             .cloned()
                             .unwrap_or((String::from("unknown"), String::from("unknown")));
-                        
+
                         let lp = LineProtocolBuilder::new()
                             .measurement("tf_worker_usage")
                             .tag("node_name", gpu_node.as_str())
@@ -130,7 +131,10 @@ pub(crate) fn run_metrics(
                             .tag("worker", worker_name.as_str())
                             .tag("workload", workload.as_str())
                             .field("memory_bytes", acc.memory_bytes / acc.count as u64)
-                            .field("compute_percentage", acc.compute_percentage / acc.count as f64)
+                            .field(
+                                "compute_percentage",
+                                acc.compute_percentage / acc.count as f64,
+                            )
                             .field("compute_tflops", acc.compute_tflops / acc.count as f64)
                             .timestamp(timestamp)
                             .close_line()

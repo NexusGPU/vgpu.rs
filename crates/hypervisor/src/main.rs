@@ -136,7 +136,13 @@ fn main() -> Result<()> {
             let metrics_batch_size = cli.metrics_batch_size;
             move || {
                 tracing::info!("Starting metrics collection thread");
-                metrics::run_metrics(gpu_observer, worker_pid_mapping, metrics_batch_size, gpu_node, gpu_pool);
+                metrics::run_metrics(
+                    gpu_observer,
+                    worker_pid_mapping,
+                    metrics_batch_size,
+                    gpu_node,
+                    gpu_pool,
+                );
             }
         });
 
