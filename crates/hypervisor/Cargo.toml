@@ -4,19 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-nvml-wrapper = "0.11.0"
+nvml-wrapper = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 notify = "8.0.0"
-tracing-subscriber = { workspace = true,  features = ["env-filter"] }
-tracing-appender = "0.2.3"
-clap = { version = "4.5.39", features = ["derive", "env"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-appender = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
 rand = "0.9"
 priority-queue = "2.5.0"
-trap = {workspace = true}
-serde = { version = "1.0", features = ["derive"] }
+trap = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_yaml = "0.9"
-once_cell = "1.19"
+once_cell = { workspace = true }
 utils = { workspace = true }
 influxdb-line-protocol = "2.0.0"
 
