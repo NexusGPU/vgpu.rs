@@ -252,11 +252,6 @@ impl Limiter {
         // Wait for available CUDA cores
         loop {
             let available = device.available_cuda_cores.load(Ordering::Acquire);
-            tracing::debug!(
-                "available CUDA cores: {}, kernel_size: {}",
-                available,
-                kernel_size
-            );
             if available > 0 {
                 break;
             }
@@ -416,10 +411,6 @@ impl Limiter {
 
         // Calculate the increment based on device characteristics and utilization difference
         let increment = self.calculate_increment(device, utilization_diff, up_limit);
-        tracing::debug!(
-            "Calculating delta for user_current: {}, share: {}, up_limit: {}, diff: {}, increment: {}, total_cuda_cores: {}",
-            user_current, share, up_limit, utilization_diff, increment, device.total_cuda_cores
-        );
         // Determine if we should increase or decrease the share
         if user_current <= up_limit as u32 {
             // Utilization is below limit, increase share (but don't exceed total cores)

@@ -61,7 +61,7 @@ fn test_utilization_limit_enforcement() {
 
     info!("Running baseline test without limiter...");
     let baseline_result = run_and_monitor(
-        10 * 1024 * 1024, // 100 MB memory
+        10 * 1024 * 1024, // 10 MB memory
         TEST_DURATION_SECONDS,
         None, // No limiter
     )
@@ -80,7 +80,7 @@ fn test_utilization_limit_enforcement() {
         UTILIZATION_LIMIT_PERCENT
     );
     let cuda_test_result = run_and_monitor(
-        10 * 1024 * 1024, // 100 MB memory
+        10 * 1024 * 1024, // 10 MB memory
         TEST_DURATION_SECONDS,
         Some((UTILIZATION_LIMIT_PERCENT, u64::MAX)), // No memory limit, just utilization limit
     )
