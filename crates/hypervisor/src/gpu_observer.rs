@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::thread;
 use std::time::Duration;
-use std::time::SystemTime;
 
 use anyhow::Result;
 use nvml_wrapper::enum_wrappers::device::PcieUtilCounter;
@@ -30,9 +29,10 @@ pub(crate) struct GpuMetrics {
     pub resources: GpuResources,
 }
 
+type LastSeenTimestamp = u64;
 #[derive(Debug, Default)]
 pub(crate) struct Metrics {
-    pub process_metrics: HashMap<GpuUuid, ProcessMetrics>,
+    pub process_metrics: HashMap<GpuUuid, (ProcessMetrics, LastSeenTimestamp)>,
     pub gpu_metrics: HashMap<GpuUuid, GpuMetrics>,
 }
 
@@ -54,12 +54,10 @@ impl GpuObserver {
     /// Run the GPU observer loop in the current thread
     pub(crate) fn run(&self, update_interval: Duration) {
         loop {
-            let last_seen_timestamp = unix_as_millis()
-                .saturating_mul(1000)
-                .saturating_sub(update_interval.as_micros() as u64);
-
-            match self.query_metrics(last_seen_timestamp) {
+            let last_metrics = self.metrics.read().expect("poisoned");
+            match self.query_metrics(&last_metrics) {
                 Ok(metrics) => {
+                    drop(last_metrics);
                     *self.metrics.write().expect("poisoned") = metrics;
                     let senders = self.senders.read().expect("poisoned");
                     for sender in senders.iter() {
@@ -76,22 +74,34 @@ impl GpuObserver {
         }
     }
 
-    fn query_metrics(&self, last_seen_timestamp: u64) -> Result<Metrics> {
-        let mut gpu_metrics = HashMap::new();
+    fn query_metrics(&self, last_metrics: &Metrics) -> Result<Metrics> {
+        let mut gpu_metrics: HashMap<String, GpuMetrics> = HashMap::new();
         let mut gpu_process_metrics = HashMap::new();
 
         for i in 0..self.nvml.device_count()? {
             let device = self.nvml.device_by_index(i)?;
             let gpu_uuid = device.uuid()?.to_lowercase();
 
+            let last_seen_timestamp = last_metrics
+                .process_metrics
+                .get(&gpu_uuid)
+                .map(|(_, ts)| *ts)
+                .unwrap_or(0);
             let mut process_metrics = HashMap::new();
-
-            let utilizations = device
+            let mut newest_timestamp_candidate = last_seen_timestamp;
+            let mut utilizations = HashMap::new();
+            for sample in device
                 .process_utilization_stats(last_seen_timestamp)
                 .unwrap_or_default()
-                .into_iter()
-                .map(|p| (p.pid, p))
-                .collect::<HashMap<_, _>>();
+            {
+                if sample.timestamp > newest_timestamp_candidate {
+                    newest_timestamp_candidate = sample.timestamp;
+                }
+                utilizations
+                    .entry(sample.pid)
+                    .or_insert_with(Vec::new)
+                    .push(sample);
+            }
 
             let running_compute_processes = device.running_compute_processes()?;
 
@@ -100,10 +110,26 @@ impl GpuObserver {
                     process_metrics.insert(process_info.pid, GpuResources {
                         memory_bytes: used,
                         compute_percentage: match utilizations.get(&process_info.pid) {
-                            Some(utilization) => {
-                                utilization.sm_util + utilization.enc_util + utilization.dec_util
+                            Some(utilization_samples) if !utilization_samples.is_empty() => {
+                                // Calculate average utilization across all samples
+                                let total: u32 = utilization_samples
+                                    .iter()
+                                    .filter_map(|sample| {
+                                        if sample.sm_util > 100
+                                            || sample.enc_util > 100
+                                            || sample.dec_util > 100
+                                            || sample.timestamp < last_seen_timestamp
+                                        {
+                                            None
+                                        } else {
+                                            Some(sample.sm_util + sample.enc_util + sample.dec_util)
+                                        }
+                                    })
+                                    .sum();
+
+                                total / utilization_samples.len() as u32
                             }
-                            None => 0,
+                            _ => 0,
                         },
                     });
                 }
@@ -129,7 +155,7 @@ impl GpuObserver {
                     compute_percentage: utilization.gpu,
                 },
             });
-            gpu_process_metrics.insert(gpu_uuid, process_metrics);
+            gpu_process_metrics.insert(gpu_uuid, (process_metrics, newest_timestamp_candidate));
         }
 
         Ok(Metrics {
@@ -148,7 +174,7 @@ impl GpuObserver {
             .expect("poisoned")
             .process_metrics
             .get(gpu_uuid)
-            .and_then(|processes| processes.get(&process_id))
+            .and_then(|(processes, _)| processes.get(&process_id))
             .cloned()
     }
 
@@ -157,11 +183,4 @@ impl GpuObserver {
         self.senders.write().expect("poisoned").push(sender);
         receiver
     }
-}
-
-pub(crate) fn unix_as_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
 }

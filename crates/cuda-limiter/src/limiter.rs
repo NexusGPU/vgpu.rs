@@ -4,7 +4,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::thread::sleep;
 use std::time::Duration;
-use std::time::SystemTime;
 
 use cudarc::driver::sys::CUdevice_attribute;
 use cudarc::driver::CudaContext;
@@ -19,7 +18,7 @@ use trap::TrapError;
 use crate::detour::CUdevice;
 
 // Configuration constant
-const FACTOR: u32 = 1;
+const FACTOR: u32 = 32;
 // Default sleep duration when waiting for resources
 const DEFAULT_WAIT_SLEEP_MS: u64 = 10;
 // Default backoff multiplier for retries
@@ -252,7 +251,8 @@ impl Limiter {
 
         // Wait for available CUDA cores
         loop {
-            if device.available_cuda_cores.load(Ordering::Acquire) > 0 {
+            let available = device.available_cuda_cores.load(Ordering::Acquire);
+            if available > 0 {
                 break;
             }
             sleep(Duration::from_millis(DEFAULT_WAIT_SLEEP_MS));
@@ -306,13 +306,16 @@ impl Limiter {
         let device = self.get_device(device_idx)?;
         let mut share: i32 = 0;
 
+        let mut last_seen_timestamp = 0;
         loop {
             // Sleep for the specified duration
             sleep(watch_duration);
 
             // Get current utilization with retry logic
-            let util = self.get_utilization_with_retry(device_idx, watch_duration)?;
+            let (util, newest_timestamp) =
+                self.get_utilization_with_retry(device_idx, watch_duration, last_seen_timestamp)?;
 
+            last_seen_timestamp = newest_timestamp;
             // Get current available cores
             let available_cuda_cores = device.available_cuda_cores.load(Ordering::Acquire);
 
@@ -329,14 +332,16 @@ impl Limiter {
         &self,
         device_idx: u32,
         retry_interval: Duration,
-    ) -> Result<Utilization, Error> {
+        last_seen_timestamp: u64,
+    ) -> Result<(Utilization, u64), Error> {
         let max_retries = 5;
         let mut retry_count = 0;
-
         loop {
-            match self.get_used_gpu_utilization(device_idx) {
-                Ok(Some(util)) => return Ok(util),
-                Ok(None) => {
+            match self.get_used_gpu_utilization(device_idx, last_seen_timestamp) {
+                Ok((Some(util), newest_timestamp_candidate)) => {
+                    return Ok((util, newest_timestamp_candidate))
+                }
+                Ok((None, _)) => {
                     retry_count += 1;
                     if retry_count >= max_retries {
                         return Err(Error::ResourceNotAvailable(
@@ -406,7 +411,6 @@ impl Limiter {
 
         // Calculate the increment based on device characteristics and utilization difference
         let increment = self.calculate_increment(device, utilization_diff, up_limit);
-
         // Determine if we should increase or decrease the share
         if user_current <= up_limit as u32 {
             // Utilization is below limit, increase share (but don't exceed total cores)
@@ -416,8 +420,9 @@ impl Limiter {
             } else {
                 Ok(share + increment)
             }
+        } else if (share - increment) < 0 {
+            Ok(0)
         } else {
-            // Utilization is above limit, decrease share
             Ok(share - increment)
         }
     }
@@ -521,20 +526,24 @@ impl Limiter {
         Ok(())
     }
 
-    /// Get GPU utilization statistics for a specific device
+    /// get GPU utilization statistics for a specific device
+    ///
+    /// # Parameters
+    /// * `device_idx` - Device index
+    /// * `last_seen_timestamp` - Last known timestamp (for incremental fetching)
     ///
     /// # Returns
-    /// * `Ok(Some(Utilization))` - Utilization data is available
-    /// * `Ok(None)` - No valid utilization data available
-    /// * `Err(NvmlError)` - Error occurred while getting utilization data
-    fn get_used_gpu_utilization(&self, device_idx: u32) -> Result<Option<Utilization>, NvmlError> {
+    /// * `Ok((Some(Utilization), timestamp))` - Successfully retrieved utilization data and latest timestamp
+    /// * `Ok((None, timestamp))` - No available utilization data, but returned latest timestamp
+    /// * `Err(NvmlError)` - Error occurred while fetching utilization data
+    fn get_used_gpu_utilization(
+        &self,
+        device_idx: u32,
+        last_seen_timestamp: u64,
+    ) -> Result<(Option<Utilization>, u64), NvmlError> {
+        let mut newest_timestamp_candidate = last_seen_timestamp;
         // Get the device
         let dev = self.nvml.device_by_index(device_idx)?;
-        // Calculate timestamp for recent samples (last second)
-        let last_seen_timestamp = unix_as_millis()
-            .saturating_mul(1000) // Convert to microseconds
-            .saturating_sub(1_000_000); // Look at last 1 second
-
         // Get process utilization samples
         let process_utilization_samples = dev.process_utilization_stats(last_seen_timestamp)?;
 
@@ -550,6 +559,13 @@ impl Limiter {
             // Skip old samples
             if sample.timestamp < last_seen_timestamp {
                 continue;
+            }
+
+            // Collect the largest valid timestamp for this device to filter out
+            // the samples during the next call to the function
+            // nvmlDeviceGetProcessUtilization
+            if sample.timestamp > newest_timestamp_candidate {
+                newest_timestamp_candidate = sample.timestamp;
             }
 
             // Mark that we have valid data
@@ -571,22 +587,15 @@ impl Limiter {
 
         // Return None if no valid data, otherwise return the utilization
         if !valid {
-            Ok(None)
+            Ok((None, newest_timestamp_candidate))
         } else {
-            Ok(Some(current))
+            Ok((Some(current), newest_timestamp_candidate))
         }
     }
 }
 
 const fn codec_normalize(x: u32) -> u32 {
     x * 85 / 100
-}
-
-pub(crate) fn unix_as_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
 }
 
 #[cfg(test)]
@@ -598,6 +607,7 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
+    use std::time::SystemTime;
 
     use super::*;
 

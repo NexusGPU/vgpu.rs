@@ -66,7 +66,7 @@ pub(crate) fn run_metrics(
         }
 
         // Accumulate process metrics
-        for (gpu_uuid, process_metrics) in metrics.process_metrics.iter() {
+        for (gpu_uuid, (process_metrics, _)) in metrics.process_metrics.iter() {
             let gpu_acc = worker_acc.entry(gpu_uuid.clone()).or_default();
             for (pid, resources) in process_metrics.iter() {
                 let acc = gpu_acc.entry(*pid).or_default();
