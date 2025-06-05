@@ -372,6 +372,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cuda-limiter-test"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ctor",
+ "cuda-limiter",
+ "cudarc",
+ "glob",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+ "tracing",
+ "utils",
+]
+
+[[package]]
 name = "cudarc"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
