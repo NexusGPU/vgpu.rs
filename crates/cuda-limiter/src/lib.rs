@@ -1,3 +1,5 @@
+#![feature(once_cell_try)]
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi;

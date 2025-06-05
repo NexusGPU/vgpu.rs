@@ -211,13 +211,10 @@ fn extract_pid_from_path(path: &std::path::Path) -> Result<u32, String> {
     let pid = path
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| format!("could not extract PID from path: {:?}, skipped", path))
+        .ok_or_else(|| format!("could not extract PID from path: {path:?}, skipped"))
         .and_then(|s| {
             s.parse::<u32>().map_err(|e| {
-                format!(
-                    "failed to parse PID from path: {:?}, error: {:?}, skipped",
-                    path, e
-                )
+                format!("failed to parse PID from path: {path:?}, error: {e:?}, skipped")
             })
         })?;
 
@@ -232,7 +229,7 @@ fn extract_pid_from_path(path: &std::path::Path) -> Result<u32, String> {
 /// - TENSOR_FUSION_QOS_LEVEL: Optional. Sets the QoS level for the worker.
 ///   Possible values: "HIGH", "LOW" (case insensitive). Defaults to "MEDIUM" if not set.
 fn read_process_env_vars(pid: u32) -> Result<HashMap<String, String>, io::Error> {
-    let environ_path = format!("/proc/{}/environ", pid);
+    let environ_path = format!("/proc/{pid}/environ");
     let content = fs::read(&environ_path)?;
 
     let mut env_vars = HashMap::new();
@@ -293,7 +290,7 @@ mod tests {
 
         // Run all test cases
         for (path_str, should_succeed, expected_result, error_fragment, description) in cases {
-            println!("Testing case: {}", description);
+            println!("Testing case: {description}");
             let path = PathBuf::from(path_str);
             let result = extract_pid_from_path(&path);
 
@@ -309,26 +306,20 @@ mod tests {
                     let pid = result.unwrap();
                     assert_eq!(
                         pid, expected_pid,
-                        "Case '{}' failed: PID mismatch",
-                        description
+                        "Case '{description}' failed: PID mismatch",
                     );
                 }
             } else {
                 assert!(
                     result.is_err(),
-                    "Case '{}' failed: expected Err but got Ok: {:?}",
-                    description,
-                    result.unwrap()
+                    "Case '{description}' failed: expected Err but got Ok: {result:?}",
                 );
 
                 if let Some(fragment) = error_fragment {
                     let actual_error = result.unwrap_err();
                     assert!(
                         actual_error.contains(fragment),
-                        "Case '{}' failed: error message '{}' doesn't contain expected text '{}'",
-                        description,
-                        actual_error,
-                        fragment
+                        "Case '{description}' failed: error message '{actual_error}' doesn't contain expected text '{fragment}'",
                     );
                 }
             }

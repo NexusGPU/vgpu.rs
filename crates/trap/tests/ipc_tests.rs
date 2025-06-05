@@ -126,7 +126,7 @@ fn test_ipc_trap_direct_creation() {
     // Verify the response
     match action {
         TrapAction::Resume => { /* Expected */ }
-        TrapAction::Fatal(msg) => panic!("Unexpected fatal action: {}", msg),
+        TrapAction::Fatal(msg) => panic!("Unexpected fatal action: {msg}"),
     }
 
     // Wait for the thread to finish
@@ -170,7 +170,7 @@ fn test_ipc_basic_communication() -> Result<(), Box<dyn std::error::Error + Send
     // Verify the response
     match action {
         (_, TrapAction::Resume) => { /* Expected */ }
-        (_, TrapAction::Fatal(msg)) => panic!("Unexpected fatal action: {}", msg),
+        (_, TrapAction::Fatal(msg)) => panic!("Unexpected fatal action: {msg}"),
     }
 
     // Verify the frame was received
@@ -280,7 +280,7 @@ fn test_multiple_clients() -> Result<(), Box<dyn std::error::Error + Send + Sync
     // Verify the response for the first client
     match action1 {
         (_, TrapAction::Resume) => { /* Expected */ }
-        (_, TrapAction::Fatal(msg)) => panic!("Unexpected fatal action for client 1: {}", msg),
+        (_, TrapAction::Fatal(msg)) => panic!("Unexpected fatal action for client 1: {msg}"),
     }
 
     // --- Second client test ---
@@ -414,7 +414,7 @@ fn test_ipc_trap_error_handling() -> Result<(), Box<dyn std::error::Error + Send
                 assert!(matches!(response, (1, TrapAction::Resume)));
             }
             Err(e) => {
-                panic!("Failed to receive response: {:?}", e);
+                panic!("Failed to receive response: {e:?}");
             }
         }
     }
@@ -440,7 +440,7 @@ fn test_cleanup_resources_without_client() {
         }
     });
 
-    let file = path.join(format!("trap_server_{}.addr", fake_pid));
+    let file = path.join(format!("trap_server_{fake_pid}.addr"));
     loop {
         if file.exists() {
             break;
@@ -480,7 +480,7 @@ fn test_wait_client_creates_addr_file_and_accepts() {
         if pid == 0 {
             // child process
             let child_pid = std::process::id();
-            let addr_file = path.join(format!("trap_server_{}.addr", child_pid));
+            let addr_file = path.join(format!("trap_server_{child_pid}.addr"));
             // wait for addr file
             let mut attempts = 0;
             while !addr_file.exists() && attempts < 50 {

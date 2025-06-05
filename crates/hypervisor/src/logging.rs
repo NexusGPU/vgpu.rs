@@ -28,7 +28,7 @@ impl Visit for FieldVisitor {
     }
 
     fn record_debug(&mut self, _: &Field, value: &dyn fmt::Debug) {
-        self.msg.push_str(&format!("{:?}", value));
+        self.msg.push_str(&format!("{value:?}"));
     }
 }
 

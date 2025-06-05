@@ -579,13 +579,11 @@ mod tests {
                 // Verify the process was moved to running queue after Resume
                 assert!(
                     scheduler.running_queue.get(pid).is_some(),
-                    "Process {} should be in running queue after Resume",
-                    pid
+                    "Process {pid} should be in running queue after Resume"
                 );
                 assert!(
                     scheduler.sleep_queue.get(pid).is_none(),
-                    "Process {} should not be in sleep queue after Resume",
-                    pid
+                    "Process {pid} should not be in sleep queue after Resume"
                 );
             }
         }

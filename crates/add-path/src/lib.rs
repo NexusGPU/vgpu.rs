@@ -8,9 +8,9 @@ fn set_env_var(env_var: &str, tf_var: &str) {
         if let Ok(current_value) = env::var(env_var) {
             if !current_value.split(':').any(|p| p == tf_value) {
                 if is_prepend {
-                    env::set_var(env_var, format!("{}:{}", tf_value, current_value));
+                    env::set_var(env_var, format!("{tf_value}:{current_value}"));
                 } else {
-                    env::set_var(env_var, format!("{}:{}", current_value, tf_value));
+                    env::set_var(env_var, format!("{current_value}:{tf_value}"));
                 }
             }
         } else {
