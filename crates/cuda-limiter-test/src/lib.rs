@@ -2,8 +2,6 @@
 mod integration_test;
 
 mod test_setup;
-pub use test_setup::init_test_logging;
-
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
@@ -14,6 +12,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use serde_json::json;
+pub use test_setup::init_test_logging;
 
 /// Get UUID of the GPU at the specified index using nvidia-smi
 pub fn get_gpu_uuid(gpu_index: usize) -> Result<String, String> {
