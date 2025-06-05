@@ -118,18 +118,13 @@ fn test_utilization_limit_enforcement() {
     // Verification
     assert!(
         limited_max_utilization <= UTILIZATION_LIMIT_PERCENT + allowable_overhead,
-        "Utilization limit not enforced: max utilization {}% exceeds limit {}% (with overhead {}%)",
-        limited_max_utilization,
-        UTILIZATION_LIMIT_PERCENT,
-        allowable_overhead
+        "Utilization limit not enforced: max utilization {limited_max_utilization}% exceeds limit {UTILIZATION_LIMIT_PERCENT}% (with overhead {allowable_overhead}%)",
     );
 
     // Make sure the baseline was actually higher to ensure test validity
     assert!(
         baseline_avg_utilization > limited_avg_utilization,
-        "Baseline utilization {}% should be higher than limited utilization {}%",
-        baseline_avg_utilization,
-        limited_avg_utilization
+        "Baseline utilization {baseline_avg_utilization}% should be higher than limited utilization {limited_avg_utilization}%",
     );
 
     // Cleanup
@@ -176,7 +171,7 @@ fn run_and_monitor(
     let nvml = test_setup::global_nvml();
     // Monitor metrics while the program runs
     let metrics = monitor_gpu_metrics(
-        &nvml,
+        nvml,
         child_id,
         GPU_INDEX,
         duration_seconds - 2,

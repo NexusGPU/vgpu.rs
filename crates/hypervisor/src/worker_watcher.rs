@@ -290,7 +290,7 @@ mod tests {
 
         // Run all test cases
         for (path_str, should_succeed, expected_result, error_fragment, description) in cases {
-            println!("Testing case: {}", description);
+            println!("Testing case: {description}");
             let path = PathBuf::from(path_str);
             let result = extract_pid_from_path(&path);
 
@@ -306,26 +306,20 @@ mod tests {
                     let pid = result.unwrap();
                     assert_eq!(
                         pid, expected_pid,
-                        "Case '{}' failed: PID mismatch",
-                        description
+                        "Case '{description}' failed: PID mismatch",
                     );
                 }
             } else {
                 assert!(
                     result.is_err(),
-                    "Case '{}' failed: expected Err but got Ok: {:?}",
-                    description,
-                    result.unwrap()
+                    "Case '{description}' failed: expected Err but got Ok: {result:?}",
                 );
 
                 if let Some(fragment) = error_fragment {
                     let actual_error = result.unwrap_err();
                     assert!(
                         actual_error.contains(fragment),
-                        "Case '{}' failed: error message '{}' doesn't contain expected text '{}'",
-                        description,
-                        actual_error,
-                        fragment
+                        "Case '{description}' failed: error message '{actual_error}' doesn't contain expected text '{fragment}'",
                     );
                 }
             }
