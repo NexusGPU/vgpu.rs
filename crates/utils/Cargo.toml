@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 tracing = { workspace = true }
-tracing-appender = "0.2"
+tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 frida-gum = { git = "https://github.com/frida/frida-rust", rev = "e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f", features = ["auto-download", "std"] }
 thiserror = { workspace = true }

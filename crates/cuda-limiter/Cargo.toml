@@ -13,15 +13,10 @@ tracing = { workspace = true }
 utils = { workspace = true }
 ctor = { workspace = true }
 thiserror = { workspace = true }
-serde_json = "1.0"
-nvml-wrapper = "0.11.0"
-nvml-wrapper-sys = "0.9.0"
-cudarc = { version = "0.16.4", default-features = false, features = [
-  "std",
-  "driver",
-  "dynamic-loading",
-  "cuda-11080"
-] }
+serde_json = { workspace = true }
+nvml-wrapper = { workspace = true }
+nvml-wrapper-sys = { workspace = true }
+cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
 
 [build-dependencies]
 cbindgen = "0.29"
