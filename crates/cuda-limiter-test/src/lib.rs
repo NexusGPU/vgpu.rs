@@ -10,8 +10,6 @@ use std::process::Stdio;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
@@ -25,27 +23,19 @@ pub fn get_gpu_uuid(gpu_index: usize) -> anyhow::Result<String> {
     Ok(dev.uuid()?)
 }
 
-/// Helper function to get current time in milliseconds since Unix epoch
-fn unix_as_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_millis() as u64
-}
-
 pub fn get_gpu_utilization(
     nvml: &Nvml,
     gpu_index: usize,
     pid: u32,
     last_seen_timestamp: u64,
-) -> anyhow::Result<u32> {
+) -> anyhow::Result<(u32, u64)> {
     // Get the device by index
     let device = nvml.device_by_index(gpu_index as u32)?;
 
     // Get process utilization samples
     let process_utilization_samples = match device.process_utilization_stats(last_seen_timestamp) {
         Ok(samples) => samples,
-        Err(NvmlError::NotFound) => return Ok(0),
+        Err(NvmlError::NotFound) => return Ok((0, last_seen_timestamp)),
         Err(e) => {
             return Err(anyhow::anyhow!(
                 "Failed to get process utilization stats: {e}"
@@ -53,73 +43,40 @@ pub fn get_gpu_utilization(
         }
     };
 
+    let mut util = 0;
+    let mut count = 0;
+    let mut newest_timestamp_candidate = last_seen_timestamp;
     // Find the sample for the requested PID
     for sample in process_utilization_samples {
-        if sample.pid == pid {
+        // Skip old samples
+        if sample.timestamp < last_seen_timestamp {
+            continue;
+        }
+
+        if sample.timestamp > newest_timestamp_candidate {
+            newest_timestamp_candidate = sample.timestamp;
+        }
+
+        if sample.pid == pid && sample.sm_util <= 100 {
             // Sum the different utilization components
-            return Ok(sample.sm_util + sample.enc_util + sample.dec_util);
+            util += sample.sm_util;
+            count += 1;
         }
     }
 
-    // PID not found
-    Err(anyhow::anyhow!(
-        "Process with PID {} not found using GPU {}",
-        pid,
-        gpu_index
-    ))
-}
-
-/// Set environment variables for the CUDA limiter
-pub fn set_limiter_env_vars(gpu_uuid: &str, mem_limit: u64, utilization_limit: u32) {
-    // Convert UUID to lowercase for the test
-    let uuid_lowercase = gpu_uuid.to_lowercase();
-
-    // Set memory limit as JSON
-    let mem_limit_json = json!({
-        &uuid_lowercase: mem_limit,
-    })
-    .to_string();
-    env::set_var("TENSOR_FUSION_CUDA_MEM_LIMIT", mem_limit_json);
-
-    // Set utilization limit as JSON
-    let up_limit_json = json!({
-        &uuid_lowercase: utilization_limit,
-    })
-    .to_string();
-    env::set_var("TENSOR_FUSION_CUDA_UP_LIMIT", up_limit_json);
-}
-
-/// Set environment variables with uppercase GPU UUID to test case-insensitivity
-pub fn set_limiter_env_vars_uppercase(gpu_uuid: &str, mem_limit: u64, utilization_limit: u32) {
-    // Convert UUID to uppercase to test case-insensitivity
-    let uuid_uppercase = gpu_uuid.to_uppercase();
-
-    // Set memory limit as JSON
-    let mem_limit_json = json!({
-        &uuid_uppercase: mem_limit,
-    })
-    .to_string();
-    env::set_var("TENSOR_FUSION_CUDA_MEM_LIMIT", mem_limit_json);
-
-    // Set utilization limit as JSON
-    let up_limit_json = json!({
-        &uuid_uppercase: utilization_limit,
-    })
-    .to_string();
-    env::set_var("TENSOR_FUSION_CUDA_UP_LIMIT", up_limit_json);
-}
-
-/// Clear limiter environment variables
-pub fn clear_limiter_env_vars() {
-    env::remove_var("TENSOR_FUSION_CUDA_MEM_LIMIT");
-    env::remove_var("TENSOR_FUSION_CUDA_UP_LIMIT");
+    if count == 0 {
+        Ok((0, newest_timestamp_candidate))
+    } else {
+        Ok((util / count, newest_timestamp_candidate))
+    }
 }
 
 pub fn run_cuda_test_program(
     memory_bytes: u64,
     duration_seconds: u64,
     gpu_index: usize,
-    use_limiter: bool,
+    // (utilization_limit, memory_limit)
+    limit: Option<(u64, u64)>,
 ) -> anyhow::Result<(u32, impl FnOnce() -> anyhow::Result<Output>)> {
     let cuda_program_path = env!("CUDA_TEST_PROGRAM_PATH");
     let mut cmd = Command::new(cuda_program_path);
@@ -128,9 +85,29 @@ pub fn run_cuda_test_program(
         .arg(gpu_index.to_string());
 
     // If using limiter, set up LD_PRELOAD
-    if use_limiter {
+    if let Some((utilization_limit, memory_limit)) = limit {
         let limiter_path = get_limiter_library_path()?;
         cmd.env("LD_PRELOAD", &limiter_path);
+
+        // Convert UUID to lowercase for the test
+        let uuid_lowercase = get_gpu_uuid(gpu_index)?.to_lowercase();
+        // Set memory limit as JSON
+        cmd.env(
+            "TENSOR_FUSION_CUDA_MEM_LIMIT",
+            json!({
+                &uuid_lowercase: memory_limit,
+            })
+            .to_string(),
+        );
+
+        // Set utilization limit as JSON
+        cmd.env(
+            "TENSOR_FUSION_CUDA_UP_LIMIT",
+            json!({
+                &uuid_lowercase: utilization_limit,
+            })
+            .to_string(),
+        );
     }
 
     // Set up stdio
@@ -184,13 +161,13 @@ pub fn monitor_gpu_metrics(
     let start_time = Instant::now();
     let end_time = start_time + Duration::from_secs(duration_seconds);
 
-    let mut last_seen_timestamp = unix_as_millis()
-        .saturating_mul(1000) // Convert to microseconds
-        .saturating_sub(1_000_000); // Look at last 1 second
+    let mut last_seen_timestamp = 0;
+
     while Instant::now() < end_time {
-        let utilization = get_gpu_utilization(nvml, gpu_index, pid, last_seen_timestamp)?;
+        let (utilization, newest_timestamp) =
+            get_gpu_utilization(nvml, gpu_index, pid, last_seen_timestamp)?;
         metrics.push(utilization);
-        last_seen_timestamp = unix_as_millis();
+        last_seen_timestamp = newest_timestamp;
         // Sleep for the sample interval
         thread::sleep(Duration::from_millis(sample_interval_ms));
     }
@@ -210,8 +187,4 @@ pub fn calculate_avg_utilization(metrics: &[u32]) -> u32 {
 
     let sum: u32 = metrics.iter().sum();
     sum / metrics.len() as u32
-}
-
-pub fn calculate_max_utilization(metrics: &[u32]) -> u32 {
-    metrics.iter().max().cloned().unwrap_or(0)
 }

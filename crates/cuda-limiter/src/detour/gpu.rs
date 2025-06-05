@@ -305,7 +305,7 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flag: c_uint) -> CUresult {
             std::thread::Builder::new()
                 .name(format!("utilization-watcher-{device_id}"))
                 .spawn(move || {
-                    if let Err(err) = limiter.run_watcher(device_id, Duration::from_millis(120)) {
+                    if let Err(err) = limiter.run_watcher(device_id, Duration::from_millis(100)) {
                         tracing::error!("Watcher for device {} failed: {:?}", device_id, err);
                     }
                 })
