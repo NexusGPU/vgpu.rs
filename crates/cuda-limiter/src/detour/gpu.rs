@@ -1,6 +1,7 @@
 use std::ffi::c_int;
 use std::ffi::c_uint;
 use std::ffi::c_void;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use cudarc::driver::sys::cuDeviceGetCount;
@@ -277,6 +278,8 @@ pub(crate) unsafe extern "C" fn cu_func_set_block_shape_detour(
 
 #[hook_fn]
 pub(crate) unsafe extern "C" fn cu_init_detour(flag: c_uint) -> CUresult {
+    static INIT: OnceLock<()> = OnceLock::new();
+
     // Call original cuInit first
     let result = FN_CU_INIT(flag);
 
@@ -284,33 +287,34 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flag: c_uint) -> CUresult {
     if result != CUresult::CUDA_SUCCESS {
         return result;
     }
+    let _ = INIT.get_or_try_init(|| {
+        // Get the number of CUDA devices
+        let mut device_count: c_int = 0;
+        let count_result = cuDeviceGetCount(&mut device_count as *mut c_int);
 
-    // Get the number of CUDA devices
-    let mut device_count: c_int = 0;
-    let count_result = cuDeviceGetCount(&mut device_count as *mut c_int);
+        if count_result != CUresult::CUDA_SUCCESS || device_count <= 0 {
+            tracing::error!("Failed to get device count or no devices found");
+            return Err(());
+        }
 
-    if count_result != CUresult::CUDA_SUCCESS || device_count <= 0 {
-        tracing::warn!("Failed to get device count or no devices found");
-        return result;
-    }
-
-    // Get the global limiter instance
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
-
-    // Start a watcher thread for each device
-    for device_idx in 0..device_count as u32 {
-        let device_id = device_idx; // Create a copy for the closure
-        std::thread::Builder::new()
-            .name(format!("utilization-watcher-{}", device_id))
-            .spawn(move || {
-                if let Err(err) = limiter.run_watcher(device_id, Duration::from_millis(120)) {
-                    tracing::error!("Watcher for device {} failed: {:?}", device_id, err);
-                }
-            })
-            .unwrap_or_else(|_| {
-                panic!("spawn utilization-watcher thread for device {}", device_id)
-            });
-    }
+        // Get the global limiter instance
+        let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+        // Start a watcher thread for each device
+        for device_idx in 0..device_count as u32 {
+            let device_id = device_idx; // Create a copy for the closure
+            std::thread::Builder::new()
+                .name(format!("utilization-watcher-{device_id}"))
+                .spawn(move || {
+                    if let Err(err) = limiter.run_watcher(device_id, Duration::from_millis(120)) {
+                        tracing::error!("Watcher for device {} failed: {:?}", device_id, err);
+                    }
+                })
+                .unwrap_or_else(|_| {
+                    panic!("spawn utilization-watcher thread for device {device_id}")
+                });
+        }
+        Ok(())
+    });
 
     result
 }

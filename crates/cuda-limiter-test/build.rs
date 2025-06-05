@@ -11,7 +11,7 @@ fn main() {
     let cuda_src_path = "src/cuda_test.cu";
 
     // rerun if CUDA source file changes
-    println!("cargo:rerun-if-changed={}", cuda_src_path);
+    println!("cargo:rerun-if-changed={cuda_src_path}");
 
     // compile CUDA code
     let nvcc_status = Command::new("nvcc")

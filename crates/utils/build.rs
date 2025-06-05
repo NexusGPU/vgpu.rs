@@ -2,11 +2,11 @@ use std::env;
 
 fn main() {
     if let Err(err) = emit_git_variables() {
-        println!("cargo:warning=vergen: {}", err);
+        println!("cargo:warning=vergen: {err}");
     }
 
     let version = env::var("VERSION").unwrap_or_else(|_| "latest".to_string());
-    println!("cargo:rustc-env=IMAGE_VERSION={}", version);
+    println!("cargo:rustc-env=IMAGE_VERSION={version}");
 }
 
 fn emit_git_variables() -> anyhow::Result<()> {

@@ -10,97 +10,63 @@ use std::process::Stdio;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
+use nvml_wrapper::error::NvmlError;
+use nvml_wrapper::Nvml;
 use serde_json::json;
 pub use test_setup::init_test_logging;
 
 /// Get UUID of the GPU at the specified index using nvidia-smi
-pub fn get_gpu_uuid(gpu_index: usize) -> Result<String, String> {
-    let output = Command::new("nvidia-smi")
-        .args(["--query-gpu=index,uuid", "--format=csv,noheader"])
-        .output()
-        .map_err(|e| format!("Failed to execute nvidia-smi: {}", e))?;
+pub fn get_gpu_uuid(gpu_index: usize) -> anyhow::Result<String> {
+    let nvml = test_setup::global_nvml();
+    let dev = nvml.device_by_index(gpu_index as u32)?;
+    Ok(dev.uuid()?)
+}
 
-    if !output.status.success() {
-        return Err(format!(
-            "nvidia-smi failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
+/// Helper function to get current time in milliseconds since Unix epoch
+fn unix_as_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_millis() as u64
+}
 
-    let output_str = String::from_utf8_lossy(&output.stdout);
+pub fn get_gpu_utilization(
+    nvml: &Nvml,
+    gpu_index: usize,
+    pid: u32,
+    last_seen_timestamp: u64,
+) -> anyhow::Result<u32> {
+    // Get the device by index
+    let device = nvml.device_by_index(gpu_index as u32)?;
 
-    // Parse the output to find the UUID for the requested GPU index
-    for line in output_str.lines() {
-        let parts: Vec<&str> = line.trim().split(',').collect();
-        if parts.len() == 2 {
-            let index_str = parts[0].trim();
-            let uuid = parts[1].trim().to_string();
+    // Get process utilization samples
+    let process_utilization_samples = match device.process_utilization_stats(last_seen_timestamp) {
+        Ok(samples) => samples,
+        Err(NvmlError::NotFound) => return Ok(0),
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "Failed to get process utilization stats: {e}"
+            ))
+        }
+    };
 
-            if let Ok(index) = index_str.parse::<usize>() {
-                if index == gpu_index {
-                    return Ok(uuid);
-                }
-            }
+    // Find the sample for the requested PID
+    for sample in process_utilization_samples {
+        if sample.pid == pid {
+            // Sum the different utilization components
+            return Ok(sample.sm_util + sample.enc_util + sample.dec_util);
         }
     }
 
-    Err(format!("GPU with index {} not found", gpu_index))
-}
-
-/// Get current GPU utilization using nvidia-smi
-pub fn get_gpu_utilization(gpu_index: usize) -> Result<u32, String> {
-    let output = Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=utilization.gpu",
-            "--format=csv,noheader,nounits",
-            &format!("--id={}", gpu_index),
-        ])
-        .output()
-        .map_err(|e| format!("Failed to execute nvidia-smi: {}", e))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "nvidia-smi failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    let utilization = output_str
-        .trim()
-        .parse::<u32>()
-        .map_err(|e| format!("Failed to parse GPU utilization: {}", e))?;
-
-    Ok(utilization)
-}
-
-/// Get current GPU memory usage using nvidia-smi
-pub fn get_gpu_memory_usage(gpu_index: usize) -> Result<u64, String> {
-    let output = Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=memory.used",
-            "--format=csv,noheader,nounits",
-            &format!("--id={}", gpu_index),
-        ])
-        .output()
-        .map_err(|e| format!("Failed to execute nvidia-smi: {}", e))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "nvidia-smi failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    // nvidia-smi returns memory in MiB, convert to bytes
-    let memory_mib = output_str
-        .trim()
-        .parse::<u64>()
-        .map_err(|e| format!("Failed to parse GPU memory usage: {}", e))?;
-
-    Ok(memory_mib * 1024 * 1024) // Convert MiB to bytes
+    // PID not found
+    Err(anyhow::anyhow!(
+        "Process with PID {} not found using GPU {}",
+        pid,
+        gpu_index
+    ))
 }
 
 /// Set environment variables for the CUDA limiter
@@ -149,23 +115,15 @@ pub fn clear_limiter_env_vars() {
     env::remove_var("TENSOR_FUSION_CUDA_UP_LIMIT");
 }
 
-/// Run the CUDA test program with or without the limiter
 pub fn run_cuda_test_program(
     memory_bytes: u64,
-    utilization_percent: u32,
     duration_seconds: u64,
     gpu_index: usize,
     use_limiter: bool,
-) -> Result<Output, String> {
-    // 获取CUDA程序路径 (从环境变量或查找编译后的二进制文件)
+) -> anyhow::Result<(u32, impl FnOnce() -> anyhow::Result<Output>)> {
     let cuda_program_path = env!("CUDA_TEST_PROGRAM_PATH");
-
-    // 设置命令
     let mut cmd = Command::new(cuda_program_path);
-
-    // 我们的C语言CUDA测试程序使用位置参数而不是命名参数
     cmd.arg(memory_bytes.to_string())
-        .arg(utilization_percent.to_string())
         .arg(duration_seconds.to_string())
         .arg(gpu_index.to_string());
 
@@ -175,20 +133,30 @@ pub fn run_cuda_test_program(
         cmd.env("LD_PRELOAD", &limiter_path);
     }
 
-    // Run the command
-    let output = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("Failed to execute CUDA test program: {}", e))?;
+    // Set up stdio
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Spawn the process
+    let child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to execute CUDA test program: {e}"))?;
 
-    Ok(output)
+    let child_id = child.id();
+    let wait_fn = move || {
+        // Wait for the process and get output
+        let output = child
+            .wait_with_output()
+            .map_err(|e| anyhow::anyhow!("Failed to get output from CUDA test program: {e}"))?;
+
+        Ok(output)
+    };
+
+    Ok((child_id, wait_fn))
 }
 
 /// Get the path to the compiled cuda-limiter library
-fn get_limiter_library_path() -> Result<PathBuf, String> {
+fn get_limiter_library_path() -> anyhow::Result<PathBuf> {
     let bin_dir = env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Failed to get current directory: {e}"))?
         .join("../../target/debug");
 
     // Look for the library file (platform-dependent extension)
@@ -196,9 +164,8 @@ fn get_limiter_library_path() -> Result<PathBuf, String> {
 
     let lib_path = bin_dir.join(lib_name);
     if !lib_path.exists() {
-        return Err(format!(
-            "Limiter library not found at {:?}. Did you build it?",
-            lib_path
+        return Err(anyhow::anyhow!(
+            "Limiter library not found at {lib_path:?}. Did you build it?"
         ));
     }
 
@@ -207,20 +174,23 @@ fn get_limiter_library_path() -> Result<PathBuf, String> {
 
 /// Monitor GPU metrics (utilization and memory) for a given duration
 pub fn monitor_gpu_metrics(
+    nvml: &Nvml,
+    pid: u32,
     gpu_index: usize,
     duration_seconds: u64,
     sample_interval_ms: u64,
-) -> Result<Vec<(u32, u64)>, String> {
+) -> anyhow::Result<Vec<u32>> {
     let mut metrics = Vec::new();
     let start_time = Instant::now();
     let end_time = start_time + Duration::from_secs(duration_seconds);
 
+    let mut last_seen_timestamp = unix_as_millis()
+        .saturating_mul(1000) // Convert to microseconds
+        .saturating_sub(1_000_000); // Look at last 1 second
     while Instant::now() < end_time {
-        let utilization = get_gpu_utilization(gpu_index)?;
-        let memory = get_gpu_memory_usage(gpu_index)?;
-
-        metrics.push((utilization, memory));
-
+        let utilization = get_gpu_utilization(nvml, gpu_index, pid, last_seen_timestamp)?;
+        metrics.push(utilization);
+        last_seen_timestamp = unix_as_millis();
         // Sleep for the sample interval
         thread::sleep(Duration::from_millis(sample_interval_ms));
     }
@@ -228,40 +198,20 @@ pub fn monitor_gpu_metrics(
     Ok(metrics)
 }
 
-/// Calculate the average of a series of GPU utilization measurements
-pub fn calculate_avg_utilization(metrics: &[(u32, u64)]) -> u32 {
+/// Check if CUDA is available on the system
+pub fn is_cuda_available() -> bool {
+    Command::new("nvidia-smi").output().is_ok()
+}
+
+pub fn calculate_avg_utilization(metrics: &[u32]) -> u32 {
     if metrics.is_empty() {
         return 0;
     }
 
-    let sum: u32 = metrics.iter().map(|(util, _)| *util).sum();
+    let sum: u32 = metrics.iter().sum();
     sum / metrics.len() as u32
 }
 
-/// Calculate the average of a series of GPU memory usage measurements
-pub fn calculate_avg_memory(metrics: &[(u32, u64)]) -> u64 {
-    if metrics.is_empty() {
-        return 0;
-    }
-
-    let sum: u64 = metrics.iter().map(|(_, mem)| *mem).sum();
-    sum / metrics.len() as u64
-}
-
-/// Calculate the maximum of a series of GPU utilization measurements
-pub fn calculate_max_utilization(metrics: &[(u32, u64)]) -> u32 {
-    metrics.iter().map(|(util, _)| *util).max().unwrap_or(0)
-}
-
-/// Calculate the maximum of a series of GPU memory usage measurements
-pub fn calculate_max_memory(metrics: &[(u32, u64)]) -> u64 {
-    metrics.iter().map(|(_, mem)| *mem).max().unwrap_or(0)
-}
-
-/// Check if CUDA is available on the system
-pub fn is_cuda_available() -> bool {
-    match Command::new("nvidia-smi").output() {
-        Ok(output) => output.status.success(),
-        Err(_) => false,
-    }
+pub fn calculate_max_utilization(metrics: &[u32]) -> u32 {
+    metrics.iter().max().cloned().unwrap_or(0)
 }

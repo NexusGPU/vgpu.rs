@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <time.h>
 #include <cuda_runtime.h>
 
@@ -23,19 +22,17 @@ __global__ void computeKernel(float *input, float *output, int n, int iterations
 }
 
 int main(int argc, char **argv) {
-    if (argc < 5) {
-        printf("Usage: %s <memory_bytes> <utilization_percent> <duration_seconds> <gpu_index>\n", argv[0]);
+    if (argc < 4) {
+        printf("Usage: %s <memory_bytes> <duration_seconds> <gpu_index>\n", argv[0]);
         return 1;
     }
     
     size_t memory_bytes = atoll(argv[1]);
-    int utilization = atoi(argv[2]);
-    int duration_seconds = atoi(argv[3]);
-    int gpu_index = atoi(argv[4]);
+    int duration_seconds = atoi(argv[2]);
+    int gpu_index = atoi(argv[3]);
     
     printf("Starting CUDA test program with the following parameters:\n");
     printf("  Memory: %zu bytes\n", memory_bytes);
-    printf("  Utilization: %d%%\n", utilization);
     printf("  Duration: %d seconds\n", duration_seconds);
     printf("  GPU: %d\n", gpu_index);
     
@@ -105,8 +102,8 @@ int main(int argc, char **argv) {
     
     // run until duration is reached
     while (time(NULL) < end_time) {
-        // calculate iterations based on target utilization
-        int iterations = utilization * 10; // scale factor
+        // use a fixed high iteration count for maximum GPU utilization
+        const int iterations = 1000; // high value to ensure full GPU utilization
         
         // launch kernel
         computeKernel<<<blocks, threadsPerBlock>>>(d_data, d_output, element_count, iterations);
@@ -118,12 +115,7 @@ int main(int argc, char **argv) {
         
         // wait for kernel to complete
         cudaDeviceSynchronize();
-        
-        // adjust sleep time based on target utilization
-        int adjustment_sleep = (100 - utilization) / 10;
-        if (adjustment_sleep > 0) {
-            usleep(adjustment_sleep * 1000); // milliseconds to microseconds
-        }
+        // no sleep - run at maximum speed to fully utilize the GPU
     }
     
     printf("Test completed successfully\n");

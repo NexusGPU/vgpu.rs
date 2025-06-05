@@ -211,12 +211,11 @@ fn extract_pid_from_path(path: &std::path::Path) -> Result<u32, String> {
     let pid = path
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| format!("could not extract PID from path: {:?}, skipped", path))
+        .ok_or_else(|| format!("could not extract PID from path: {path:?}, skipped"))
         .and_then(|s| {
             s.parse::<u32>().map_err(|e| {
                 format!(
-                    "failed to parse PID from path: {:?}, error: {:?}, skipped",
-                    path, e
+                    "failed to parse PID from path: {path:?}, error: {e:?}, skipped"
                 )
             })
         })?;
@@ -232,7 +231,7 @@ fn extract_pid_from_path(path: &std::path::Path) -> Result<u32, String> {
 /// - TENSOR_FUSION_QOS_LEVEL: Optional. Sets the QoS level for the worker.
 ///   Possible values: "HIGH", "LOW" (case insensitive). Defaults to "MEDIUM" if not set.
 fn read_process_env_vars(pid: u32) -> Result<HashMap<String, String>, io::Error> {
-    let environ_path = format!("/proc/{}/environ", pid);
+    let environ_path = format!("/proc/{pid}/environ");
     let content = fs::read(&environ_path)?;
 
     let mut env_vars = HashMap::new();

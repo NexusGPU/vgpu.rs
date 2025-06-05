@@ -1,3 +1,6 @@
+use std::ffi;
+
+use nvml_wrapper::Nvml;
 use once_cell::sync::OnceCell;
 use tracing::info;
 
@@ -8,6 +11,20 @@ pub fn init_test_logging() {
         utils::logging::init();
         info!("Test logging initialized");
     });
+}
+
+pub fn global_nvml() -> &'static Nvml {
+    static INIT: OnceCell<Nvml> = OnceCell::new();
+    INIT.get_or_init(|| {
+        let nvml = match Nvml::init() {
+            Ok(nvml) => nvml,
+            Err(_) => Nvml::builder()
+                .lib_path(ffi::OsStr::new("libnvidia-ml.so.1"))
+                .init()
+                .expect("Failed to initialize NVML"),
+        };
+        nvml
+    })
 }
 
 /// auto-executed function when module is loaded, used for test environment initialization

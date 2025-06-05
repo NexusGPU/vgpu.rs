@@ -90,7 +90,7 @@ impl IpcTrap {
         let pid = std::process::id();
 
         // Construct the expected filename where the server name is stored
-        let filename = path.as_ref().join(format!("trap_server_{}.addr", pid));
+        let filename = path.as_ref().join(format!("trap_server_{pid}.addr"));
 
         // Wait for the file to appear with a timeout
         let poll_interval = Duration::from_millis(300); // How often to check if no signal
@@ -215,7 +215,7 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
             )?;
 
         // Write the server_name to the file before accepting connections
-        let filename = path.as_ref().join(format!("trap_server_{}.addr", pid));
+        let filename = path.as_ref().join(format!("trap_server_{pid}.addr"));
         fs::write(&filename, server_name)?;
         let addr_guard = AddressFileGuard {
             ipc_path: path.as_ref().to_path_buf(),
