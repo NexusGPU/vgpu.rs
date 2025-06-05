@@ -214,9 +214,7 @@ fn extract_pid_from_path(path: &std::path::Path) -> Result<u32, String> {
         .ok_or_else(|| format!("could not extract PID from path: {path:?}, skipped"))
         .and_then(|s| {
             s.parse::<u32>().map_err(|e| {
-                format!(
-                    "failed to parse PID from path: {path:?}, error: {e:?}, skipped"
-                )
+                format!("failed to parse PID from path: {path:?}, error: {e:?}, skipped")
             })
         })?;
 
