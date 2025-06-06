@@ -300,17 +300,19 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flag: c_uint) -> CUresult {
         // Get the global limiter instance
         let limiter = GLOBAL_LIMITER.get().expect("get limiter");
         // Start a watcher thread for each device
-        for device_idx in 0..device_count as u32 {
-            let device_id = device_idx; // Create a copy for the closure
+        for dev in limiter.devices.iter() {
             std::thread::Builder::new()
-                .name(format!("utilization-watcher-{device_id}"))
+                .name(format!("utilization-watcher-{}", dev.dev_idx))
                 .spawn(move || {
-                    if let Err(err) = limiter.run_watcher(device_id, Duration::from_millis(100)) {
-                        tracing::error!("Watcher for device {} failed: {:?}", device_id, err);
+                    if let Err(err) = limiter.run_watcher(dev.dev_idx, Duration::from_millis(120)) {
+                        tracing::error!("Watcher for device {} failed: {:?}", dev.dev_idx, err);
                     }
                 })
                 .unwrap_or_else(|_| {
-                    panic!("spawn utilization-watcher thread for device {device_id}")
+                    panic!(
+                        "spawn utilization-watcher thread for device {}",
+                        dev.dev_idx
+                    )
                 });
         }
         Ok(())

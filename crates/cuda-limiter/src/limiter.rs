@@ -66,7 +66,8 @@ impl Default for DeviceConfig {
 
 /// Internal device information and state
 #[derive(Debug)]
-struct DeviceInfo {
+pub(crate) struct DeviceInfo {
+    pub(crate) dev_idx: u32,
     /// Number of streaming multiprocessors
     sm_count: u32,
     /// Maximum threads per streaming multiprocessor
@@ -84,8 +85,8 @@ struct DeviceInfo {
 
     cu_device: CUdevice,
     /// Block dimensions set by cuFuncSetBlockShape
-    pub(crate) block_x: AtomicU32,
     pub(crate) block_y: AtomicU32,
+    pub(crate) block_x: AtomicU32,
     pub(crate) block_z: AtomicU32,
 
     /// Condition variable for signaling when CUDA cores become available
@@ -100,7 +101,7 @@ pub(crate) struct Limiter {
     /// Process ID being monitored
     pub(crate) pid: u32,
     /// Information about each device
-    devices: Vec<DeviceInfo>,
+    pub(crate) devices: Vec<DeviceInfo>,
 }
 
 /// Builder for creating a Limiter with custom configuration
@@ -171,6 +172,7 @@ impl LimiterBuilder {
                 .map_err(Error::Nvml)?;
 
             let device_info = DeviceInfo {
+                dev_idx: config.device_idx,
                 sm_count,
                 max_thread_per_sm,
                 total_cuda_cores,
