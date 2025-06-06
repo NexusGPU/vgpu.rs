@@ -41,9 +41,6 @@ pub(crate) enum Error {
 
     #[error("Invalid CUDA device: {0}")]
     InvalidCuDevice(CUdevice),
-
-    #[error("Resource not available: {0}")]
-    ResourceNotAvailable(String),
 }
 
 /// Configuration for a CUDA device
@@ -121,8 +118,6 @@ struct Utilization {
     user_current: u32,
     /// Current system-wide utilization
     sys_current: u32,
-    /// Number of processes using the GPU
-    sys_process_num: u32,
 }
 
 impl LimiterBuilder {
@@ -160,48 +155,37 @@ impl LimiterBuilder {
 
         for config in configs {
             // Fill any gaps in the device indices
-            while devices.len() < config.device_idx as usize + 1 {
-                let ctx = CudaContext::new(devices.len())?;
+            let ctx = CudaContext::new(config.device_idx as usize)?;
 
-                let sm_count = ctx
-                    .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)?
-                    as u32;
-                let max_thread_per_sm = ctx.attribute(
-                    CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR,
-                )? as u32;
+            let sm_count =
+                ctx.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
+            let max_thread_per_sm = ctx
+                .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR)?
+                as u32;
 
-                let total_mem =
-                    unsafe { cudarc::driver::result::device::total_mem(ctx.cu_device()) }? as u64;
-                let total_cuda_cores = sm_count * max_thread_per_sm * FACTOR;
-                self.nvml
-                    .device_by_index(devices.len() as u32)
-                    .map_err(Error::Nvml)?;
-                tracing::info!(
-                    "Device {}: sm_count: {}, max_thread_per_sm: {}, mem_limit: {} bytes, total_mem: {} bytes",
-                    devices.len(),
-                    sm_count,
-                    max_thread_per_sm,
-                    config.mem_limit,
-                    total_mem
-                );
+            let total_mem =
+                unsafe { cudarc::driver::result::device::total_mem(ctx.cu_device()) }? as u64;
+            let total_cuda_cores = sm_count * max_thread_per_sm * FACTOR;
+            self.nvml
+                .device_by_index(config.device_idx)
+                .map_err(Error::Nvml)?;
 
-                let device_info = DeviceInfo {
-                    sm_count,
-                    max_thread_per_sm,
-                    total_cuda_cores,
-                    available_cuda_cores: AtomicI32::new(0),
-                    up_limit: AtomicU32::new(config.up_limit),
-                    mem_limit: AtomicU64::new(config.mem_limit),
-                    total_mem,
-                    cu_device: ctx.cu_device(),
-                    block_x: AtomicU32::new(0),
-                    block_y: AtomicU32::new(0),
-                    block_z: AtomicU32::new(0),
-                    cores_condvar: Arc::new((Mutex::new(()), Condvar::new())),
-                };
+            let device_info = DeviceInfo {
+                sm_count,
+                max_thread_per_sm,
+                total_cuda_cores,
+                available_cuda_cores: AtomicI32::new(0),
+                up_limit: AtomicU32::new(config.up_limit),
+                mem_limit: AtomicU64::new(config.mem_limit),
+                total_mem,
+                cu_device: ctx.cu_device(),
+                block_x: AtomicU32::new(0),
+                block_y: AtomicU32::new(0),
+                block_z: AtomicU32::new(0),
+                cores_condvar: Arc::new((Mutex::new(()), Condvar::new())),
+            };
 
-                devices.push(device_info);
-            }
+            devices.push(device_info);
         }
 
         Ok(Limiter {
@@ -342,24 +326,22 @@ impl Limiter {
     ) -> Result<(Utilization, u64), Error> {
         let max_retries = 5;
         let mut retry_count = 0;
+
+        let zero_utilization = Utilization {
+            user_current: 0,
+            sys_current: 0,
+        };
+
         loop {
             match self.get_used_gpu_utilization(device_idx, last_seen_timestamp) {
                 Ok((Some(util), newest_timestamp_candidate)) => {
                     return Ok((util, newest_timestamp_candidate))
                 }
                 Ok((None, _)) => {
-                    retry_count += 1;
-                    if retry_count >= max_retries {
-                        return Err(Error::ResourceNotAvailable(
-                            "GPU utilization data not available after retries".to_string(),
-                        ));
-                    }
-                    sleep(retry_interval);
+                    return Ok((zero_utilization, last_seen_timestamp));
                 }
                 Err(NvmlError::NotFound) => {
-                    // not found means this gpu is not using by any process
-                    sleep(retry_interval * DEFAULT_BACKOFF_MULTIPLIER);
-                    continue;
+                    return Ok((zero_utilization, last_seen_timestamp));
                 }
                 Err(err) => {
                     tracing::warn!("failed to get_used_gpu_utilization, err: {err}");
@@ -565,9 +547,6 @@ impl Limiter {
         // Initialize utilization counters
         let mut current = Utilization::default();
         let mut valid = false;
-
-        // Get number of processes
-        current.sys_process_num = dev.running_compute_processes_count()?;
 
         // Process each utilization sample
         for sample in process_utilization_samples {

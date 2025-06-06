@@ -1,17 +1,15 @@
 #![feature(once_cell_try)]
 
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::ffi;
 use std::ffi::c_char;
 use std::ffi::c_int;
 use std::ffi::c_void;
 use std::ffi::CStr;
+use std::ffi::OsStr;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
 use ctor::ctor;
-use limiter::DeviceConfig;
 use limiter::Limiter;
 use nvml_wrapper::Nvml;
 use tf_macro::hook_fn;
@@ -21,6 +19,7 @@ use utils::hooks::HookManager;
 use utils::logging;
 use utils::replace_symbol;
 
+mod config;
 mod detour;
 mod limiter;
 
@@ -95,47 +94,9 @@ unsafe fn entry_point() {
     logging::init();
     let pid = std::process::id();
 
-    // Read up_limit and mem_limit from environment variables as JSON objects
-    let up_limit_json =
-        std::env::var("TENSOR_FUSION_CUDA_UP_LIMIT").unwrap_or_else(|_| "{}".to_string());
-
-    let mem_limit_json =
-        std::env::var("TENSOR_FUSION_CUDA_MEM_LIMIT").unwrap_or_else(|_| "{}".to_string());
-
-    // Parse JSON objects and convert keys to lowercase
-    let up_limit_map = match serde_json::from_str::<HashMap<String, u32>>(&up_limit_json) {
-        Ok(map) => {
-            // Convert all keys to lowercase
-            map.into_iter()
-                .map(|(k, v)| (k.to_lowercase(), v))
-                .collect()
-        }
-        Err(e) => {
-            tracing::error!("Failed to parse TENSOR_FUSION_CUDA_UP_LIMIT as JSON: {}", e);
-            HashMap::new()
-        }
-    };
-
-    let mem_limit_map = match serde_json::from_str::<HashMap<String, u64>>(&mem_limit_json) {
-        Ok(map) => {
-            // Convert all keys to lowercase
-            map.into_iter()
-                .map(|(k, v)| (k.to_lowercase(), v))
-                .collect()
-        }
-        Err(e) => {
-            tracing::error!(
-                "Failed to parse TENSOR_FUSION_CUDA_MEM_LIMIT as JSON: {}",
-                e
-            );
-            HashMap::new()
-        }
-    };
-
-    // Initialize NVML
     let nvml = match Nvml::init().and(
         Nvml::builder()
-            .lib_path(ffi::OsStr::new("libnvidia-ml.so.1"))
+            .lib_path(OsStr::new("libnvidia-ml.so.1"))
             .init(),
     ) {
         Ok(nvml) => nvml,
@@ -145,60 +106,8 @@ unsafe fn entry_point() {
         }
     };
 
-    // Create device configurations based on UUIDs
-    let mut device_configs = Vec::new();
-    let device_count = match nvml.device_count() {
-        Ok(count) => count,
-        Err(e) => {
-            tracing::error!("Failed to get device count: {}", e);
-            0
-        }
-    };
-
-    for device_idx in 0..device_count {
-        let device = match nvml.device_by_index(device_idx) {
-            Ok(device) => device,
-            Err(e) => {
-                tracing::error!("Failed to get device at index {}: {}", device_idx, e);
-                continue;
-            }
-        };
-
-        let uuid = match device.uuid() {
-            Ok(uuid) => uuid.to_lowercase(),
-            Err(e) => {
-                tracing::error!("Failed to get UUID for device {}: {}", device_idx, e);
-                continue;
-            }
-        };
-
-        // Get limits from maps based on UUID
-        let up_limit = up_limit_map.get(&uuid).copied().unwrap_or(0);
-        let mem_limit = mem_limit_map.get(&uuid).copied().unwrap_or(0);
-
-        tracing::info!(
-            "Device {}: UUID {}, up_limit: {}, mem_limit: {}",
-            device_idx,
-            uuid,
-            up_limit,
-            mem_limit
-        );
-
-        device_configs.push(DeviceConfig {
-            device_idx,
-            up_limit,
-            mem_limit,
-        });
-    }
-
-    // If no devices were found, use a default configuration
-    if device_configs.is_empty() {
-        device_configs.push(DeviceConfig {
-            device_idx: 0,
-            up_limit: 0,
-            mem_limit: 0,
-        });
-    }
+    // parse device limits
+    let device_configs = config::parse_limits_and_create_device_configs(&nvml);
 
     let limiter = match Limiter::new(pid, nvml, &device_configs) {
         Ok(limiter) => limiter,
