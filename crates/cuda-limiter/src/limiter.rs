@@ -240,12 +240,12 @@ impl Limiter {
 
         // Wait for available CUDA cores using condition variable
         let (lock, cvar) = &*device.cores_condvar;
-        let mut guard = lock.lock().unwrap();
+        let mut guard = lock.lock().expect("poisoned");
 
         // Check if cores are already available
         while device.available_cuda_cores.load(Ordering::Acquire) <= 0 {
             // Wait for notification that cores are available
-            guard = cvar.wait(guard).unwrap();
+            guard = cvar.wait(guard).expect("poisoned");
         }
 
         // Subtract the used cores
