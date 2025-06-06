@@ -39,22 +39,21 @@ use it as follows:
 
 ```bash
 
-# First, get your GPU UUIDs
+# First, get your GPU UUIDs or device indices
 # Run this command to list all available GPUs and their UUIDs
-nvidia-smi --query-gpu=gpu_uuid --format=csv
+nvidia-smi -L
 # Example output:
-gpu_uuid
-GPU-3430f778-7a25-704c-9090-8b0bb2478114
+GPU 0: NVIDIA GeForce RTX 4060 Ti (UUID: GPU-3430f778-7a25-704c-9090-8b0bb2478114)
 
 # Set environment variables to configure limits
-# Set the maximum GPU utilization (unit: percentage)
-export TENSOR_FUSION_CUDA_UP_LIMIT="{\"gpu-3430f778-7a25-704c-9090-8b0bb2478114\": 10}"
+# You can use either GPU UUIDs (case-insensitive), device indices, or both as keys
+# 1. Use only GPU UUID as key
+export TENSOR_FUSION_CUDA_UP_LIMIT='{"gpu-3430f778-7a25-704c-9090-8b0bb2478114": 10}'
+export TENSOR_FUSION_CUDA_MEM_LIMIT='{"gpu-3430f778-7a25-704c-9090-8b0bb2478114": 1073741824}'
 
-# Set the maximum GPU memory usage (unit: bytes)
-export TENSOR_FUSION_CUDA_MEM_LIMIT="{\"gpu-3430f778-7a25-704c-9090-8b0bb2478114\": 1073741824}"
-
-# Note: GPU UUIDs are case-insensitive. The library will convert all UUIDs to lowercase internally.
-# So both "GPU-xxxx" and "gpu-xxxx" formats will work.
+# 2. Use only device index as key
+export TENSOR_FUSION_CUDA_UP_LIMIT='{"0": 20}'
+export TENSOR_FUSION_CUDA_MEM_LIMIT='{"0": 2147483648}'
 
 # Preload the cuda-limiter library and run an application
 LD_PRELOAD=/path/to/libcuda_limiter.so your_cuda_application
