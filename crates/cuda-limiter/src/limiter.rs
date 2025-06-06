@@ -255,7 +255,7 @@ impl Limiter {
         let kernel_size = grids;
 
         // Wait for available CUDA cores using condition variable
-        let &(ref lock, ref cvar) = &*device.cores_condvar;
+        let (lock, cvar) = &*device.cores_condvar;
         let mut guard = lock.lock().unwrap();
 
         // Check if cores are already available
@@ -398,7 +398,7 @@ impl Limiter {
         // or if we're adding cores (positive adjustment), notify waiting threads
         if (was_zero && new_value > 0) || adjustment > 0 {
             // Notify all waiting threads that cores are available
-            let &(ref _lock, ref cvar) = &*device.cores_condvar;
+            let (_lock, cvar) = &*device.cores_condvar;
             cvar.notify_all();
         }
     }
@@ -681,7 +681,7 @@ mod tests {
 
         // Now make cores available to unblock the thread
         device.available_cuda_cores.store(100, Ordering::Release);
-        let &(ref _lock, ref cvar) = &*device.cores_condvar;
+        let (_lock, cvar) = &*device.cores_condvar;
         cvar.notify_all();
 
         // Wait for the thread to complete or timeout
