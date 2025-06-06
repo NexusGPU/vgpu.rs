@@ -67,11 +67,9 @@ fn parse_limits_json_and_create_device_configs(
     let up_limit_map = match serde_json::from_str::<HashMap<String, u32>>(up_limit_json) {
         Ok(map) => {
             // Convert all keys to lowercase
-            let result = map
-                .into_iter()
+            map.into_iter()
                 .map(|(k, v)| (k.to_lowercase(), v))
-                .collect();
-            result
+                .collect()
         }
         Err(e) => {
             tracing::error!("Failed to parse TENSOR_FUSION_CUDA_UP_LIMIT as JSON: {}", e);
@@ -244,7 +242,7 @@ mod tests {
             } else {
                 // If no UUID is set, use a default UUID
                 Ok(Box::new(MockDevice {
-                    uuid: format!("default-uuid-{}", index),
+                    uuid: format!("default-uuid-{index}"),
                 }))
             }
         }
