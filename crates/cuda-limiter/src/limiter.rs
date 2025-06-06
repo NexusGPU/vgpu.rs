@@ -2,6 +2,9 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -19,8 +22,6 @@ use crate::detour::CUdevice;
 
 // Configuration constant
 const FACTOR: u32 = 32;
-// Default sleep duration when waiting for resources
-const DEFAULT_WAIT_SLEEP_MS: u64 = 10;
 // Default backoff multiplier for retries
 const DEFAULT_BACKOFF_MULTIPLIER: u32 = 2;
 
@@ -89,6 +90,9 @@ struct DeviceInfo {
     pub(crate) block_x: AtomicU32,
     pub(crate) block_y: AtomicU32,
     pub(crate) block_z: AtomicU32,
+
+    /// Condition variable for signaling when CUDA cores become available
+    pub(crate) cores_condvar: Arc<(Mutex<()>, Condvar)>,
 }
 
 /// Main limiter struct that manages CUDA resource limits
@@ -193,6 +197,7 @@ impl LimiterBuilder {
                     block_x: AtomicU32::new(0),
                     block_y: AtomicU32::new(0),
                     block_z: AtomicU32::new(0),
+                    cores_condvar: Arc::new((Mutex::new(()), Condvar::new())),
                 };
 
                 devices.push(device_info);
@@ -249,13 +254,14 @@ impl Limiter {
         let device = self.get_device(device_idx).expect("get device");
         let kernel_size = grids;
 
-        // Wait for available CUDA cores
-        loop {
-            let available = device.available_cuda_cores.load(Ordering::Acquire);
-            if available > 0 {
-                break;
-            }
-            sleep(Duration::from_millis(DEFAULT_WAIT_SLEEP_MS));
+        // Wait for available CUDA cores using condition variable
+        let (lock, cvar) = &*device.cores_condvar;
+        let mut guard = lock.lock().unwrap();
+
+        // Check if cores are already available
+        while device.available_cuda_cores.load(Ordering::Acquire) <= 0 {
+            // Wait for notification that cores are available
+            guard = cvar.wait(guard).unwrap();
         }
 
         // Subtract the used cores
@@ -371,6 +377,7 @@ impl Limiter {
     fn apply_core_adjustment(&self, device: &DeviceInfo, available_cores: i32, adjustment: i32) {
         let total_cores = device.total_cuda_cores as i32;
         let new_value = available_cores + adjustment;
+        let was_zero = available_cores <= 0;
 
         if new_value >= total_cores {
             // Cap at maximum
@@ -385,6 +392,14 @@ impl Limiter {
             device
                 .available_cuda_cores
                 .fetch_add(adjustment, Ordering::Release);
+        }
+
+        // If cores were previously unavailable (zero) and now they're available,
+        // or if we're adding cores (positive adjustment), notify waiting threads
+        if (was_zero && new_value > 0) || adjustment > 0 {
+            // Notify all waiting threads that cores are available
+            let (_lock, cvar) = &*device.cores_condvar;
+            cvar.notify_all();
         }
     }
 
@@ -666,6 +681,8 @@ mod tests {
 
         // Now make cores available to unblock the thread
         device.available_cuda_cores.store(100, Ordering::Release);
+        let (_lock, cvar) = &*device.cores_condvar;
+        cvar.notify_all();
 
         // Wait for the thread to complete or timeout
         let timeout = Duration::from_secs(2);
