@@ -21,7 +21,7 @@ use trap::TrapError;
 use crate::detour::CUdevice;
 
 // Configuration constant
-const FACTOR: u32 = 32;
+const FACTOR: u32 = 64;
 // Default backoff multiplier for retries
 const DEFAULT_BACKOFF_MULTIPLIER: u32 = 2;
 
