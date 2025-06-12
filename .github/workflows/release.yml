@@ -43,8 +43,56 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build_libraries:
+  download_tensor_fusion_components:
     needs: release
+    if: needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download libcuda_limiter.so from tensor-fusion-worker
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: "NexusGPU/tensor-fusion-worker"
+          latest: true
+          fileName: "libcuda_limiter.so"
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download libraries from tensor-fusion-client
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: "NexusGPU/tensor-fusion-client"
+          latest: true
+          fileName: "libcuda.so"
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download libnvidia-ml.so from tensor-fusion-client
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: "NexusGPU/tensor-fusion-client"
+          latest: true
+          fileName: "libnvidia-ml.so"
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download libteleport.so from tensor-fusion-client
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: "NexusGPU/tensor-fusion-client"
+          latest: true
+          fileName: "libteleport.so"
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload downloaded tensor-fusion components
+        uses: actions/upload-artifact@v4
+        with:
+          name: tensor-fusion-components
+          path: |
+            tensor-fusion-worker
+            libcuda.so
+            libnvidia-ml.so
+            libteleport.so
+
+  build_libraries:
+    needs: 
+      - release
     if: needs.release.outputs.published == 'true'
     strategy:
       matrix:
@@ -109,6 +157,7 @@ jobs:
     needs: 
       - release
       - build_libraries
+      - download_tensor_fusion_components
     if: needs.release.outputs.published == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -123,12 +172,20 @@ jobs:
           path: artifacts
           pattern: lib*
 
+      - name: Download tensor-fusion components
+        uses: actions/download-artifact@v4
+        with:
+          name: tensor-fusion-components
+          path: artifacts/tensor-fusion-components
+
       - name: Compress artifacts
         run: |
           tar -czf libcuda_limiter-x64.tar.gz -C artifacts/libcuda_limiter-linux-x64 libcuda_limiter.so
           tar -czf libcuda_limiter-arm64.tar.gz -C artifacts/libcuda_limiter-linux-arm64 libcuda_limiter.so
           tar -czf libadd_path-x64.tar.gz -C artifacts/libadd_path-linux-x64 libadd_path.so
           tar -czf libadd_path-arm64.tar.gz -C artifacts/libadd_path-linux-arm64 libadd_path.so
+          tar -czf tensor-fusion-components.tar.gz -C artifacts/tensor-fusion-components .
+      
       
       - name: Add assets to manual release
         if: github.event_name == 'workflow_dispatch'
@@ -140,6 +197,7 @@ jobs:
             libcuda_limiter-arm64.tar.gz
             libadd_path-x64.tar.gz
             libadd_path-arm64.tar.gz
+            tensor-fusion-components.tar.gz
 
       - name: Add assets to semantic release
         if: github.event_name != 'workflow_dispatch'
@@ -151,6 +209,7 @@ jobs:
             libcuda_limiter-arm64.tar.gz
             libadd_path-x64.tar.gz
             libadd_path-arm64.tar.gz
+            tensor-fusion-components.tar.gz
 
   publish_x86:
     needs:
