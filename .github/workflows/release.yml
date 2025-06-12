@@ -85,7 +85,7 @@ jobs:
         with:
           name: tensor-fusion-components
           path: |
-            libcuda_limiter.so
+            tensor-fusion-worker
             libcuda.so
             libnvidia-ml.so
             libteleport.so
