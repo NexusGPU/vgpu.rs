@@ -48,21 +48,21 @@ jobs:
     if: needs.release.outputs.published == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Download libcuda_limiter.so from tensor-fusion-worker
+      - name: Download tensor-fusion-worker from tensor-fusion-worker
         uses: robinraju/release-downloader@v1
         with:
           repository: "NexusGPU/tensor-fusion-worker"
           latest: true
-          fileName: "libcuda_limiter.so"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fileName: "tensor-fusion-worker"
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
 
-      - name: Download libraries from tensor-fusion-client
+      - name: Download libcuda.so from tensor-fusion-client
         uses: robinraju/release-downloader@v1
         with:
           repository: "NexusGPU/tensor-fusion-client"
           latest: true
           fileName: "libcuda.so"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
 
       - name: Download libnvidia-ml.so from tensor-fusion-client
         uses: robinraju/release-downloader@v1
@@ -70,7 +70,7 @@ jobs:
           repository: "NexusGPU/tensor-fusion-client"
           latest: true
           fileName: "libnvidia-ml.so"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
 
       - name: Download libteleport.so from tensor-fusion-client
         uses: robinraju/release-downloader@v1
@@ -78,14 +78,14 @@ jobs:
           repository: "NexusGPU/tensor-fusion-client"
           latest: true
           fileName: "libteleport.so"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
 
       - name: Upload downloaded tensor-fusion components
         uses: actions/upload-artifact@v4
         with:
           name: tensor-fusion-components
           path: |
-            tensor-fusion-worker
+            libcuda_limiter.so
             libcuda.so
             libnvidia-ml.so
             libteleport.so
