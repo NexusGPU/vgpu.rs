@@ -9,4 +9,3 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ctor = { workspace = true }
-tracing = { workspace = true }

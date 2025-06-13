@@ -156,7 +156,7 @@ pub(crate) fn run_metrics(
     }
 }
 
-fn current_time() -> i64 {
+pub fn current_time() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()

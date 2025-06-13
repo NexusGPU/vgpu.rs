@@ -3,7 +3,7 @@ resolver = "2"
 members = [
   "crates/add-path",
   "crates/cuda-limiter",
-  "crates/cuda-limiter-test",
+  "crates/integration-test",
   "crates/hypervisor",
   "crates/macro",
   "crates/utils",

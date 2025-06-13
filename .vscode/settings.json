@@ -10,5 +10,6 @@
         "serde",
         "tflops",
         "thiserror"
-    ]
+    ],
+    "rust-analyzer.checkOnSave": true
 }

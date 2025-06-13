@@ -1,18 +1,22 @@
 [package]
-name = "cuda-limiter-test"
+name = "integration_test"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-cuda-limiter = { path = "../cuda-limiter" }
-clap = { workspace = true, features = ["derive"] }
-cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
+[dev-dependencies]
+trap = { path = "../trap" }
 serde_json = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
-glob = "0.3"
 once_cell = { workspace = true }
 tracing = { workspace = true }
 utils = { workspace = true }
 ctor = { workspace = true }
 nvml-wrapper = { workspace = true }
+tempfile = "3.0"
+
+[build-dependencies]
+reqwest = { version = "0.11", features = ["stream", "blocking", "json"] }
+serde = { version = "1.0", features = ["derive"] }
+flate2 = "1.0"
+tar = "0.4"
