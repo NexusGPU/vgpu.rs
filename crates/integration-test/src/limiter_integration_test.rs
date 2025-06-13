@@ -1,11 +1,10 @@
 use tracing::info;
 use tracing::warn;
 
-use crate::calculate_avg_utilization;
-use crate::get_gpu_uuid;
-use crate::is_cuda_available;
-use crate::monitor_gpu_metrics;
-use crate::run_cuda_test_program;
+use crate::integration_framework::calculate_avg_utilization;
+use crate::integration_framework::is_cuda_available;
+use crate::integration_framework::monitor_gpu_metrics;
+use crate::integration_framework::run_cuda_test_program;
 use crate::test_setup;
 
 // Define test constants
@@ -22,10 +21,6 @@ fn test_memory_limit_enforcement() {
         info!("CUDA not available, skipping test");
         return;
     }
-
-    // Get GPU UUID
-    let gpu_uuid = get_gpu_uuid(GPU_INDEX).expect("Failed to get GPU UUID");
-    info!("Testing with GPU UUID: {}", gpu_uuid);
 
     // First run without limiter to establish baseline
     let memory_to_allocate = MEMORY_LIMIT_BYTES * 2; // 2x the limit
@@ -54,10 +49,6 @@ fn test_utilization_limit_enforcement() {
         info!("CUDA not available, skipping test");
         return;
     }
-
-    // Get GPU UUID
-    let gpu_uuid = get_gpu_uuid(GPU_INDEX).expect("Failed to get GPU UUID");
-    info!("Testing with GPU UUID: {}", gpu_uuid);
 
     info!("Running baseline test without limiter...");
     let baseline_result = run_and_monitor(

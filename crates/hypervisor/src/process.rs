@@ -30,6 +30,12 @@ pub(crate) enum QosLevel {
     Critical,
 }
 
+impl std::fmt::Display for QosLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
 /// Trait for GPU processes
 pub(crate) trait GpuProcess: Send + Sync {
     /// Get process ID
