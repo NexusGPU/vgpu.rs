@@ -7,7 +7,6 @@ name = "add-path"
 version = "0.1.0"
 dependencies = [
  "ctor",
- "tracing",
 ]
 
 [[package]]
@@ -992,7 +991,6 @@ dependencies = [
  "nvml-wrapper",
  "once_cell",
  "priority-queue",
- "rand 0.9.1",
  "serde",
  "serde_yaml",
  "tracing",
@@ -1163,15 +1161,10 @@ name = "integration_test"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
  "ctor",
- "cuda-limiter",
- "cudarc",
  "flate2",
- "glob",
  "nvml-wrapper",
  "once_cell",
- "rand 0.8.5",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
