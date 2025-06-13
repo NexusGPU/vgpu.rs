@@ -78,13 +78,9 @@ fn download_tensor_fusion_components(target_dir: &PathBuf) {
     );
 
     if archive_path.exists() {
-        println!(
-            "cargo:warning=Archive {archive_filename} already exists, skipping download",
-        );
+        println!("cargo:warning=Archive {archive_filename} already exists, skipping download",);
     } else {
-        println!(
-            "cargo:warning=Downloading {archive_filename} from {download_url}",
-        );
+        println!("cargo:warning=Downloading {archive_filename} from {download_url}",);
 
         match download_file(&client, &download_url, &archive_path) {
             Ok(_) => {

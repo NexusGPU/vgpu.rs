@@ -7,11 +7,11 @@ use anyhow::Result;
 use nvml_wrapper::Nvml;
 use tracing::info;
 
+use crate::integration_framework::is_cuda_available;
 use crate::integration_framework::ClientConfig;
 use crate::integration_framework::IntegrationTestSetup;
 use crate::integration_framework::MemoryPattern;
 use crate::integration_framework::QosLevel;
-use crate::integration_framework::is_cuda_available;
 
 const TFLOP_LIMIT: u32 = 30;
 
@@ -176,9 +176,7 @@ fn test_priority_scheduling_with_metrics() {
     // "Wake" is for a trapped process, "Resume" is for a sleeping (released) process.
     // The test logic might cause a mix of Wake and Resume. Let's check relative order.
     let high_wake_pos = metrics_content
-        .find(&format!(
-            "decision_type=\"Wake\",pid=\"{high_client_pid}\""
-        ))
+        .find(&format!("decision_type=\"Wake\",pid=\"{high_client_pid}\""))
         .unwrap_or(usize::MAX);
 
     let high_pos = high_resume_pos.min(high_wake_pos);

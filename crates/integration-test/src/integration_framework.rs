@@ -544,7 +544,6 @@ impl Drop for IntegrationTestSetup {
     }
 }
 
-
 /// Get UUID of the GPU at the specified index using nvidia-smi
 pub fn get_gpu_uuid(gpu_index: usize) -> anyhow::Result<String> {
     let nvml = test_setup::global_nvml();
