@@ -18,15 +18,14 @@ impl fmt::Display for BytesWrapper {
         if self.0.is_empty() {
             return write!(f, "");
         }
-        
+
         // Format as UTF-8 string if valid, otherwise as hex
         match std::str::from_utf8(&self.0) {
             Ok(s) => write!(f, "{}", s),
-            Err(e) => {
+            Err(_) => {
                 tracing::error!(
                     target: "metrics",
                     msg = "Failed to convert bytes to string",
-                    error = e,
                 );
                 return Err(fmt::Error);
             }
@@ -136,9 +135,11 @@ pub(crate) fn run_metrics(
                         .timestamp(timestamp)
                         .close_line()
                         .build();
+                    // Convert BytesWrapper to string first
+                    let lp_str = BytesWrapper::from(lp).to_string();
                     tracing::info!(
                         target: "metrics",
-                        msg=BytesWrapper::from(lp),
+                        msg = %lp_str,
                     );
                 }
             }
@@ -169,9 +170,11 @@ pub(crate) fn run_metrics(
                             .timestamp(timestamp)
                             .close_line()
                             .build();
+                        // Convert BytesWrapper to string first
+                        let lp_str = BytesWrapper::from(lp).to_string();
                         tracing::info!(
                             target: "metrics",
-                            msg=BytesWrapper::from(lp),
+                            msg = %lp_str,
                         );
                     }
                 }
