@@ -21,13 +21,13 @@ impl fmt::Display for BytesWrapper {
 
         // Format as UTF-8 string if valid, otherwise as hex
         match std::str::from_utf8(&self.0) {
-            Ok(s) => write!(f, "{}", s),
+            Ok(s) => write!(f, "{s}"),
             Err(_) => {
                 tracing::error!(
                     target: "metrics",
                     msg = "Failed to convert bytes to string",
                 );
-                return Err(fmt::Error);
+                Err(fmt::Error)
             }
         }
     }

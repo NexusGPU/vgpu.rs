@@ -110,11 +110,11 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                 .close_line()
                 .build();
             // Convert BytesWrapper to string first
-        let lp_str = BytesWrapper::from(lp).to_string();
-        tracing::info!(
-            target: "metrics",
-            msg = %lp_str
-        );
+            let lp_str = BytesWrapper::from(lp).to_string();
+            tracing::info!(
+                target: "metrics",
+                msg = %lp_str
+            );
         }
     }
 
@@ -151,11 +151,11 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                 .close_line()
                 .build();
             // Convert BytesWrapper to string first
-        let lp_str = BytesWrapper::from(lp).to_string();
-        tracing::info!(
-            target: "metrics",
-            msg = %lp_str
-        );
+            let lp_str = BytesWrapper::from(lp).to_string();
+            tracing::info!(
+                target: "metrics",
+                msg = %lp_str
+            );
         } else {
             // Process not found
             tracing::warn!("process {} not found for trap", process_id);
@@ -251,11 +251,11 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                             .close_line()
                             .build();
                         // Convert BytesWrapper to string first
-        let lp_str = BytesWrapper::from(lp).to_string();
-        tracing::info!(
-            target: "metrics",
-            msg = %lp_str
-        );
+                        let lp_str = BytesWrapper::from(lp).to_string();
+                        tracing::info!(
+                            target: "metrics",
+                            msg = %lp_str
+                        );
                         decisions.push(super::SchedulingDecision::Resume(sleep_pid));
                         // Mark this process as processed
                         processed_processes.insert(sleep_pid);
@@ -285,11 +285,11 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                             .close_line()
                             .build();
                         // Convert BytesWrapper to string first
-        let lp_str = BytesWrapper::from(lp).to_string();
-        tracing::info!(
-            target: "metrics",
-            msg = %lp_str
-        );
+                        let lp_str = BytesWrapper::from(lp).to_string();
+                        tracing::info!(
+                            target: "metrics",
+                            msg = %lp_str
+                        );
                         decisions.push(super::SchedulingDecision::Resume(sleep_pid));
                         // Mark this process as processed
                         processed_processes.insert(sleep_pid);
@@ -323,11 +323,11 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                     .close_line()
                     .build();
                 // Convert BytesWrapper to string first
-        let lp_str = BytesWrapper::from(lp).to_string();
-        tracing::info!(
-            target: "metrics",
-            msg = %lp_str
-        );
+                let lp_str = BytesWrapper::from(lp).to_string();
+                tracing::info!(
+                    target: "metrics",
+                    msg = %lp_str
+                );
             }
             super::SchedulingDecision::Release(pid) => {
                 if self.sleep_queue.get(pid).is_some() {
@@ -348,11 +348,11 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                     .close_line()
                     .build();
                 // Convert BytesWrapper to string first
-        let lp_str = BytesWrapper::from(lp).to_string();
-        tracing::info!(
-            target: "metrics",
-            msg = %lp_str
-        );
+                let lp_str = BytesWrapper::from(lp).to_string();
+                tracing::info!(
+                    target: "metrics",
+                    msg = %lp_str
+                );
             }
             super::SchedulingDecision::Wake(_, _, _) => {}
             super::SchedulingDecision::Pause(_) => {}
@@ -408,11 +408,11 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
                     .close_line()
                     .build();
                 // Convert BytesWrapper to string first
-        let lp_str = BytesWrapper::from(lp).to_string();
-        tracing::info!(
-            target: "metrics",
-            msg = %lp_str
-        );
+                let lp_str = BytesWrapper::from(lp).to_string();
+                tracing::info!(
+                    target: "metrics",
+                    msg = %lp_str
+                );
                 decisions.push(super::SchedulingDecision::Release(pid));
 
                 if released_memory >= requested_bytes {
@@ -462,11 +462,11 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
                             .close_line()
                             .build();
                         // Convert BytesWrapper to string first
-        let lp_str = BytesWrapper::from(lp).to_string();
-        tracing::info!(
-            target: "metrics",
-            msg = %lp_str
-        );
+                        let lp_str = BytesWrapper::from(lp).to_string();
+                        tracing::info!(
+                            target: "metrics",
+                            msg = %lp_str
+                        );
                         decisions.push(super::SchedulingDecision::Wake(
                             waker,
                             round as u64, // Convert round to u64 for trap_id
