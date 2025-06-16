@@ -87,7 +87,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
             .build();
         tracing::info!(
             target: "metrics",
-            msg = std::str::from_utf8(&lp).unwrap()
+            msg = BytesWrapper::from(lp)
         );
     }
 
@@ -108,7 +108,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                 .build();
             tracing::info!(
                 target: "metrics",
-                msg = std::str::from_utf8(&lp).unwrap()
+                msg = BytesWrapper::from(lp)
             );
         }
     }
@@ -147,7 +147,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                 .build();
             tracing::info!(
                 target: "metrics",
-                msg = std::str::from_utf8(&lp).unwrap()
+                msg = BytesWrapper::from(lp)
             );
         } else {
             // Process not found
@@ -245,7 +245,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                             .build();
                         tracing::info!(
                             target: "metrics",
-                            msg = std::str::from_utf8(&lp).unwrap()
+                            msg = BytesWrapper::from(lp)
                         );
                         decisions.push(super::SchedulingDecision::Resume(sleep_pid));
                         // Mark this process as processed
@@ -277,7 +277,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                             .build();
                         tracing::info!(
                             target: "metrics",
-                            msg = std::str::from_utf8(&lp).unwrap()
+                            msg = BytesWrapper::from(lp)
                         );
                         decisions.push(super::SchedulingDecision::Resume(sleep_pid));
                         // Mark this process as processed
@@ -313,7 +313,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                     .build();
                 tracing::info!(
                     target: "metrics",
-                    msg = std::str::from_utf8(&lp).unwrap()
+                    msg = BytesWrapper::from(lp)
                 );
             }
             super::SchedulingDecision::Release(pid) => {
@@ -336,7 +336,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                     .build();
                 tracing::info!(
                     target: "metrics",
-                    msg = std::str::from_utf8(&lp).unwrap()
+                    msg = BytesWrapper::from(lp)
                 );
             }
             super::SchedulingDecision::Wake(_, _, _) => {}
@@ -394,7 +394,7 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
                     .build();
                 tracing::info!(
                     target: "metrics",
-                    msg = std::str::from_utf8(&lp).unwrap()
+                    msg = BytesWrapper::from(lp)
                 );
                 decisions.push(super::SchedulingDecision::Release(pid));
 
@@ -446,7 +446,7 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
                             .build();
                         tracing::info!(
                             target: "metrics",
-                            msg = std::str::from_utf8(&lp).unwrap()
+                            msg = BytesWrapper::from(lp)
                         );
                         decisions.push(super::SchedulingDecision::Wake(
                             waker,
