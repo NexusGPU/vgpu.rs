@@ -8,7 +8,7 @@ ipc-channel = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true }
-libc = "0.2.172"
+libc = "0.2.173"
 
 [dev-dependencies]
 tempfile = "3.20.0"
