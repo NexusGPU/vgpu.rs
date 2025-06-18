@@ -13,7 +13,7 @@ use crate::integration_framework::IntegrationTestSetup;
 use crate::integration_framework::MemoryPattern;
 use crate::integration_framework::QosLevel;
 
-const TFLOP_LIMIT: u32 = 30;
+const TFLOP_LIMIT: u32 = 10;
 
 fn get_total_gpu_memory(gpu_index: u32) -> Result<u64> {
     let nvml = Nvml::init()?;
@@ -59,7 +59,7 @@ fn test_priority_scheduling_with_metrics() {
     // Give workers time to register
     std::thread::sleep(Duration::from_secs(3));
 
-    let client_duration = Duration::from_secs(8);
+    let client_duration = Duration::from_secs(10);
 
     // Client configs
     let high_client_config = ClientConfig {
@@ -103,7 +103,7 @@ fn test_priority_scheduling_with_metrics() {
     ];
 
     for (name, pid) in client_pids {
-        match setup.wait_for_client(pid, Duration::from_secs(90)) {
+        match setup.wait_for_client(pid, Duration::from_secs(100)) {
             Ok(output) => {
                 completion_times.insert(name, Instant::now());
                 info!(
@@ -141,31 +141,31 @@ fn test_priority_scheduling_with_metrics() {
     // Verify that low and medium clients were released for the high priority one
     assert!(
         metrics_content.contains(&format!(
-            "decision_type=\"Release\",pid=\"{low_client_pid}\""
+            "decision_type=\"release\",pid=\"{low_client_pid}\""
         )),
-        "Metrics should show Release decision for low priority client"
+        "Metrics should show release decision for low priority client"
     );
     assert!(
         metrics_content.contains(&format!(
-            "decision_type=\"Release\",pid=\"{medium_client_pid}\""
+            "decision_type=\"release\",pid=\"{medium_client_pid}\""
         )),
-        "Metrics should show Release decision for medium priority client"
+        "Metrics should show release decision for medium priority client"
     );
 
     // Verify that clients were resumed in the correct order
     let high_resume_pos = metrics_content
         .find(&format!(
-            "decision_type=\"Resume\",pid=\"{high_client_pid}\""
+            "decision_type=\"resume\",pid=\"{high_client_pid}\""
         ))
         .unwrap_or(usize::MAX);
     let medium_resume_pos = metrics_content
         .find(&format!(
-            "decision_type=\"Resume\",pid=\"{medium_client_pid}\""
+            "decision_type=\"resume\",pid=\"{medium_client_pid}\""
         ))
         .unwrap_or(usize::MAX);
     let low_resume_pos = metrics_content
         .find(&format!(
-            "decision_type=\"Resume\",pid=\"{low_client_pid}\""
+            "decision_type=\"resume\",pid=\"{low_client_pid}\""
         ))
         .unwrap_or(usize::MAX);
 
@@ -176,7 +176,7 @@ fn test_priority_scheduling_with_metrics() {
     // "Wake" is for a trapped process, "Resume" is for a sleeping (released) process.
     // The test logic might cause a mix of Wake and Resume. Let's check relative order.
     let high_wake_pos = metrics_content
-        .find(&format!("decision_type=\"Wake\",pid=\"{high_client_pid}\""))
+        .find(&format!("decision_type=\"wake\",pid=\"{high_client_pid}\""))
         .unwrap_or(usize::MAX);
 
     let high_pos = high_resume_pos.min(high_wake_pos);

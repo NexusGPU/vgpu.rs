@@ -78,7 +78,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
         self.running_queue.push(pid, weight);
 
         let lp = LineProtocolBuilder::new()
-            .measurement("scheduler_event")
+            .measurement("tf_scheduler_event")
             .tag("event_type", "add_process")
             .tag("pid", &pid.to_string())
             .tag("qos", &qos.to_string())
@@ -102,7 +102,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
             self.trap_wait_queue.remove(&process_id);
 
             let lp = LineProtocolBuilder::new()
-                .measurement("scheduler_event")
+                .measurement("tf_scheduler_event")
                 .tag("event_type", "remove_process")
                 .tag("pid", &process_id.to_string())
                 .field("value", 1i64)
@@ -142,7 +142,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
             self.trap_wait_queue.push(process_id, weight);
 
             let lp = LineProtocolBuilder::new()
-                .measurement("scheduler_event")
+                .measurement("tf_scheduler_event")
                 .tag("event_type", "on_trap")
                 .tag("pid", &process_id.to_string())
                 .field("new_weight", weight as i64)
@@ -243,8 +243,8 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                         processed_processes.insert(trap_pid);
                     } else if sleep_weight > min_weight_in_running_queue {
                         let lp = LineProtocolBuilder::new()
-                            .measurement("scheduler_decision")
-                            .tag("decision_type", "Resume")
+                            .measurement("tf_scheduler_decision")
+                            .tag("decision_type", "resume")
                             .tag("pid", &sleep_pid.to_string())
                             .field("value", 1i64)
                             .timestamp(current_time())
@@ -277,8 +277,8 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                 (None, Some((sleep_pid, sleep_weight))) => {
                     if sleep_weight > min_weight_in_running_queue {
                         let lp = LineProtocolBuilder::new()
-                            .measurement("scheduler_decision")
-                            .tag("decision_type", "Resume")
+                            .measurement("tf_scheduler_decision")
+                            .tag("decision_type", "resume")
                             .tag("pid", &sleep_pid.to_string())
                             .field("value", 1i64)
                             .timestamp(current_time())
@@ -314,20 +314,6 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                     self.sleep_queue.remove(pid);
                     self.running_queue.push(*pid, weight);
                 }
-                let lp = LineProtocolBuilder::new()
-                    .measurement("scheduler_decision_done")
-                    .tag("decision_type", "Resume")
-                    .tag("pid", &pid.to_string())
-                    .field("value", 1i64)
-                    .timestamp(current_time())
-                    .close_line()
-                    .build();
-                // Convert BytesWrapper to string first
-                let lp_str = BytesWrapper::from(lp).to_string();
-                tracing::info!(
-                    target: "metrics",
-                    msg = %lp_str
-                );
             }
             super::SchedulingDecision::Release(pid) => {
                 if self.sleep_queue.get(pid).is_some() {
@@ -339,20 +325,6 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                     self.running_queue.remove(pid);
                     self.sleep_queue.push(*pid, weight);
                 }
-                let lp = LineProtocolBuilder::new()
-                    .measurement("scheduler_decision_done")
-                    .tag("decision_type", "Release")
-                    .tag("pid", &pid.to_string())
-                    .field("value", 1i64)
-                    .timestamp(current_time())
-                    .close_line()
-                    .build();
-                // Convert BytesWrapper to string first
-                let lp_str = BytesWrapper::from(lp).to_string();
-                tracing::info!(
-                    target: "metrics",
-                    msg = %lp_str
-                );
             }
             super::SchedulingDecision::Wake(_, _, _) => {}
             super::SchedulingDecision::Pause(_) => {}
@@ -400,8 +372,8 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
                 let current_resources = process.current_resources();
                 released_memory += current_resources.memory_bytes;
                 let lp = LineProtocolBuilder::new()
-                    .measurement("scheduler_decision")
-                    .tag("decision_type", "Release")
+                    .measurement("tf_scheduler_decision")
+                    .tag("decision_type", "release")
                     .tag("pid", &pid.to_string())
                     .field("reason", "oom")
                     .timestamp(current_time())
@@ -454,8 +426,8 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
 
                     if success {
                         let lp = LineProtocolBuilder::new()
-                            .measurement("scheduler_decision")
-                            .tag("decision_type", "Wake")
+                            .measurement("tf_scheduler_decision")
+                            .tag("decision_type", "wake")
                             .tag("pid", &pid.to_string())
                             .field("round", round as i64)
                             .timestamp(current_time())
