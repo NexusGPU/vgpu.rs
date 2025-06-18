@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::SystemTime;
@@ -8,6 +9,35 @@ use influxdb_line_protocol::LineProtocolBuilder;
 
 use crate::config::GPU_CAPACITY_MAP;
 use crate::gpu_observer::GpuObserver;
+
+// Wrapper struct for Vec<u8> that implements Display
+pub struct BytesWrapper(Vec<u8>);
+
+impl fmt::Display for BytesWrapper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.is_empty() {
+            return write!(f, "");
+        }
+
+        // Format as UTF-8 string if valid, otherwise as hex
+        match std::str::from_utf8(&self.0) {
+            Ok(s) => write!(f, "{s}"),
+            Err(_) => {
+                tracing::error!(
+                    target: "metrics",
+                    msg = "Failed to convert bytes to string",
+                );
+                Err(fmt::Error)
+            }
+        }
+    }
+}
+
+impl From<Vec<u8>> for BytesWrapper {
+    fn from(bytes: Vec<u8>) -> Self {
+        BytesWrapper(bytes)
+    }
+}
 
 #[derive(Default)]
 struct AccumulatedGpuMetrics {
@@ -105,10 +135,11 @@ pub(crate) fn run_metrics(
                         .timestamp(timestamp)
                         .close_line()
                         .build();
-                    let lp_str = std::str::from_utf8(&lp).unwrap();
+                    // Convert BytesWrapper to string first
+                    let lp_str = BytesWrapper::from(lp).to_string();
                     tracing::info!(
                         target: "metrics",
-                        msg=lp_str,
+                        msg = %lp_str,
                     );
                 }
             }
@@ -139,10 +170,11 @@ pub(crate) fn run_metrics(
                             .timestamp(timestamp)
                             .close_line()
                             .build();
-                        let lp_str = std::str::from_utf8(&lp).unwrap();
+                        // Convert BytesWrapper to string first
+                        let lp_str = BytesWrapper::from(lp).to_string();
                         tracing::info!(
                             target: "metrics",
-                            msg=lp_str,
+                            msg = %lp_str,
                         );
                     }
                 }
@@ -156,7 +188,7 @@ pub(crate) fn run_metrics(
     }
 }
 
-fn current_time() -> i64 {
+pub fn current_time() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
