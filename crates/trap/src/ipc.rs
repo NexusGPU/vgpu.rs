@@ -57,8 +57,7 @@ impl IpcTrap {
             loop {
                 match receiver.recv() {
                     Ok((id, action)) => {
-                        let maybe_trap =
-                            pending_traps_clone.lock().expect("poisoning").remove(&id);
+                        let maybe_trap = pending_traps_clone.lock().expect("poisoning").remove(&id);
                         if let Some(trap) = maybe_trap {
                             let (mutex, condvar) = &*trap;
                             let mut pending = mutex.lock().expect("poisoning");
