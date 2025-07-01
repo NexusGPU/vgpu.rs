@@ -16,6 +16,8 @@ utils = { path = "crates/utils" }
 tf-macro = { path = "crates/macro" }
 tracing = "0.1"
 thiserror = "2.0"
+derive_more = "1.0"
+base64 = "0.22"
 tracing-subscriber = "0.3"
 ctor = "0.4"
 ipc-channel = "0.19.0"

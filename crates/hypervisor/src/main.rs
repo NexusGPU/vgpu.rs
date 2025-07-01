@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use api::ApiServer;
+use api::JwtAuthConfig;
 use api::PodStorage;
 use clap::command;
 use clap::Parser;
@@ -324,30 +325,15 @@ async fn main() -> Result<()> {
                         namespace,
                         annotations,
                         node_name,
-                    } => {
-                        tracing::info!(
-                            "Pod created: {}/{} with annotations: {:?}, node: {:?}",
-                            namespace,
-                            pod_name,
-                            annotations,
-                            node_name
-                        );
-                        api::update_pod_storage(
-                            &pod_storage,
-                            pod_name,
-                            namespace,
-                            node_name,
-                            annotations,
-                        );
                     }
-                    WorkerUpdate::PodUpdated {
+                    | WorkerUpdate::PodUpdated {
                         pod_name,
                         namespace,
                         annotations,
                         node_name,
                     } => {
                         tracing::info!(
-                            "Pod updated: {}/{} with annotations: {:?}, node: {:?}",
+                            "Pod created or updated: {}/{} with annotations: {:?}, node: {:?}",
                             namespace,
                             pod_name,
                             annotations,
@@ -384,7 +370,14 @@ async fn main() -> Result<()> {
         let api_listen_addr = cli.api_listen_addr.clone();
         tokio::spawn(async move {
             tracing::info!("Starting HTTP API server task");
-            let api_server = ApiServer::new(pod_storage, api_listen_addr);
+            // TODO: Configure JWT public key from environment or config file
+            let jwt_config = JwtAuthConfig {
+                public_key: std::env::var("JWT_PUBLIC_KEY").unwrap_or_else(|_| {
+                    tracing::warn!("JWT_PUBLIC_KEY not set, using default placeholder");
+                    "placeholder-public-key".to_string()
+                }),
+            };
+            let api_server = ApiServer::new(pod_storage, api_listen_addr, jwt_config);
             if let Err(e) = api_server.run(api_shutdown_receiver).await {
                 tracing::error!("HTTP API server failed: {e:?}");
             }
