@@ -19,4 +19,4 @@ nvml-wrapper-sys = { workspace = true }
 cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
 
 [build-dependencies]
-cbindgen = "0.29"
+cbindgen = { workspace = true }

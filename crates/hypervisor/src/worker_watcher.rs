@@ -9,9 +9,9 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
-use std::thread;
 use std::time::Duration;
 
+use anyhow::Result;
 use notify::Error;
 use notify::Event;
 use notify::Watcher;
@@ -59,8 +59,8 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
         })
     }
 
-    /// Run the worker watcher loop that periodically checks the directory for new files
-    pub(crate) fn run_watcher_loop(&self, path: impl AsRef<Path>) {
+    /// Run the worker watcher loop asynchronously that periodically checks the directory for new files
+    pub(crate) async fn run_watcher_loop_async(&self, path: impl AsRef<Path>) {
         let tx = self.tx.clone();
         let path = PathBuf::from(path.as_ref());
 
@@ -70,7 +70,7 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
                 Ok(entries) => entries,
                 Err(e) => {
                     tracing::error!("failed to read directory: {:?}", e);
-                    thread::sleep(Duration::from_secs(3));
+                    tokio::time::sleep(Duration::from_secs(3)).await;
                     continue;
                 }
             };
@@ -87,11 +87,11 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
             }
 
             // Sleep before next check
-            thread::sleep(Duration::from_secs(3));
+            tokio::time::sleep(Duration::from_secs(3)).await;
         }
     }
 
-    pub(crate) fn run(&self, gpu_observer: Arc<GpuObserver>) {
+    pub(crate) async fn run_async(&self, gpu_observer: Arc<GpuObserver>) {
         let rx = self.rx.lock().expect("Failed to lock receiver");
         for res in rx.iter() {
             match res {
@@ -172,6 +172,9 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
                                 GpuResources {
                                     memory_bytes: 0,
                                     compute_percentage: 0,
+                                    tflops_request: None,
+                                    tflops_limit: None,
+                                    memory_limit: None,
                                 },
                                 qos_level,
                                 uuid,
@@ -195,7 +198,12 @@ impl<AddCB: Fn(u32, TensorFusionWorker), RemoveCB: Fn(u32)> WorkerWatcher<AddCB,
                                     continue;
                                 }
                             };
-                            (self.remove_callback)(pid)
+
+                            self.worker_pid_mapping
+                                .write()
+                                .expect("poisoning")
+                                .remove(&pid);
+                            (self.remove_callback)(pid);
                         }
                     }
                     _ => {}

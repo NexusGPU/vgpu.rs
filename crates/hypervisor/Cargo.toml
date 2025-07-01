@@ -7,17 +7,25 @@ edition = "2021"
 nvml-wrapper = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-notify = "8.1.0"
+notify = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tracing-appender = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
-priority-queue = "2.5.0"
+priority-queue = { workspace = true }
 trap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_yaml = "0.9"
+serde_yaml = { workspace = true }
 once_cell = { workspace = true }
 utils = { workspace = true }
-influxdb-line-protocol = "2.0.0"
+influxdb-line-protocol = { workspace = true }
+thiserror = { workspace = true }
+# Kubernetes dependencies
+kube = { workspace = true, features = ["runtime", "derive"] }
+k8s-openapi = { workspace = true, features = ["v1_28"] }
+tokio = { workspace = true, features = ["full"] }
+error-stack = { workspace = true }
+futures = { workspace = true }
+poem = { workspace = true }
 
 [[bin]]
 name = "hypervisor"

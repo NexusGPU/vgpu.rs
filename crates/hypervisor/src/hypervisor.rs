@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::thread;
 use std::time::Duration;
 
 use crate::process::GpuProcess;
@@ -98,15 +97,14 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
         }
     }
 
-    /// Start the scheduling loop
-    pub(crate) fn run(&self) {
+    /// Start the scheduling loop asynchronously
+    pub(crate) async fn run_async(&self) {
         let scheduling_interval = self.scheduling_interval;
-        // let trap_server = IpcTrapHandler::create_server(handler).un;
 
         loop {
             self.schedule_once();
             // Sleep for the scheduling interval
-            thread::sleep(scheduling_interval);
+            tokio::time::sleep(scheduling_interval).await;
         }
     }
 }

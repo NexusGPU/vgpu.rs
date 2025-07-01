@@ -101,7 +101,7 @@ unsafe fn entry_point() {
     ) {
         Ok(nvml) => nvml,
         Err(e) => {
-            tracing::error!("Failed to initialize NVML: {}", e);
+            tracing::error!("failed to initialize NVML: {}", e);
             return;
         }
     };
