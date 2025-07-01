@@ -52,35 +52,28 @@ impl IpcTrap {
         ));
         let pending_traps_clone = Arc::clone(&pending_traps);
 
-        // Start a dedicated task to handle incoming messages
-        tokio::spawn(async move {
-            // Use spawn_blocking for the entire message handling loop since receiver.recv() is blocking
-            tokio::task::spawn_blocking(move || {
-                loop {
-                    match receiver.recv() {
-                        Ok((id, action)) => {
-                            let maybe_trap =
-                                pending_traps_clone.lock().expect("poisoning").remove(&id);
-                            if let Some(trap) = maybe_trap {
-                                let (mutex, condvar) = &*trap;
-                                let mut pending = mutex.lock().expect("poisoning");
-                                pending.action = Some(action);
-                                condvar.notify_one();
-                            }
-                            // If trap not found, it might have timed out or been cancelled
+        // Start a dedicated thread to handle incoming messages
+        std::thread::spawn(move || {
+            loop {
+                match receiver.recv() {
+                    Ok((id, action)) => {
+                        let maybe_trap =
+                            pending_traps_clone.lock().expect("poisoning").remove(&id);
+                        if let Some(trap) = maybe_trap {
+                            let (mutex, condvar) = &*trap;
+                            let mut pending = mutex.lock().expect("poisoning");
+                            pending.action = Some(action);
+                            condvar.notify_one();
                         }
-                        Err(e) => {
-                            // Channel closed or error occurred
-                            tracing::error!("IPC receiver error: {:?}", e);
-                            break;
-                        }
+                        // If trap not found, it might have timed out or been cancelled
+                    }
+                    Err(e) => {
+                        // Channel closed or error occurred
+                        tracing::error!("IPC receiver error: {:?}", e);
+                        break;
                     }
                 }
-            })
-            .await
-            .unwrap_or_else(|e| {
-                tracing::error!("IPC receiver task panicked: {:?}", e);
-            });
+            }
         });
 
         Self {
