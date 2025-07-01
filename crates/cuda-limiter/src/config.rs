@@ -189,16 +189,6 @@ fn parse_limits_json_and_create_device_configs(
         }
     }
 
-    // If no devices were found, use a default configuration
-    if device_configs.is_empty() {
-        device_configs.push(DeviceConfig {
-            device_idx: 0,
-            up_limit: 0,
-            mem_limit: 0,
-        });
-        visible_device_indices.push(0);
-    }
-
     // Create visible device string
     let visible_devices = visible_device_indices
         .iter()
@@ -267,11 +257,8 @@ mod tests {
 
         let (configs, visible_devices) =
             parse_limits_json_and_create_device_configs(up_limit_json, mem_limit_json, &mock_nvml);
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].device_idx, 0);
-        assert_eq!(configs[0].up_limit, 0);
-        assert_eq!(configs[0].mem_limit, 0);
-        assert_eq!(visible_devices, "0");
+        assert_eq!(configs.len(), 0);
+        assert_eq!(visible_devices, "");
     }
 
     #[test]
@@ -347,10 +334,7 @@ mod tests {
         let mock_nvml = MockNvml::new(1, HashMap::new());
         let (configs, visible_devices) =
             parse_limits_json_and_create_device_configs(up_limit_json, mem_limit_json, &mock_nvml);
-        assert_eq!(configs.len(), 1); // should use default config
-        assert_eq!(configs[0].device_idx, 0);
-        assert_eq!(configs[0].up_limit, 0); // due to invalid JSON, limits should be 0
-        assert_eq!(configs[0].mem_limit, 0);
-        assert_eq!(visible_devices, "0");
+        assert_eq!(configs.len(), 0);
+        assert_eq!(visible_devices, "");
     }
 }
