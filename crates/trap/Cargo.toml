@@ -9,7 +9,6 @@ thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true }
 libc = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
