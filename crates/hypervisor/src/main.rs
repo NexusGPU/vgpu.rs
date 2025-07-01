@@ -290,7 +290,7 @@ async fn main() -> Result<()> {
     let k8s_task = if cli.enable_k8s {
         let k8s_namespace = cli.k8s_namespace.clone();
         let node_name = cli.node_name.clone();
-        Some(tokio::spawn(async move {
+        tokio::spawn(async move {
             tracing::info!("Starting Kubernetes pod watcher task");
             match PodWatcher::new(k8s_namespace, node_name, k8s_update_sender).await {
                 Ok(watcher) => {
@@ -302,17 +302,20 @@ async fn main() -> Result<()> {
                     tracing::error!("Failed to create Kubernetes pod watcher: {e:?}");
                 }
             }
-        }))
+        })
     } else {
         // Drop the receiver to avoid blocking
         drop(k8s_shutdown_receiver);
-        None
+        tokio::spawn(async {
+            // Empty task that never completes
+            std::future::pending::<()>().await;
+        })
     };
 
     // Start worker update processor for Kubernetes events
     let k8s_processor_task = if cli.enable_k8s {
         let pod_storage = pod_storage.clone();
-        Some(tokio::spawn(async move {
+        tokio::spawn(async move {
             tracing::info!("Starting Kubernetes update processor task");
             for update in k8s_update_receiver {
                 match update {
@@ -367,9 +370,12 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-        }))
+        })
     } else {
-        None
+        tokio::spawn(async {
+            // Empty task that never completes
+            std::future::pending::<()>().await;
+        })
     };
 
     // Start HTTP API server task
@@ -395,130 +401,36 @@ async fn main() -> Result<()> {
     };
 
     // Use tokio::select! to wait for any task to complete (which likely means a panic or termination)
-    match (k8s_task, k8s_processor_task) {
-        (Some(k8s_task), Some(k8s_processor_task)) => {
-            tokio::select! {
-                result = gpu_observer_task => {
-                    tracing::error!("GPU observer task completed: {:?}", result);
-                }
-                result = metrics_task => {
-                    tracing::error!("Metrics collection task completed: {:?}", result);
-                }
-                result = watcher_loop_task => {
-                    tracing::error!("Worker watcher loop task completed: {:?}", result);
-                }
-                result = worker_task => {
-                    tracing::error!("Worker watcher task completed: {:?}", result);
-                }
-                result = trap_task => {
-                    tracing::error!("Trap server task completed: {:?}", result);
-                }
-                result = k8s_task => {
-                    tracing::error!("Kubernetes pod watcher task completed: {:?}", result);
-                }
-                result = k8s_processor_task => {
-                    tracing::error!("Kubernetes update processor task completed: {:?}", result);
-                }
-                result = api_task => {
-                    tracing::error!("HTTP API server task completed: {:?}", result);
-                }
-                result = hypervisor_task => {
-                    tracing::error!("Hypervisor task completed: {:?}", result);
-                }
-                _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("Received Ctrl+C, shutting down...");
-                }
-            }
+    tokio::select! {
+        result = gpu_observer_task => {
+            tracing::error!("GPU observer task completed: {:?}", result);
         }
-        (Some(k8s_task), None) => {
-            tokio::select! {
-                result = gpu_observer_task => {
-                    tracing::error!("GPU observer task completed: {:?}", result);
-                }
-                result = metrics_task => {
-                    tracing::error!("Metrics collection task completed: {:?}", result);
-                }
-                result = watcher_loop_task => {
-                    tracing::error!("Worker watcher loop task completed: {:?}", result);
-                }
-                result = worker_task => {
-                    tracing::error!("Worker watcher task completed: {:?}", result);
-                }
-                result = trap_task => {
-                    tracing::error!("Trap server task completed: {:?}", result);
-                }
-                result = k8s_task => {
-                    tracing::error!("Kubernetes pod watcher task completed: {:?}", result);
-                }
-                result = api_task => {
-                    tracing::error!("HTTP API server task completed: {:?}", result);
-                }
-                result = hypervisor_task => {
-                    tracing::error!("Hypervisor task completed: {:?}", result);
-                }
-                _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("Received Ctrl+C, shutting down...");
-                }
-            }
+        result = metrics_task => {
+            tracing::error!("Metrics collection task completed: {:?}", result);
         }
-        (None, Some(k8s_processor_task)) => {
-            tokio::select! {
-                result = gpu_observer_task => {
-                    tracing::error!("GPU observer task completed: {:?}", result);
-                }
-                result = metrics_task => {
-                    tracing::error!("Metrics collection task completed: {:?}", result);
-                }
-                result = watcher_loop_task => {
-                    tracing::error!("Worker watcher loop task completed: {:?}", result);
-                }
-                result = worker_task => {
-                    tracing::error!("Worker watcher task completed: {:?}", result);
-                }
-                result = trap_task => {
-                    tracing::error!("Trap server task completed: {:?}", result);
-                }
-                result = k8s_processor_task => {
-                    tracing::error!("Kubernetes update processor task completed: {:?}", result);
-                }
-                result = api_task => {
-                    tracing::error!("HTTP API server task completed: {:?}", result);
-                }
-                result = hypervisor_task => {
-                    tracing::error!("Hypervisor task completed: {:?}", result);
-                }
-                _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("Received Ctrl+C, shutting down...");
-                }
-            }
+        result = watcher_loop_task => {
+            tracing::error!("Worker watcher loop task completed: {:?}", result);
         }
-        (None, None) => {
-            tokio::select! {
-                result = gpu_observer_task => {
-                    tracing::error!("GPU observer task completed: {:?}", result);
-                }
-                result = metrics_task => {
-                    tracing::error!("Metrics collection task completed: {:?}", result);
-                }
-                result = watcher_loop_task => {
-                    tracing::error!("Worker watcher loop task completed: {:?}", result);
-                }
-                result = worker_task => {
-                    tracing::error!("Worker watcher task completed: {:?}", result);
-                }
-                result = trap_task => {
-                    tracing::error!("Trap server task completed: {:?}", result);
-                }
-                result = api_task => {
-                    tracing::error!("HTTP API server task completed: {:?}", result);
-                }
-                result = hypervisor_task => {
-                    tracing::error!("Hypervisor task completed: {:?}", result);
-                }
-                _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("Received Ctrl+C, shutting down...");
-                }
-            }
+        result = worker_task => {
+            tracing::error!("Worker watcher task completed: {:?}", result);
+        }
+        result = trap_task => {
+            tracing::error!("Trap server task completed: {:?}", result);
+        }
+        result = k8s_task => {
+            tracing::error!("Kubernetes pod watcher task completed: {:?}", result);
+        }
+        result = k8s_processor_task => {
+            tracing::error!("Kubernetes update processor task completed: {:?}", result);
+        }
+        result = api_task => {
+            tracing::error!("HTTP API server task completed: {:?}", result);
+        }
+        result = hypervisor_task => {
+            tracing::error!("Hypervisor task completed: {:?}", result);
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Received Ctrl+C, shutting down...");
         }
     }
 
