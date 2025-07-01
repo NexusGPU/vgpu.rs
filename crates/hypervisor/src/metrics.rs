@@ -58,8 +58,8 @@ struct AccumulatedWorkerMetrics {
     count: usize,
 }
 
-/// Run metrics collection in the current thread
-pub(crate) fn run_metrics(
+/// Run metrics collection asynchronously
+pub(crate) async fn run_metrics_async(
     gpu_observer: Arc<GpuObserver>,
     worker_pid_mapping: Arc<RwLock<HashMap<u32, (String, String)>>>,
     metrics_batch_size: usize,
