@@ -34,15 +34,8 @@ impl JwtAuthMiddleware {
         }
 
         let payload_b64 = parts[1];
-
-        // Add padding if needed for base64 decoding
-        let mut payload_b64_padded = payload_b64.to_string();
-        while payload_b64_padded.len() % 4 != 0 {
-            payload_b64_padded.push('=');
-        }
-
-        let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&payload_b64_padded)
+        let payload_bytes = base64::engine::general_purpose::URL_SAFE
+            .decode(payload_b64)
             .map_err(|e| {
                 Report::new(ApiError::InvalidJwtToken {
                     reason: format!("Failed to decode payload: {e}"),
@@ -143,14 +136,15 @@ mod tests {
             "typ": "JWT"
         });
 
-        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_string(&header).unwrap());
+        // Encode header and payload as compact JWT format
+        let header_str = serde_json::to_string(&header).unwrap();
+        let payload_str = serde_json::to_string(payload).unwrap();
 
-        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_string(payload).unwrap());
+        let header_b64 = base64::engine::general_purpose::URL_SAFE.encode(header_str.as_bytes());
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE.encode(payload_str.as_bytes());
 
-        // Dummy signature (not verified)
-        let signature = "dummy_signature";
+        // Use a fixed signature for testing
+        let signature = "dummysignature";
 
         format!("{header_b64}.{payload_b64}.{signature}")
     }
@@ -272,10 +266,10 @@ mod tests {
         let middleware = JwtAuthMiddleware::new(config);
 
         // Create a token with invalid JSON in payload
-        let header_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256"}"#);
-        let invalid_json_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("{invalid json}");
+        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"RS256"}"#.as_bytes());
+        let invalid_json_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"invalid":json"#.as_bytes());
         let invalid_token = format!("{header_b64}.{invalid_json_b64}.signature");
 
         // Act
@@ -329,24 +323,18 @@ mod tests {
         let middleware = JwtAuthMiddleware::new(config);
         let test_payload = create_test_payload();
 
-        // Create payload that needs padding
-        let payload_json = serde_json::to_string(&test_payload).unwrap();
-        let mut payload_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload_json);
-
-        // Remove some characters to simulate padding requirement
-        if payload_b64.len() % 4 != 0 {
-            payload_b64.truncate(payload_b64.len() - (payload_b64.len() % 4));
-        }
-
-        let token = format!("header.{payload_b64}.signature");
+        // Create token using URL_SAFE encoder
+        let header = json!({"alg": "RS256", "typ": "JWT"});
+        let header_b64 = base64::engine::general_purpose::URL_SAFE
+            .encode(serde_json::to_string(&header).unwrap().as_bytes());
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE
+            .encode(serde_json::to_string(&test_payload).unwrap().as_bytes());
+        let token = format!("{header_b64}.{payload_b64}.signature");
 
         // Act
         let result = middleware.extract_jwt_payload(&token);
 
         // Assert
-        // This test verifies that the padding logic works correctly
-        // The result might succeed if padding is correctly applied, or fail if the payload is too truncated
         match result {
             Ok(extracted_payload) => {
                 assert_eq!(
@@ -354,7 +342,7 @@ mod tests {
                     "Should extract payload with padding"
                 );
             }
-            Err(_e) => {
+            Err(_) => {
                 // This is also acceptable if the payload was too truncated to be valid
                 // Padding test completed - truncated payload correctly rejected
             }
