@@ -14,11 +14,13 @@ clap = { workspace = true, features = ["derive", "env"] }
 priority-queue = { workspace = true }
 trap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 once_cell = { workspace = true }
 utils = { workspace = true }
 influxdb-line-protocol = { workspace = true }
-thiserror = { workspace = true }
+derive_more = { workspace = true, features = ["display"] }
+base64 = { workspace = true }
 # Kubernetes dependencies
 kube = { workspace = true, features = ["runtime", "derive"] }
 k8s-openapi = { workspace = true, features = ["v1_28"] }

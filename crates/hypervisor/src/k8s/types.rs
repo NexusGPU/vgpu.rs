@@ -1,4 +1,4 @@
-use thiserror::Error;
+use core::error::Error;
 
 use crate::k8s::TensorFusionAnnotations;
 
@@ -26,15 +26,17 @@ pub(crate) enum WorkerUpdate {
 }
 
 /// Errors that can occur during Kubernetes operations.
-#[derive(Debug, Error)]
+#[derive(Debug, derive_more::Display)]
 pub(crate) enum KubernetesError {
-    #[error("Failed to connect to Kubernetes API: {message}")]
+    #[display("Failed to connect to Kubernetes API: {message}")]
     ConnectionFailed { message: String },
-    #[error("Failed to watch pods: {message}")]
+    #[display("Failed to watch pods: {message}")]
     WatchFailed { message: String },
-    #[error("Failed to parse annotations: {message}")]
+    #[display("Failed to parse annotations: {message}")]
     AnnotationParseError { message: String },
-    #[error("Pod not found: {pod_name} in namespace {namespace}")]
+    #[display("Pod not found: {pod_name} in namespace {namespace}")]
     #[allow(dead_code)]
     PodNotFound { pod_name: String, namespace: String },
 }
+
+impl Error for KubernetesError {}

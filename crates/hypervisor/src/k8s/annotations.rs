@@ -19,6 +19,8 @@ pub(crate) struct TensorFusionAnnotations {
     pub tflops_limit: Option<f64>,
     /// Maximum VRAM limit in bytes for the workload
     pub vram_limit: Option<u64>,
+    /// GPU UUIDs
+    pub gpu_uuids: Option<Vec<String>>,
 }
 
 impl TensorFusionAnnotations {
@@ -63,6 +65,11 @@ impl TensorFusionAnnotations {
             result.vram_limit = Some(parse_memory_value(value)?);
         }
 
+        // Parse GPU UUIDs
+        if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/gpu-ids")) {
+            result.gpu_uuids = Some(value.split(',').map(|s| s.to_string()).collect());
+        }
+
         Ok(result)
     }
 
@@ -72,6 +79,7 @@ impl TensorFusionAnnotations {
             || self.vram_request.is_some()
             || self.tflops_limit.is_some()
             || self.vram_limit.is_some()
+            || self.gpu_uuids.is_some()
     }
 }
 
@@ -200,5 +208,92 @@ mod tests {
         assert!(result.has_annotations());
         assert_eq!(result.tflops_request, Some(5.0));
         assert_eq!(result.vram_request, None);
+    }
+
+    #[test]
+    fn from_pod_annotations_with_gpu_uuids_single() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/gpu-ids".to_string(),
+            "GPU-12345678-1234-1234-1234-123456789abc".to_string(),
+        );
+
+        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+
+        assert!(result.has_annotations());
+        assert_eq!(
+            result.gpu_uuids,
+            Some(vec!["GPU-12345678-1234-1234-1234-123456789abc".to_string()])
+        );
+    }
+
+    #[test]
+    fn from_pod_annotations_with_gpu_uuids_multiple() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/gpu-ids".to_string(),
+            "GPU-12345678-1234-1234-1234-123456789abc,GPU-87654321-4321-4321-4321-cba987654321"
+                .to_string(),
+        );
+
+        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+
+        assert!(result.has_annotations());
+        assert_eq!(
+            result.gpu_uuids,
+            Some(vec![
+                "GPU-12345678-1234-1234-1234-123456789abc".to_string(),
+                "GPU-87654321-4321-4321-4321-cba987654321".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn from_pod_annotations_with_gpu_uuids_empty() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert("tensor-fusion.ai/gpu-ids".to_string(), "".to_string());
+
+        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+
+        assert!(result.has_annotations());
+        assert_eq!(result.gpu_uuids, Some(vec!["".to_string()]));
+    }
+
+    #[test]
+    fn from_pod_annotations_comprehensive_with_gpu_uuids() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/tflops-request".to_string(),
+            "10.5".to_string(),
+        );
+        annotations.insert(
+            "tensor-fusion.ai/vram-request".to_string(),
+            "2Gi".to_string(),
+        );
+        annotations.insert(
+            "tensor-fusion.ai/tflops-limit".to_string(),
+            "20.0".to_string(),
+        );
+        annotations.insert("tensor-fusion.ai/vram-limit".to_string(), "4Gi".to_string());
+        annotations.insert(
+            "tensor-fusion.ai/gpu-ids".to_string(),
+            "GPU-11111111-1111-1111-1111-111111111111,GPU-22222222-2222-2222-2222-222222222222"
+                .to_string(),
+        );
+
+        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+
+        assert!(result.has_annotations());
+        assert_eq!(result.tflops_request, Some(10.5));
+        assert_eq!(result.vram_request, Some(2 * 1024 * 1024 * 1024));
+        assert_eq!(result.tflops_limit, Some(20.0));
+        assert_eq!(result.vram_limit, Some(4 * 1024 * 1024 * 1024));
+        assert_eq!(
+            result.gpu_uuids,
+            Some(vec![
+                "GPU-11111111-1111-1111-1111-111111111111".to_string(),
+                "GPU-22222222-2222-2222-2222-222222222222".to_string()
+            ])
+        );
     }
 }
