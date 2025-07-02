@@ -81,6 +81,13 @@ struct Cli {
 
     #[arg(
         long,
+        value_hint = clap::ValueHint::FilePath,
+        help = "Path to kubeconfig file (defaults to cluster config or ~/.kube/config)"
+    )]
+    kubeconfig: Option<PathBuf>,
+
+    #[arg(
+        long,
         default_value = "127.0.0.1:8080",
         help = "HTTP API server listen address"
     )]
@@ -291,9 +298,10 @@ async fn main() -> Result<()> {
     let k8s_task = if cli.enable_k8s {
         let k8s_namespace = cli.k8s_namespace.clone();
         let node_name = cli.node_name.clone();
+        let kubeconfig = cli.kubeconfig.clone();
         tokio::spawn(async move {
             tracing::info!("Starting Kubernetes pod watcher task");
-            match PodWatcher::new(k8s_namespace, node_name, k8s_update_sender).await {
+            match PodWatcher::new(kubeconfig, k8s_namespace, node_name, k8s_update_sender).await {
                 Ok(watcher) => {
                     if let Err(e) = watcher.run(k8s_shutdown_receiver).await {
                         tracing::error!("Kubernetes pod watcher failed: {e:?}");
