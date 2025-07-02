@@ -53,6 +53,15 @@ pub(crate) struct TensorFusionWorker {
     gpu_observer: Arc<GpuObserver>,
     unix_stream: MaybeUninit<Mutex<UnixStream>>,
     qos_level: QosLevel,
+    /// Kubernetes pod name (if applicable)
+    #[allow(dead_code)]
+    pub(crate) pod_name: Option<String>,
+    /// Kubernetes namespace (if applicable)
+    #[allow(dead_code)]
+    pub(crate) namespace: Option<String>,
+    /// Kubernetes UID for tracking pod lifecycle
+    #[allow(dead_code)]
+    pub(crate) kubernetes_uid: Option<String>,
 }
 
 impl TensorFusionWorker {
@@ -73,6 +82,9 @@ impl TensorFusionWorker {
             state: RwLock::new(ProcessState::Running),
             gpu_uuid,
             gpu_observer,
+            pod_name: None,
+            namespace: None,
+            kubernetes_uid: None,
         }
     }
 
@@ -81,6 +93,35 @@ impl TensorFusionWorker {
 
         self.unix_stream = MaybeUninit::new(Mutex::new(unix_stream));
         Ok(())
+    }
+
+    /// Update Kubernetes-related information for this worker.
+    #[allow(dead_code)]
+    pub(crate) fn update_kubernetes_info(
+        &mut self,
+        pod_name: Option<String>,
+        namespace: Option<String>,
+        kubernetes_uid: Option<String>,
+    ) {
+        self.pod_name = pod_name;
+        self.namespace = namespace;
+        self.kubernetes_uid = kubernetes_uid;
+    }
+
+    /// Update resource requirements from Kubernetes annotations.
+    #[allow(dead_code)]
+    pub(crate) fn update_resources_from_annotations(
+        &mut self,
+        annotations: &crate::k8s::TensorFusionAnnotations,
+    ) {
+        self.requested.tflops_request = annotations.tflops_request;
+        self.requested.tflops_limit = annotations.tflops_limit;
+        self.requested.memory_limit = annotations.vram_limit;
+
+        // If annotations specify VRAM request, update memory_bytes
+        if let Some(vram_request) = annotations.vram_request {
+            self.requested.memory_bytes = vram_request;
+        }
     }
 
     fn send_message(&self, message: ControlMessage) -> Result<bool> {
@@ -135,6 +176,9 @@ impl GpuProcess for TensorFusionWorker {
             .unwrap_or(GpuResources {
                 memory_bytes: 0,
                 compute_percentage: 0,
+                tflops_request: None,
+                tflops_limit: None,
+                memory_limit: None,
             })
     }
 

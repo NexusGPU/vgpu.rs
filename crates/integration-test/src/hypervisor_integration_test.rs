@@ -152,6 +152,13 @@ fn test_priority_scheduling_with_metrics() {
         "Metrics should show release decision for medium priority client"
     );
 
+    assert!(
+        !metrics_content.contains(&format!(
+            "decision_type=\"release\",pid=\"{high_client_pid}\""
+        )),
+        "Metrics should not show release decision for high priority client"
+    );
+
     // Verify that clients were resumed in the correct order
     let high_resume_pos = metrics_content
         .find(&format!(

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::thread;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -42,6 +41,10 @@ pub(crate) struct GpuObserver {
     senders: RwLock<Vec<mpsc::Sender<()>>>,
 }
 
+// Explicitly implement Send and Sync for GpuObserver
+unsafe impl Send for GpuObserver {}
+unsafe impl Sync for GpuObserver {}
+
 impl GpuObserver {
     pub(crate) fn create(nvml: Arc<Nvml>) -> Arc<Self> {
         Arc::new(Self {
@@ -51,26 +54,35 @@ impl GpuObserver {
         })
     }
 
-    /// Run the GPU observer loop in the current thread
-    pub(crate) fn run(&self, update_interval: Duration) {
+    /// Run the GPU observer loop asynchronously
+    pub(crate) async fn run_async(&self, update_interval: Duration) {
         loop {
-            let last_metrics = self.metrics.read().expect("poisoned");
-            match self.query_metrics(&last_metrics) {
-                Ok(metrics) => {
-                    drop(last_metrics);
-                    *self.metrics.write().expect("poisoned") = metrics;
-                    let senders = self.senders.read().expect("poisoned");
-                    for sender in senders.iter() {
-                        if let Err(e) = sender.send(()) {
-                            tracing::error!("Failed to send update signal: {}", e);
-                        }
+            // handle metrics update in a new scope to avoid lock contention
+            {
+                let last_metrics = self.metrics.read().expect("poisoned");
+                match self.query_metrics(&last_metrics) {
+                    Ok(metrics) => {
+                        drop(last_metrics);
+                        *self.metrics.write().expect("poisoned") = metrics;
+
+                        // handle senders in a new scope to avoid lock contention
+                        {
+                            let senders = self.senders.read().expect("poisoned");
+                            for sender in senders.iter() {
+                                if let Err(e) = sender.send(()) {
+                                    tracing::error!("Failed to send update signal: {}", e);
+                                }
+                            }
+                        } // senders lock is released here
+                    }
+                    Err(e) => {
+                        drop(last_metrics); // ensure lock is released in case of error
+                        tracing::warn!("Failed to update GPU metrics: {}", e);
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to update GPU metrics: {}", e);
-                }
-            }
-            thread::sleep(update_interval);
+            } // ensure all locks are released here
+
+            tokio::time::sleep(update_interval).await;
         }
     }
 
@@ -131,6 +143,9 @@ impl GpuObserver {
                             }
                             _ => 0,
                         },
+                        tflops_request: None,
+                        tflops_limit: None,
+                        memory_limit: None,
                     });
                 }
             }
@@ -153,6 +168,9 @@ impl GpuObserver {
                 resources: GpuResources {
                     memory_bytes: memory_info.used,
                     compute_percentage: utilization.gpu,
+                    tflops_request: None,
+                    tflops_limit: None,
+                    memory_limit: None,
                 },
             });
             gpu_process_metrics.insert(gpu_uuid, (process_metrics, newest_timestamp_candidate));

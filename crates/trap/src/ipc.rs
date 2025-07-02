@@ -53,7 +53,7 @@ impl IpcTrap {
         let pending_traps_clone = Arc::clone(&pending_traps);
 
         // Start a dedicated thread to handle incoming messages
-        thread::spawn(move || {
+        std::thread::spawn(move || {
             loop {
                 match receiver.recv() {
                     Ok((id, action)) => {
