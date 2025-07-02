@@ -20,7 +20,12 @@ pub fn update_pod_storage(
     annotations: TensorFusionAnnotations,
 ) {
     let pod_key = format!("{namespace}/{pod_name}");
-    let pod_info = PodResourceInfo::from((pod_name, namespace, node_name, annotations));
+    let pod_info = crate::api::types::pod_resource_info_from_annotations(
+        pod_name,
+        namespace,
+        node_name,
+        annotations,
+    );
 
     match storage.write() {
         Ok(mut storage_guard) => {

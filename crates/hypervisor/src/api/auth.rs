@@ -120,13 +120,13 @@ where E: Endpoint
 
 #[cfg(test)]
 mod tests {
+    use api_types::KubernetesInfo;
+    use api_types::KubernetesNode;
+    use api_types::KubernetesPod;
+    use api_types::KubernetesServiceAccount;
     use base64::Engine as _;
     use serde_json::json;
 
-    use super::super::types::KubernetesInfo;
-    use super::super::types::KubernetesNode;
-    use super::super::types::KubernetesPod;
-    use super::super::types::KubernetesServiceAccount;
     use super::*;
 
     fn create_test_jwt_token(payload: &JwtPayload) -> String {
