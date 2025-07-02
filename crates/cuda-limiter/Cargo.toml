@@ -19,7 +19,7 @@ nvml-wrapper = { workspace = true }
 nvml-wrapper-sys = { workspace = true }
 cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
 # HTTP dependencies
-reqwest = { workspace = true, features = ["json", "blocking"] }
+reqwest = { workspace = true, features = ["json", "blocking", "rustls-tls"], default-features = false }
 serde = { workspace = true, features = ["derive"] }
 error-stack = { workspace = true }
 
