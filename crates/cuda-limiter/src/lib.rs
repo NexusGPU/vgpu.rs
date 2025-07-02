@@ -107,7 +107,13 @@ unsafe fn entry_point() {
     };
 
     // parse device limits
-    let device_configs = config::parse_limits_and_create_device_configs(&nvml);
+    let device_configs = match config::get_device_configs(&nvml) {
+        Ok(configs) => configs,
+        Err(e) => {
+            tracing::error!("failed to get device configs: {}", e);
+            return;
+        }
+    };
 
     if device_configs.is_empty() {
         tracing::info!("no device configs, skipping limiter");

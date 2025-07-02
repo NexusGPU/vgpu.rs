@@ -124,6 +124,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
 
 [[package]]
+name = "api-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.88"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -497,11 +504,15 @@ checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
 name = "cuda-limiter"
 version = "0.1.0"
 dependencies = [
+ "api-types",
  "cbindgen",
  "ctor",
  "cudarc",
+ "error-stack",
  "nvml-wrapper",
  "nvml-wrapper-sys",
+ "reqwest",
+ "serde",
  "serde_json",
  "tf-macro",
  "thiserror 2.0.12",
@@ -1256,6 +1267,7 @@ name = "hypervisor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "api-types",
  "base64 0.22.1",
  "clap",
  "derive_more",

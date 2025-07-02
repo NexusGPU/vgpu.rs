@@ -1,14 +1,149 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
+use std::fs;
 
+use api_types::PodQueryResponse;
+use error_stack::Report;
+use error_stack::ResultExt;
 use nvml_wrapper::device;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
+use reqwest::blocking::Client;
 
 use crate::limiter::DeviceConfig;
 
-pub fn parse_limits_and_create_device_configs(nvml: &Nvml) -> Vec<DeviceConfig> {
+/// Error types for configuration operations
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("HTTP request failed")]
+    HttpRequest,
+    #[error("OIDC authentication failed")]
+    OidcAuth,
+    #[error("JSON parsing failed")]
+    JsonParsing,
+}
+
+/// Main entry point for getting device configurations
+///
+/// This function first checks for hypervisor configuration via environment variables.
+/// If HYPERVISOR_IP and HYPERVISOR_PORT are both present, it fetches configuration
+/// from the hypervisor API using Kubernetes service account token authentication.
+/// The token is read from `/var/run/secrets/kubernetes.io/serviceaccount/token`
+/// which is automatically mounted in Kubernetes pods.
+///
+/// Otherwise, it falls back to parsing local environment variables.
+pub fn get_device_configs(nvml: &Nvml) -> Result<Vec<DeviceConfig>, Report<ConfigError>> {
+    // Check if hypervisor configuration is available
+    if let (Ok(hypervisor_ip), Ok(hypervisor_port)) =
+        (env::var("HYPERVISOR_IP"), env::var("HYPERVISOR_PORT"))
+    {
+        tracing::info!(
+            "Found hypervisor configuration, fetching from {}:{}",
+            hypervisor_ip,
+            hypervisor_port
+        );
+
+        fetch_device_configs_from_hypervisor(&hypervisor_ip, &hypervisor_port)
+    } else {
+        tracing::info!("No hypervisor configuration found, using local environment variables");
+        Ok(parse_limits_and_create_device_configs(nvml))
+    }
+}
+
+/// Fetch device configurations from hypervisor API using Kubernetes service account token
+fn fetch_device_configs_from_hypervisor(
+    hypervisor_ip: &str,
+    hypervisor_port: &str,
+) -> Result<Vec<DeviceConfig>, Report<ConfigError>> {
+    // Get Kubernetes service account token
+    let token = get_k8s_service_account_token().change_context(ConfigError::OidcAuth)?;
+
+    // Create HTTP client
+    let client = Client::new();
+    let url = format!("http://{hypervisor_ip}:{hypervisor_port}/api/v1/pods");
+
+    tracing::debug!("Fetching pod information from: {}", url);
+
+    // Make HTTP request with Bearer token
+    let response = client
+        .get(&url)
+        .bearer_auth(&token)
+        .send()
+        .change_context(ConfigError::HttpRequest)?;
+
+    if !response.status().is_success() {
+        tracing::error!("HTTP request failed with status: {}", response.status());
+        return Err(Report::new(ConfigError::HttpRequest));
+    }
+
+    // Parse response
+    let pod_response: PodQueryResponse =
+        response.json().change_context(ConfigError::JsonParsing)?;
+
+    if !pod_response.success {
+        tracing::error!("Hypervisor API returned error: {}", pod_response.message);
+        return Err(Report::new(ConfigError::HttpRequest));
+    }
+
+    let pod_info = pod_response.data.ok_or_else(|| {
+        tracing::error!("No pod data returned from hypervisor API");
+        Report::new(ConfigError::JsonParsing)
+    })?;
+
+    // Convert PodResourceInfo to DeviceConfig
+    // Note: We need to extract device configuration from the pod resource info
+    // For now, we'll create a single device config based on the resource limits
+    let device_configs = if let (Some(tflops_limit), Some(vram_limit)) =
+        (pod_info.tflops_limit, pod_info.vram_limit)
+    {
+        vec![DeviceConfig {
+            device_idx: 0,                   // Default to device 0, may need to be configurable
+            up_limit: (tflops_limit as u32), // Convert TFLOPS to up_limit
+            mem_limit: vram_limit,
+        }]
+    } else {
+        tracing::warn!("Pod resource info does not contain required limits");
+        vec![]
+    };
+
+    tracing::info!(
+        "Successfully fetched {} device configurations from hypervisor",
+        device_configs.len()
+    );
+
+    Ok(device_configs)
+}
+
+/// Get Kubernetes service account token from the pod
+fn get_k8s_service_account_token() -> Result<String, Report<ConfigError>> {
+    // Read the service account token directly from the mounted file
+    const SERVICE_ACCOUNT_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+
+    tracing::debug!(
+        "Reading Kubernetes service account token from: {}",
+        SERVICE_ACCOUNT_TOKEN_PATH
+    );
+
+    let token = fs::read_to_string(SERVICE_ACCOUNT_TOKEN_PATH).map_err(|e| {
+        tracing::error!("Failed to read service account token: {}", e);
+        Report::new(ConfigError::OidcAuth)
+    })?;
+
+    let token = token.trim().to_string();
+
+    if token.is_empty() {
+        tracing::error!("Service account token is empty");
+        return Err(Report::new(ConfigError::OidcAuth));
+    }
+
+    tracing::debug!("Successfully read Kubernetes service account token");
+
+    Ok(token)
+}
+
+// Make the original function private
+fn parse_limits_and_create_device_configs(nvml: &Nvml) -> Vec<DeviceConfig> {
     let up_limit_json = env::var("TENSOR_FUSION_CUDA_UP_LIMIT").unwrap_or("{}".to_string());
     let mem_limit_json = env::var("TENSOR_FUSION_CUDA_MEM_LIMIT").unwrap_or("{}".to_string());
     let (device_configs, visible_devices) =

@@ -76,10 +76,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::RwLock;
 
-    use super::super::types::KubernetesInfo;
-    use super::super::types::KubernetesNode;
-    use super::super::types::KubernetesPod;
-    use super::super::types::KubernetesServiceAccount;
+    use api_types::KubernetesInfo;
+    use api_types::KubernetesNode;
+    use api_types::KubernetesPod;
+    use api_types::KubernetesServiceAccount;
+
     use super::super::types::PodResourceInfo;
     use super::*;
 

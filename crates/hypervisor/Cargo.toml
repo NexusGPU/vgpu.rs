@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+api-types = { workspace = true }
 nvml-wrapper = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

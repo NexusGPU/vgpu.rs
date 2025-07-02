@@ -1,107 +1,39 @@
-use serde::Deserialize;
-use serde::Serialize;
+// reexport api-types
+pub use api_types::JwtAuthConfig;
+pub use api_types::JwtPayload;
+pub use api_types::PodQueryResponse;
+pub use api_types::PodResourceInfo;
 
 use crate::k8s::annotations::TensorFusionAnnotations;
 
-/// Kubernetes information from JWT token
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KubernetesInfo {
-    pub namespace: String,
-    pub node: KubernetesNode,
-    pub pod: KubernetesPod,
-    pub serviceaccount: KubernetesServiceAccount,
-}
-
-/// Kubernetes node information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KubernetesNode {
-    pub name: String,
-    pub uid: String,
-}
-
-/// Kubernetes pod information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KubernetesPod {
-    pub name: String,
-    pub uid: String,
-}
-
-/// Kubernetes service account information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KubernetesServiceAccount {
-    pub name: String,
-    pub uid: String,
-}
-
-/// JWT payload structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JwtPayload {
-    #[serde(rename = "kubernetes.io")]
-    pub kubernetes: KubernetesInfo,
-    pub nbf: i64,
-    pub sub: String,
-}
-
-/// Pod resource information including requests and limits
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PodResourceInfo {
-    /// Pod name
-    pub pod_name: String,
-    /// Pod namespace
-    pub namespace: String,
-    /// Node name where the pod is scheduled
-    pub node_name: Option<String>,
-    /// TFLOPS request
-    pub tflops_request: Option<f64>,
-    /// VRAM request in bytes
-    pub vram_request: Option<u64>,
-    /// TFLOPS limit
-    pub tflops_limit: Option<f64>,
-    /// VRAM limit in bytes
-    pub vram_limit: Option<u64>,
-    /// GPU UUID
-    pub gpu_uuids: Option<Vec<String>>,
-}
-
-impl From<(String, String, Option<String>, TensorFusionAnnotations)> for PodResourceInfo {
-    fn from(
-        (pod_name, namespace, node_name, annotations): (
-            String,
-            String,
-            Option<String>,
-            TensorFusionAnnotations,
-        ),
-    ) -> Self {
-        Self {
-            pod_name,
-            namespace,
-            node_name,
-            tflops_request: annotations.tflops_request,
-            vram_request: annotations.vram_request,
-            tflops_limit: annotations.tflops_limit,
-            vram_limit: annotations.vram_limit,
-            gpu_uuids: annotations.gpu_uuids,
-        }
+/// Create PodResourceInfo from TensorFusionAnnotations
+///
+/// This helper function converts TensorFusionAnnotations to PodResourceInfo
+/// while handling the conversion of annotation data to the shared API type.
+pub fn pod_resource_info_from_annotations(
+    pod_name: String,
+    namespace: String,
+    node_name: Option<String>,
+    annotations: TensorFusionAnnotations,
+) -> PodResourceInfo {
+    PodResourceInfo {
+        pod_name,
+        namespace,
+        node_name,
+        tflops_request: annotations.tflops_request,
+        vram_request: annotations.vram_request,
+        tflops_limit: annotations.tflops_limit,
+        vram_limit: annotations.vram_limit,
+        gpu_uuids: annotations.gpu_uuids,
     }
-}
-
-/// API response for pod query
-#[derive(Debug, Serialize)]
-pub struct PodQueryResponse {
-    pub success: bool,
-    pub data: Option<PodResourceInfo>,
-    pub message: String,
-}
-
-/// JWT authentication configuration
-#[derive(Debug, Clone)]
-pub struct JwtAuthConfig {
-    #[allow(dead_code)]
-    pub public_key: String,
 }
 
 #[cfg(test)]
 mod tests {
+    use api_types::KubernetesInfo;
+    use api_types::KubernetesNode;
+    use api_types::KubernetesPod;
+    use api_types::KubernetesServiceAccount;
     use serde_json::json;
 
     use super::*;
@@ -201,8 +133,8 @@ mod tests {
             "Pod name should be correctly deserialized"
         );
         assert_eq!(
-            payload.kubernetes.serviceaccount.name, "api-service",
-            "Service account name should be correctly deserialized"
+            payload.kubernetes.pod.uid, "pod-def",
+            "Pod UID should be correctly deserialized"
         );
         assert_eq!(
             payload.nbf, 1751311082,
@@ -229,7 +161,8 @@ mod tests {
         };
 
         // Act
-        let resource_info = PodResourceInfo::from((pod_name, namespace, node_name, annotations));
+        let resource_info =
+            pod_resource_info_from_annotations(pod_name, namespace, node_name, annotations);
 
         // Assert
         assert_eq!(
@@ -287,7 +220,8 @@ mod tests {
         };
 
         // Act
-        let resource_info = PodResourceInfo::from((pod_name, namespace, node_name, annotations));
+        let resource_info =
+            pod_resource_info_from_annotations(pod_name, namespace, node_name, annotations);
 
         // Assert
         assert_eq!(
@@ -375,11 +309,11 @@ mod tests {
         );
         assert!(
             serialized["data"].is_null(),
-            "Data field should be null for not found"
+            "Data field should be null when pod not found"
         );
         assert_eq!(
             serialized["message"], "Pod not found",
-            "Message should indicate not found"
+            "Message should indicate pod not found"
         );
     }
 
@@ -396,7 +330,7 @@ mod tests {
         // Assert
         assert_eq!(
             config.public_key, cloned_config.public_key,
-            "Cloned config should have same public key"
+            "Cloned config should have the same public key"
         );
     }
 }

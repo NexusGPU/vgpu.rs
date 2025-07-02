@@ -7,6 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+api-types = { workspace = true }
 trap = { workspace = true }
 tf-macro = { workspace = true }
 tracing = { workspace = true }
@@ -17,6 +18,10 @@ serde_json = { workspace = true }
 nvml-wrapper = { workspace = true }
 nvml-wrapper-sys = { workspace = true }
 cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
+# HTTP dependencies
+reqwest = { workspace = true, features = ["json", "blocking"] }
+serde = { workspace = true, features = ["derive"] }
+error-stack = { workspace = true }
 
 [build-dependencies]
 cbindgen = { workspace = true }
