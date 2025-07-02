@@ -234,7 +234,7 @@ jobs:
 
 
       - name: Build for amd64
-        run: VERSION=${{ needs.release.outputs.version }} cargo build -p tensor-fusion-hypervisor --release --target x86_64-unknown-linux-gnu
+        run: VERSION=${{ needs.release.outputs.version }} cargo build -p hypervisor --release --target x86_64-unknown-linux-gnu
       
       - id: meta
         uses: docker/metadata-action@v5
@@ -262,7 +262,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            BINARY_PATH=target/x86_64-unknown-linux-gnu/release/tensor-fusion-hypervisor
+            BINARY_PATH=target/x86_64-unknown-linux-gnu/release/hypervisor
 
   publish_arm:
     needs:
@@ -294,7 +294,7 @@ jobs:
           fi
 
       - name: Build for arm64
-        run: VERSION=${{ needs.release.outputs.version }} cross build -p tensor-fusion-hypervisor --release --target aarch64-unknown-linux-gnu
+        run: VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target aarch64-unknown-linux-gnu
 
       - id: meta
         uses: docker/metadata-action@v5
@@ -326,7 +326,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           no-cache: true
           build-args: |
-            BINARY_PATH=target/aarch64-unknown-linux-gnu/release/tensor-fusion-hypervisor
+            BINARY_PATH=target/aarch64-unknown-linux-gnu/release/hypervisor
 
   merge_images:
     needs:
