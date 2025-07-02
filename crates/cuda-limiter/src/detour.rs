@@ -23,7 +23,7 @@ macro_rules! with_device {
 
 #[inline]
 pub(crate) fn round_up(n: usize, base: usize) -> usize {
-    if n % base != 0 {
+    if !n.is_multiple_of(base) {
         n + base - (n % base)
     } else {
         n
