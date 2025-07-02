@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let _guard = logging::init(cli.gpu_metrics_file);
 
-    tracing::info!("Starting tensor-fusion-hypervisor {}", &**version::VERSION);
+    tracing::info!("Starting hypervisor {}", &**version::VERSION);
 
     let nvml = Arc::new(match Nvml::init() {
         Ok(nvml) => Ok(nvml),

@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'tensor-fusion-hypervisor'",
+            "name": "Debug executable 'hypervisor'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=tensor-fusion-hypervisor",
-                    "--package=tensor-fusion-hypervisor"
+                    "--bin=hypervisor",
+                    "--package=hypervisor"
                 ],
                 "filter": {
-                    "name": "tensor-fusion-hypervisor",
+                    "name": "hypervisor",
                     "kind": "bin"
                 }
             },
