@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -5,11 +6,13 @@ use error_stack::Report;
 use error_stack::ResultExt;
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
+use kube::config::KubeConfigOptions;
 use kube::runtime::watcher::watcher;
 use kube::runtime::watcher::Config;
 use kube::runtime::WatchStreamExt;
 use kube::Api;
 use kube::Client;
+use kube::config::Kubeconfig;
 use tokio::select;
 use tokio::sync::oneshot;
 use tracing::error;
@@ -37,6 +40,7 @@ impl PodWatcher {
     ///
     /// # Arguments
     ///
+    /// * `kubeconfig` - Optional path to kubeconfig file (None for default config)
     /// * `namespace` - Kubernetes namespace to watch (None for all namespaces)
     /// * `node_name` - Filter pods by node name (None for all nodes)
     /// * `update_sender` - Channel to send worker updates
@@ -45,16 +49,47 @@ impl PodWatcher {
     ///
     /// - [`KubernetesError::ConnectionFailed`] if unable to connect to Kubernetes API
     pub(crate) async fn new(
+        kubeconfig: Option<PathBuf>,
         namespace: Option<String>,
         node_name: Option<String>,
         update_sender: mpsc::Sender<WorkerUpdate>,
     ) -> Result<Self, Report<KubernetesError>> {
-        let client =
-            Client::try_default()
-                .await
-                .change_context(KubernetesError::ConnectionFailed {
-                    message: "Failed to create Kubernetes client".to_string(),
-                })?;
+        let client = match kubeconfig {
+            Some(kubeconfig_path) => {
+                // Load kubeconfig from the specified file
+                let kubeconfig = Kubeconfig::read_from(&kubeconfig_path).change_context(
+                    KubernetesError::ConnectionFailed {
+                        message: format!(
+                            "Failed to read kubeconfig file: {}",
+                            kubeconfig_path.display()
+                        ),
+                    },
+                )?;
+
+                let config =
+                    kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default())
+                        .await
+                        .change_context(KubernetesError::ConnectionFailed {
+                            message: format!(
+                                "Failed to create config from kubeconfig: {}",
+                                kubeconfig_path.display()
+                            ),
+                        })?;
+
+                Client::try_from(config).change_context(KubernetesError::ConnectionFailed {
+                    message: "Failed to create Kubernetes client from custom kubeconfig"
+                        .to_string(),
+                })?
+            }
+            None => {
+                // Use default configuration (in-cluster or ~/.kube/config)
+                Client::try_default()
+                    .await
+                    .change_context(KubernetesError::ConnectionFailed {
+                        message: "Failed to create Kubernetes client".to_string(),
+                    })?
+            }
+        };
 
         Ok(Self {
             client,
