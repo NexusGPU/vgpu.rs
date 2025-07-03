@@ -70,7 +70,8 @@ pub(crate) async fn run_metrics_async(
     let mut worker_acc: HashMap<String, HashMap<u32, AccumulatedWorkerMetrics>> = HashMap::new();
     let mut counter = 0;
 
-    for _ in gpu_observer.subscribe().iter() {
+    let mut receiver = gpu_observer.subscribe();
+    while let Some(_) = receiver.recv().await {
         counter += 1;
         let metrics = gpu_observer.metrics.read().expect("poisoned");
         // Accumulate GPU metrics
