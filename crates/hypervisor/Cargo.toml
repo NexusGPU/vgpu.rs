@@ -7,7 +7,7 @@ edition = "2021"
 nvml-wrapper = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-notify = "8.0.0"
+notify = "8.1.0"
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tracing-appender = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
