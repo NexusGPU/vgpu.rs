@@ -1,14 +1,15 @@
 use std::collections::HashMap;
-use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 
 use anyhow::Result;
+use futures::future;
 use nvml_wrapper::enum_wrappers::device::PcieUtilCounter;
 use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::Nvml;
+use tokio::sync::mpsc;
 
 use super::GpuResources;
 
@@ -68,11 +69,15 @@ impl GpuObserver {
                         // handle senders in a new scope to avoid lock contention
                         {
                             let senders = self.senders.read().expect("poisoned");
-                            for sender in senders.iter() {
-                                if let Err(e) = sender.send(()) {
+                            // Send notifications to all subscribers concurrently
+                            let send_futures = senders.iter().map(|sender| async move {
+                                if let Err(e) = sender.send(()).await {
                                     tracing::error!("Failed to send update signal: {}", e);
                                 }
-                            }
+                            });
+                            
+                            // Wait for all send operations to complete
+                            future::join_all(send_futures).await;
                         } // senders lock is released here
                     }
                     Err(e) => {
@@ -197,7 +202,7 @@ impl GpuObserver {
     }
 
     pub(crate) fn subscribe(&self) -> mpsc::Receiver<()> {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel(32); // 缓冲区大小为 32
         self.senders.write().expect("poisoned").push(sender);
         receiver
     }
