@@ -41,8 +41,10 @@
 //!
 //! // Server usage
 //! let server = HttpServer::<MyTask, MyResult>::new();
-//! // TODO: Poem routes currently disabled due to compilation issues
-//! // let routes = server.create_routes("/api/v1/tasks");
+//! let routes = create_routes(server.clone(), "/api/v1/tasks");
+//! let app = Route::new().nest("/api/v1/tasks", routes);
+//! let listener = poem::listener::TcpListener::bind("0.0.0.0:8080");
+//! Server::new(listener).run(app).await.unwrap();
 //! # Ok(())
 //! # }
 //! ```
@@ -58,6 +60,7 @@ pub use config::ClientConfig;
 pub use error::CommError;
 pub use error::CommResult;
 pub use event_client::BlockingSseClient as BlockingHttpClient;
+pub use poem::Route;
 pub use server::ClientStats;
 pub use server::HttpServer;
 pub use server::ServerConfig;
