@@ -36,6 +36,5 @@ name = "hypervisor"
 path = "src/main.rs"
 
 [dev-dependencies]
-ipc-channel = { workspace = true }
 similar-asserts = { workspace = true }
 test-log = { workspace = true }
