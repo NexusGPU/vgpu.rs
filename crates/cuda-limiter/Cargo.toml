@@ -22,6 +22,7 @@ cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cu
 reqwest = { workspace = true, features = ["json", "blocking", "rustls-tls"], default-features = false }
 serde = { workspace = true, features = ["derive"] }
 error-stack = { workspace = true }
+http-bidir-comm = { workspace = true }
 
 [build-dependencies]
 cbindgen = { workspace = true }

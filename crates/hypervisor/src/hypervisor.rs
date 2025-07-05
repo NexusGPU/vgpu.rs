@@ -89,8 +89,8 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
                     }
                 }
                 SchedulingDecision::Wake(waker, trap_id, arg) => {
-                    tracing::info!("waking up tapped process");
-                    let _ = waker.send((*trap_id, arg.clone()));
+                    tracing::info!("waking up trapped process");
+                    let _ = waker.send(*trap_id, arg.clone());
                 }
             }
             scheduler.done_decision(decision);
@@ -110,7 +110,13 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
 }
 
 impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> trap::TrapHandler for Hypervisor<Proc, Sched> {
-    fn handle_trap(&self, pid: u32, trap_id: u64, frame: &trap::TrapFrame, waker: trap::Waker) {
+    fn handle_trap(
+        &self,
+        pid: u32,
+        trap_id: u64,
+        frame: &trap::TrapFrame,
+        waker: Box<dyn trap::Waker>,
+    ) {
         // Handle the trap event
         self.scheduler
             .lock()

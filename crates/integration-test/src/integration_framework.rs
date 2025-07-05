@@ -18,29 +18,9 @@ use serde_json::json;
 use tempfile::TempDir;
 use tracing::info;
 use tracing::warn;
-
+use api_types::QosLevel;
 use crate::test_setup;
 
-/// QoS levels for test processes
-#[derive(Debug, Clone, Copy)]
-pub enum QosLevel {
-    Low,
-    Medium,
-    High,
-    #[allow(dead_code)]
-    Critical,
-}
-
-impl QosLevel {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            QosLevel::Low => "Low",
-            QosLevel::Medium => "Medium",
-            QosLevel::High => "High",
-            QosLevel::Critical => "Critical",
-        }
-    }
-}
 
 /// Memory allocation patterns for test clients
 #[derive(Debug, Clone)]

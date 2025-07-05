@@ -6,6 +6,7 @@ use std::ffi::c_int;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::OsStr;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
@@ -14,11 +15,13 @@ use limiter::Limiter;
 use nvml_wrapper::Nvml;
 use tf_macro::hook_fn;
 use trap::dummy::DummyTrap;
-use trap::ipc::IpcTrap;
+use trap::http::BlockingHttpTrap;
+use trap::http::HttpTrapConfig;
 use utils::hooks::HookManager;
 use utils::logging;
 use utils::replace_symbol;
 
+mod command_handler;
 mod config;
 mod detour;
 mod limiter;
@@ -30,20 +33,9 @@ thread_local! {
     static LIBNVML_HOOKED: RefCell<bool> = const { RefCell::new(false) };
 }
 
-#[no_mangle]
-pub extern "C" fn set_limit(gpu: u32, up_limit: u32, mem_limit: u64) {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
-    if let Err(e) = limiter.set_uplimit(gpu, up_limit) {
-        tracing::error!("Failed to set up_limit: {}", e);
-    }
-    if let Err(e) = limiter.set_mem_limit(gpu, mem_limit) {
-        tracing::error!("Failed to set mem_limit: {}", e);
-    }
-}
-
 enum TrapImpl {
     Dummy(DummyTrap),
-    Ipc(IpcTrap),
+    Http(Arc<BlockingHttpTrap>),
 }
 
 impl trap::Trap for TrapImpl {
@@ -53,7 +45,7 @@ impl trap::Trap for TrapImpl {
     ) -> Result<trap::TrapAction, trap::TrapError> {
         match self {
             TrapImpl::Dummy(t) => t.enter_trap_and_wait(frame),
-            TrapImpl::Ipc(t) => t.enter_trap_and_wait(frame),
+            TrapImpl::Http(t) => t.enter_trap_and_wait(frame),
         }
     }
 }
@@ -62,7 +54,7 @@ impl Clone for TrapImpl {
     fn clone(&self) -> Self {
         match self {
             TrapImpl::Dummy(_) => TrapImpl::Dummy(DummyTrap {}),
-            TrapImpl::Ipc(t) => TrapImpl::Ipc(t.clone()),
+            TrapImpl::Http(t) => TrapImpl::Http(Arc::clone(t)),
         }
     }
 }
@@ -71,19 +63,30 @@ pub fn global_trap() -> impl trap::Trap {
     static GLOBAL_TRAP: OnceLock<Mutex<TrapImpl>> = OnceLock::new();
 
     let trap = GLOBAL_TRAP.get_or_init(|| {
-        let ipc_server_path_name = std::env::var("TENSOR_FUSION_IPC_SERVER_PATH");
-        match ipc_server_path_name {
-            Ok(path) => match IpcTrap::connect(path) {
-                Ok(trap) => TrapImpl::Ipc(trap).into(),
-                Err(e) => {
-                    panic!("failed to connect to ipc server, err: {e}");
+        // Try to construct HTTP trap from env vars using blocking constructor
+        if let (Ok(ip), Ok(port)) = (
+            std::env::var("HYPERVISOR_IP"),
+            std::env::var("HYPERVISOR_PORT"),
+        ) {
+            let server_url = format!("http://{ip}:{port}");
+            let config = HttpTrapConfig {
+                server_url,
+                ..Default::default()
+            };
+
+            match BlockingHttpTrap::new(config) {
+                Ok(trap) => {
+                    return TrapImpl::Http(Arc::new(trap)).into();
                 }
-            },
-            Err(_) => {
-                tracing::warn!("using dummy trap");
-                TrapImpl::Dummy(DummyTrap {}).into()
+                Err(e) => {
+                    tracing::warn!("Failed to create HttpTrap: {e}, falling back to DummyTrap")
+                }
             }
         }
+
+        // Fallback to DummyTrap
+        tracing::warn!("using dummy trap");
+        TrapImpl::Dummy(DummyTrap {}).into()
     });
 
     trap.lock().expect("poisoned").clone()
@@ -170,6 +173,16 @@ unsafe fn entry_point() {
             FN_DLOPEN
         );
     }
+
+    // start Hypervisor command handler background thread (requires HYPERVISOR_IP / PORT)
+    if let (Ok(ip), Ok(port)) = (
+        std::env::var("HYPERVISOR_IP"),
+        std::env::var("HYPERVISOR_PORT"),
+    ) {
+        command_handler::start_background_handler(&ip, &port);
+    } else {
+        tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
+    }
 }
 
 #[hook_fn]
@@ -204,4 +217,15 @@ pub(crate) unsafe extern "C" fn dlopen_detour(name: *const c_char, mode: c_int) 
         }
     }
     ret
+}
+
+#[no_mangle]
+pub extern "C" fn set_limit(gpu: u32, up_limit: u32, mem_limit: u64) {
+    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
+    if let Err(e) = limiter.set_uplimit(gpu, up_limit) {
+        tracing::error!("Failed to set up_limit: {}", e);
+    }
+    if let Err(e) = limiter.set_mem_limit(gpu, mem_limit) {
+        tracing::error!("Failed to set mem_limit: {}", e);
+    }
 }

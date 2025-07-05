@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 
-use api_types::PodQueryResponse;
+use api_types::WorkerQueryResponse;
 use error_stack::Report;
 use error_stack::ResultExt;
 use nvml_wrapper::device;
@@ -78,7 +78,7 @@ fn fetch_device_configs_from_hypervisor(
     }
 
     // Parse response
-    let pod_response: PodQueryResponse =
+    let pod_response: WorkerQueryResponse =
         response.json().change_context(ConfigError::JsonParsing)?;
 
     if !pod_response.success {

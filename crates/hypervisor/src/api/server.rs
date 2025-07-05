@@ -1,34 +1,56 @@
+use std::sync::Arc;
+
+use chrono::Utc;
 use error_stack::Report;
 use poem::get;
 use poem::listener::TcpListener;
 use poem::middleware::Tracing;
+use poem::post;
+use poem::web::Data;
+use poem::web::Json;
 use poem::EndpointExt;
 use poem::Route;
 use poem::Server;
 use tokio::sync::oneshot;
 use tracing::error;
 use tracing::info;
+use trap::http::HttpTrapRequest;
+use trap::http::HttpTrapResponse;
+use trap::TrapAction;
+use trap::TrapError;
+use trap::Waker;
 
 use super::auth::JwtAuthMiddleware;
 use super::errors::ApiError;
-use super::handlers::get_pod_info;
-use super::storage::PodStorage;
 use super::types::JwtAuthConfig;
+use crate::api::handlers::get_worker_info;
+use crate::limiter_comm::CommandDispatcher;
+use crate::worker_manager::WorkerRegistry;
 
 /// HTTP API server for querying pod resource information
 pub struct ApiServer {
-    pod_storage: PodStorage,
+    worker_registry: WorkerRegistry,
     listen_addr: String,
     jwt_config: JwtAuthConfig,
+    trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
+    command_dispatcher: Arc<CommandDispatcher>,
 }
 
 impl ApiServer {
     /// Create a new API server
-    pub fn new(pod_storage: PodStorage, listen_addr: String, jwt_config: JwtAuthConfig) -> Self {
+    pub fn new(
+        worker_registry: WorkerRegistry,
+        listen_addr: String,
+        jwt_config: JwtAuthConfig,
+        trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
+        command_dispatcher: Arc<CommandDispatcher>,
+    ) -> Self {
         Self {
-            pod_storage,
+            worker_registry,
             listen_addr,
             jwt_config,
+            trap_handler,
+            command_dispatcher,
         }
     }
 
@@ -40,9 +62,16 @@ impl ApiServer {
     pub async fn run(self, mut shutdown_rx: oneshot::Receiver<()>) -> Result<(), Report<ApiError>> {
         info!("Starting HTTP API server on {}", self.listen_addr);
 
+        let trap_routes = Route::new().at("/", post(trap_endpoint).data(self.trap_handler.clone()));
+
+        let limiter_routes = self.command_dispatcher.create_routes();
+
         let app = Route::new()
-            .at("/api/v1/pods", get(get_pod_info))
-            .data(self.pod_storage)
+            .at("/api/v1/worker", get(get_worker_info))
+            .nest("/api/v1/trap", trap_routes)
+            .nest("/api/v1/limiter", limiter_routes)
+            .data(self.worker_registry)
+            .data(self.command_dispatcher.clone())
             .with(JwtAuthMiddleware::new(self.jwt_config))
             .with(Tracing);
 
@@ -72,141 +101,48 @@ impl ApiServer {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::RwLock;
+/// Simple waker implementation for capturing trap actions
+#[derive(Clone)]
+struct SimpleWaker {
+    action: Arc<std::sync::Mutex<Option<TrapAction>>>,
+}
 
-    use super::*;
-
-    fn create_test_storage() -> PodStorage {
-        Arc::new(RwLock::new(HashMap::new()))
-    }
-
-    fn create_test_jwt_config() -> JwtAuthConfig {
-        JwtAuthConfig {
-            public_key: "test-public-key".to_string(),
+impl SimpleWaker {
+    fn new() -> Self {
+        Self {
+            action: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
-    #[test]
-    fn api_server_can_be_created() {
-        // Arrange
-        let pod_storage = create_test_storage();
-        let listen_addr = "127.0.0.1:8080".to_string();
-        let jwt_config = create_test_jwt_config();
-
-        // Act
-        let server = ApiServer::new(pod_storage.clone(), listen_addr.clone(), jwt_config.clone());
-
-        // Assert
-        assert_eq!(
-            server.listen_addr, listen_addr,
-            "Listen address should be set correctly"
-        );
-        assert_eq!(
-            server.jwt_config.public_key, "test-public-key",
-            "JWT config should be set correctly"
-        );
-        // Note: We can't directly compare Arc<RwLock<HashMap<...>>> but we can verify it's the same pointer
-        assert!(
-            Arc::ptr_eq(&server.pod_storage, &pod_storage),
-            "Pod storage should be the same reference"
-        );
+    fn get_action(&self) -> Option<TrapAction> {
+        self.action.lock().unwrap().clone()
     }
+}
 
-    #[test]
-    fn api_server_handles_different_listen_addresses() {
-        // Arrange
-        let pod_storage = create_test_storage();
-        let jwt_config = create_test_jwt_config();
-
-        let test_addresses = vec![
-            "0.0.0.0:8080",
-            "127.0.0.1:3000",
-            "localhost:9090",
-            "[::1]:8080", // IPv6
-        ];
-
-        for addr in test_addresses {
-            // Act
-            let server = ApiServer::new(pod_storage.clone(), addr.to_string(), jwt_config.clone());
-
-            // Assert
-            assert_eq!(
-                server.listen_addr, addr,
-                "Server should handle address: {addr}"
-            );
-        }
+impl Waker for SimpleWaker {
+    fn send(&self, _trap_id: u64, action: TrapAction) -> Result<(), TrapError> {
+        let mut action_guard = self.action.lock().unwrap();
+        *action_guard = Some(action);
+        Ok(())
     }
+}
 
-    #[test]
-    fn api_server_stores_jwt_config_correctly() {
-        // Arrange
-        let pod_storage = create_test_storage();
-        let listen_addr = "127.0.0.1:8080".to_string();
-
-        let jwt_configs = vec![
-            JwtAuthConfig {
-                public_key: "key1".to_string(),
-            },
-            JwtAuthConfig {
-                public_key: "very-long-key-12345".to_string(),
-            },
-            JwtAuthConfig {
-                public_key: "".to_string(),
-            }, // Empty key
-        ];
-
-        for jwt_config in jwt_configs {
-            // Act
-            let server =
-                ApiServer::new(pod_storage.clone(), listen_addr.clone(), jwt_config.clone());
-
-            // Assert
-            assert_eq!(
-                server.jwt_config.public_key, jwt_config.public_key,
-                "JWT config should be stored correctly"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn api_server_graceful_shutdown_setup() {
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        // Act - Immediately send shutdown signal
-        shutdown_tx.send(()).expect("should send shutdown signal");
-
-        // Assert
-        // Consume the shutdown receiver to verify it works
-        let shutdown_result = shutdown_rx.await;
-        assert!(
-            shutdown_result.is_ok(),
-            "Shutdown receiver should work correctly"
-        );
-    }
-
-    #[test]
-    fn api_server_with_minimal_configuration() {
-        // Arrange
-        let pod_storage = create_test_storage();
-        let listen_addr = "127.0.0.1:8080".to_string();
-        let jwt_config = JwtAuthConfig {
-            public_key: String::new(), // Minimal config with empty key
-        };
-
-        // Act
-        let server = ApiServer::new(pod_storage, listen_addr.clone(), jwt_config);
-
-        // Assert
-        assert_eq!(
-            server.listen_addr, listen_addr,
-            "Should accept minimal configuration"
-        );
-        assert_eq!(
-            server.jwt_config.public_key, "",
-            "Should handle empty JWT key"
-        );
-    }
+#[poem::handler]
+async fn trap_endpoint(
+    Json(req): Json<HttpTrapRequest>,
+    Data(handler): Data<&Arc<dyn trap::TrapHandler + Send + Sync + 'static>>,
+) -> Json<HttpTrapResponse> {
+    let waker = SimpleWaker::new();
+    handler.handle_trap(
+        req.process_id,
+        req.trap_id.parse::<u64>().unwrap_or(0),
+        &req.frame,
+        Box::new(waker.clone()),
+    );
+    let action = waker.get_action().unwrap_or(TrapAction::Resume);
+    Json(HttpTrapResponse {
+        trap_id: req.trap_id.clone(),
+        action,
+        timestamp: Utc::now(),
+    })
 }

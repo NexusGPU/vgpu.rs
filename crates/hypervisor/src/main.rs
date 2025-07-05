@@ -1,44 +1,44 @@
 mod api;
 mod config;
 mod gpu_observer;
+mod host_pid_probe;
 mod hypervisor;
 mod k8s;
+mod limiter_comm;
 mod logging;
 mod metrics;
 mod process;
 mod scheduler;
-mod worker_watcher;
+mod worker_manager;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::sync::RwLock;
 use std::time::Duration;
 
 use anyhow::Result;
 use api::ApiServer;
 use api::JwtAuthConfig;
-use api::PodStorage;
 use clap::command;
 use clap::Parser;
 use gpu_observer::GpuObserver;
+use host_pid_probe::HostPidProbe;
 use hypervisor::Hypervisor;
 use k8s::PodWatcher;
 use k8s::WorkerUpdate;
+use limiter_comm::CommandDispatcher;
 use nvml_wrapper::Nvml;
+use process::GpuProcess;
 use process::GpuResources;
 use scheduler::weighted::WeightedScheduler;
 use tokio::sync::oneshot;
 use utils::version;
-use worker_watcher::WorkerWatcher;
+use worker_manager::WorkerManager;
 
 #[derive(Parser)]
 #[command(about, long_about, version = &**version::VERSION)]
 struct Cli {
-    #[arg(long, value_hint = clap::ValueHint::DirPath, help = "Socket path for hypervisor to control vGPU workers, e.g. /tensor-fusion/worker/sock/")]
-    sock_path: PathBuf,
-
     #[arg(long, value_hint = clap::ValueHint::FilePath, help = "Path for printing GPU and worker metrics, e.g. /logs/metrics.log")]
     gpu_metrics_file: Option<PathBuf>,
 
@@ -55,13 +55,6 @@ struct Cli {
         help = "Path for GPU info list, e.g. /etc/tensor-fusion/gpu-info.yaml"
     )]
     gpu_info_path: Option<PathBuf>,
-
-    #[arg(
-        long,
-        env = "TENSOR_FUSION_IPC_SERVER_PATH",
-        help = "Path for the IPC pipe used for communication between the hypervisor and worker processes, e.g. /tensor-fusion/worker/ipc"
-    )]
-    ipc_path: PathBuf,
 
     #[arg(long, help = "Enable Kubernetes pod monitoring")]
     enable_k8s: bool,
@@ -81,6 +74,14 @@ struct Cli {
 
     #[arg(
         long,
+        env = "GPU_POOL",
+        help = "gpu pool is only used in metrics output"
+    )]
+    gpu_pool: Option<String>,
+
+    #[arg(
+        long,
+        env = "KUBECONFIG",
         value_hint = clap::ValueHint::FilePath,
         help = "Path to kubeconfig file (defaults to cluster config or ~/.kube/config)"
     )]
@@ -88,6 +89,7 @@ struct Cli {
 
     #[arg(
         long,
+        env = "API_LISTEN_ADDR",
         default_value = "127.0.0.1:8080",
         help = "HTTP API server listen address"
     )]
@@ -117,31 +119,18 @@ async fn main() -> Result<()> {
             .init(),
     }?);
 
-    let mut gpu_limits = HashMap::new();
     let mut gpu_uuid_to_name_map = HashMap::new();
     let device_count = nvml.device_count()?;
 
     for i in 0..device_count {
         let device = nvml.device_by_index(i)?;
-        let memory_info = device.memory_info()?;
         let uuid = device.uuid()?.to_lowercase();
         let name = device.name()?;
 
         tracing::info!("Found GPU {}: {} ({})", i, uuid, name);
         // Store GPU name and UUID mapping for config lookup
         gpu_uuid_to_name_map.insert(uuid.clone(), name);
-
-        gpu_limits.insert(uuid, GpuResources {
-            memory_bytes: memory_info.total,
-            compute_percentage: 100,
-            tflops_request: None,
-            tflops_limit: None,
-            memory_limit: None,
-        });
     }
-
-    let gpu_node = std::env::var("GPU_NODE_NAME").unwrap_or("unknown".to_string());
-    let gpu_pool = std::env::var("TENSOR_FUSION_POOL_NAME").unwrap_or("unknown".to_string());
 
     // Load GPU information from config file
     if let Err(e) = config::load_gpu_info(
@@ -156,143 +145,65 @@ async fn main() -> Result<()> {
     let hypervisor = Arc::new(Hypervisor::new(scheduler, Duration::from_secs(1)));
 
     let gpu_observer = GpuObserver::create(nvml.clone());
-    let worker_pid_mapping = Arc::new(RwLock::new(HashMap::new()));
 
-    // Ensure socket directory exists
-    std::fs::create_dir_all(&cli.sock_path)?;
+    // HTTP trap handling is now integrated into the API server
 
     // Setup Kubernetes pod watcher if enabled
     let (k8s_update_sender, k8s_update_receiver) = mpsc::channel::<WorkerUpdate>();
     let (_k8s_shutdown_sender, k8s_shutdown_receiver) = oneshot::channel::<()>();
 
-    // Setup pod storage for API queries
-    let pod_storage: PodStorage = Arc::new(RwLock::new(HashMap::new()));
+    let host_pid_probe = Arc::new(HostPidProbe::new(Duration::from_secs(1)));
+    // Setup worker manager
+    let worker_manager = Arc::new(WorkerManager::new(
+        host_pid_probe.clone(),
+        {
+            let hypervisor = hypervisor.clone();
+            move |pid, worker| {
+                if hypervisor.process_exists(pid) {
+                    return;
+                }
+                tracing::info!("new worker added: {}", worker.name());
+                hypervisor.add_process(worker);
+                // HTTP trap handling doesn't require client connection waiting
+            }
+        },
+        {
+            let hypervisor = hypervisor.clone();
+            move |pid| {
+                hypervisor.remove_process(pid);
+                // HTTP trap handling doesn't require client removal
+            }
+        },
+    ));
 
     // Setup API server shutdown channel
     let (_api_shutdown_sender, api_shutdown_receiver) = oneshot::channel::<()>();
+
+    // create command dispatcher
+    let command_dispatcher = Arc::new(CommandDispatcher::new());
 
     // Start GPU observer task
     let gpu_observer_task = {
         let gpu_observer = gpu_observer.clone();
         tokio::spawn(async move {
             tracing::info!("Starting GPU observer task");
-            gpu_observer.run_async(Duration::from_secs(1)).await;
+            gpu_observer.run(Duration::from_secs(1)).await;
         })
     };
 
     // Start metrics collection task
     let metrics_task = {
         let gpu_observer = gpu_observer.clone();
-        let worker_pid_mapping = worker_pid_mapping.clone();
         let metrics_batch_size = cli.metrics_batch_size;
+        let node_name = cli.node_name.clone();
+        let gpu_pool = cli.gpu_pool.clone();
         tokio::spawn(async move {
             tracing::info!("Starting metrics collection task");
-            metrics::run_metrics_async(
-                gpu_observer,
-                worker_pid_mapping,
-                metrics_batch_size,
-                gpu_node,
-                gpu_pool,
-            )
-            .await;
+            metrics::run_metrics(gpu_observer, metrics_batch_size, node_name, gpu_pool).await;
         })
     };
 
-    // create trap server
-    let trap_server = Arc::new(
-        trap::ipc::IpcTrapServer::new(hypervisor.clone()).expect("failed to create trap server"),
-    );
-
-    // Create the worker watcher instance to be shared by both tasks
-    let sock_path = cli.sock_path.clone();
-    let watcher = Arc::new(
-        WorkerWatcher::new(
-            &sock_path,
-            {
-                let hypervisor = hypervisor.clone();
-                let trap_server = trap_server.clone();
-                move |pid, mut worker| {
-                    if hypervisor.process_exists(pid) {
-                        return;
-                    }
-
-                    if let Err(e) = worker.connect() {
-                        tracing::error!("failed to connect to worker: {e}, skipped");
-                        return;
-                    }
-
-                    hypervisor.add_process(worker);
-                    tracing::info!("new worker added: {pid}");
-                    // Spawn a standalone task to wait for client connection
-                    let trap_server = trap_server.clone();
-                    let ipc_path = cli.ipc_path.clone();
-                    tokio::spawn(async move {
-                        tracing::info!("waiting for client with PID: {}", pid);
-                        match tokio::task::spawn_blocking(move || {
-                            trap_server.wait_client(ipc_path, pid)
-                        })
-                        .await
-                        {
-                            Ok(Ok(_)) => tracing::info!("client with PID {} connected", pid),
-                            Ok(Err(e)) => {
-                                tracing::error!("failed to wait for client with PID {}: {}", pid, e)
-                            }
-                            Err(e) => tracing::error!(
-                                "blocking task panicked while waiting for client with PID {}: {}",
-                                pid,
-                                e
-                            ),
-                        }
-                    });
-                }
-            },
-            {
-                let hypervisor = hypervisor.clone();
-                let trap_server = trap_server.clone();
-                move |pid| {
-                    hypervisor.remove_process(pid);
-                    trap_server.remove_client(pid);
-                }
-            },
-            worker_pid_mapping.clone(),
-        )
-        .expect("new worker watcher"),
-    );
-
-    // Start worker watcher loop task (directory polling)
-    let watcher_loop_task = {
-        let watcher = watcher.clone();
-        let sock_path = sock_path.clone();
-        tokio::spawn(async move {
-            tracing::info!("Starting worker watcher loop task");
-            watcher.run_watcher_loop_async(sock_path).await;
-        })
-    };
-
-    // Start worker watcher event handling task
-    let worker_task = {
-        let watcher = watcher.clone();
-        let gpu_observer = gpu_observer.clone();
-        tokio::spawn(async move {
-            tracing::info!("Starting worker watcher event handler task");
-            watcher.run_async(gpu_observer).await;
-        })
-    };
-
-    // Start trap server task
-    let trap_task = {
-        let hypervisor = hypervisor.clone();
-        tokio::spawn(async move {
-            tracing::info!("Starting trap server task");
-            let trap_server =
-                trap::ipc::IpcTrapServer::new(hypervisor).expect("failed to create trap server");
-            match tokio::task::spawn_blocking(move || trap_server.run()).await {
-                Ok(Ok(_)) => tracing::info!("trap server completed successfully"),
-                Ok(Err(e)) => tracing::error!("trap server failed: {}", e),
-                Err(e) => tracing::error!("trap server blocking task panicked: {}", e),
-            }
-        })
-    };
+    // Trap handling is now integrated into the HTTP API server
 
     // Start Kubernetes pod watcher if enabled
     let k8s_task = if cli.enable_k8s {
@@ -323,7 +234,8 @@ async fn main() -> Result<()> {
 
     // Start worker update processor for Kubernetes events
     let k8s_processor_task = if cli.enable_k8s {
-        let pod_storage = pod_storage.clone();
+        let worker_manager = worker_manager.clone();
+        let gpu_observer = gpu_observer.clone();
         tokio::spawn(async move {
             tracing::info!("Starting Kubernetes update processor task");
             for update in k8s_update_receiver {
@@ -333,34 +245,55 @@ async fn main() -> Result<()> {
                         namespace,
                         annotations,
                         node_name,
+                    } => {
+                        tracing::info!(
+                            "Pod created: {}/{} with annotations: {:?}, node: {:?}",
+                            namespace,
+                            pod_name,
+                            annotations,
+                            node_name
+                        );
+                        if let Err(e) = worker_manager
+                            .handle_pod_created(
+                                pod_name,
+                                namespace,
+                                annotations,
+                                gpu_observer.clone(),
+                            )
+                            .await
+                        {
+                            tracing::error!("Failed to handle pod creation: {e}");
+                        }
                     }
-                    | WorkerUpdate::PodUpdated {
+                    WorkerUpdate::PodUpdated {
                         pod_name,
                         namespace,
                         annotations,
                         node_name,
                     } => {
                         tracing::info!(
-                            "Pod created or updated: {}/{} with annotations: {:?}, node: {:?}",
+                            "Pod updated: {}/{} with annotations: {:?}, node: {:?}",
                             namespace,
                             pod_name,
                             annotations,
                             node_name
                         );
-                        api::update_pod_storage(
-                            &pod_storage,
-                            pod_name,
-                            namespace,
-                            node_name,
-                            annotations,
-                        );
+                        if let Err(e) = worker_manager
+                            .handle_pod_updated(pod_name, namespace, annotations, node_name)
+                            .await
+                        {
+                            tracing::error!("Failed to handle pod update: {e}");
+                        }
                     }
                     WorkerUpdate::PodDeleted {
                         pod_name,
                         namespace,
                     } => {
                         tracing::info!("Pod deleted: {}/{}", namespace, pod_name);
-                        api::remove_pod_from_storage(&pod_storage, &pod_name, &namespace);
+                        if let Err(e) = worker_manager.handle_pod_deleted(pod_name, namespace).await
+                        {
+                            tracing::error!("Failed to handle pod deletion: {e}");
+                        }
                     }
                 }
             }
@@ -374,8 +307,10 @@ async fn main() -> Result<()> {
 
     // Start HTTP API server task
     let api_task = {
-        let pod_storage = pod_storage.clone();
+        let worker_registry = worker_manager.registry().clone();
         let api_listen_addr = cli.api_listen_addr.clone();
+        let hypervisor_for_api = hypervisor.clone();
+        let command_dispatcher = command_dispatcher.clone();
         tokio::spawn(async move {
             tracing::info!("Starting HTTP API server task");
             // TODO: Configure JWT public key from environment or config file
@@ -385,7 +320,13 @@ async fn main() -> Result<()> {
                     "placeholder-public-key".to_string()
                 }),
             };
-            let api_server = ApiServer::new(pod_storage, api_listen_addr, jwt_config);
+            let api_server = ApiServer::new(
+                worker_registry,
+                api_listen_addr,
+                jwt_config,
+                hypervisor_for_api,
+                command_dispatcher.clone(),
+            );
             if let Err(e) = api_server.run(api_shutdown_receiver).await {
                 tracing::error!("HTTP API server failed: {e:?}");
             }
@@ -409,15 +350,6 @@ async fn main() -> Result<()> {
         result = metrics_task => {
             tracing::error!("Metrics collection task completed: {:?}", result);
         }
-        result = watcher_loop_task => {
-            tracing::error!("Worker watcher loop task completed: {:?}", result);
-        }
-        result = worker_task => {
-            tracing::error!("Worker watcher task completed: {:?}", result);
-        }
-        result = trap_task => {
-            tracing::error!("Trap server task completed: {:?}", result);
-        }
         result = k8s_task => {
             tracing::error!("Kubernetes pod watcher task completed: {:?}", result);
         }
@@ -434,6 +366,9 @@ async fn main() -> Result<()> {
             tracing::info!("Received Ctrl+C, shutting down...");
         }
     }
+
+    // Gracefully shutdown background host PID probe task
+    host_pid_probe.shutdown().await;
 
     Ok(())
 }

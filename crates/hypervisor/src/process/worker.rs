@@ -1,18 +1,13 @@
-use std::io::Read;
-use std::io::Write;
-use std::mem::MaybeUninit;
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::RwLock;
 
 use anyhow::Result;
+use api_types::QosLevel;
 
 use super::GpuProcess;
 use super::GpuResources;
 use super::ProcessState;
-use super::QosLevel;
 use crate::gpu_observer::GpuObserver;
 
 #[allow(dead_code)]
@@ -45,141 +40,61 @@ impl ControlMessage {
 
 pub(crate) struct TensorFusionWorker {
     id: u32,
-    #[allow(dead_code)]
-    requested: GpuResources,
-    socket_path: PathBuf,
     state: RwLock<ProcessState>,
-    gpu_uuid: String,
+    gpu_uuids: Vec<String>,
     gpu_observer: Arc<GpuObserver>,
-    unix_stream: MaybeUninit<Mutex<UnixStream>>,
-    qos_level: QosLevel,
-    /// Kubernetes pod name (if applicable)
-    #[allow(dead_code)]
-    pub(crate) pod_name: Option<String>,
-    /// Kubernetes namespace (if applicable)
-    #[allow(dead_code)]
-    pub(crate) namespace: Option<String>,
-    /// Kubernetes UID for tracking pod lifecycle
-    #[allow(dead_code)]
-    pub(crate) kubernetes_uid: Option<String>,
+    qos_level: api_types::QosLevel,
+    /// Kubernetes pod name
+    pub(crate) pod_name: String,
+    /// Kubernetes namespace
+    pub(crate) namespace: String,
 }
 
 impl TensorFusionWorker {
     pub(crate) fn new(
         id: u32,
-        socket_path: PathBuf,
-        requested: GpuResources,
         qos_level: QosLevel,
-        gpu_uuid: String,
+        gpu_uuids: Vec<String>,
         gpu_observer: Arc<GpuObserver>,
+        namespace: String,
+        pod_name: String,
     ) -> TensorFusionWorker {
         Self {
             id,
-            socket_path,
-            unix_stream: MaybeUninit::uninit(),
             qos_level,
-            requested,
             state: RwLock::new(ProcessState::Running),
-            gpu_uuid,
+            gpu_uuids,
             gpu_observer,
-            pod_name: None,
-            namespace: None,
-            kubernetes_uid: None,
+            pod_name,
+            namespace,
         }
     }
 
-    pub(crate) fn connect(&mut self) -> Result<()> {
-        let unix_stream = UnixStream::connect(&self.socket_path)?;
-
-        self.unix_stream = MaybeUninit::new(Mutex::new(unix_stream));
-        Ok(())
-    }
-
-    /// Update Kubernetes-related information for this worker.
-    #[allow(dead_code)]
-    pub(crate) fn update_kubernetes_info(
-        &mut self,
-        pod_name: Option<String>,
-        namespace: Option<String>,
-        kubernetes_uid: Option<String>,
-    ) {
-        self.pod_name = pod_name;
-        self.namespace = namespace;
-        self.kubernetes_uid = kubernetes_uid;
-    }
-
-    /// Update resource requirements from Kubernetes annotations.
-    #[allow(dead_code)]
-    pub(crate) fn update_resources_from_annotations(
-        &mut self,
-        annotations: &crate::k8s::TensorFusionAnnotations,
-    ) {
-        self.requested.tflops_request = annotations.tflops_request;
-        self.requested.tflops_limit = annotations.tflops_limit;
-        self.requested.memory_limit = annotations.vram_limit;
-
-        // If annotations specify VRAM request, update memory_bytes
-        if let Some(vram_request) = annotations.vram_request {
-            self.requested.memory_bytes = vram_request;
-        }
-    }
-
-    fn send_message(&self, message: ControlMessage) -> Result<bool> {
-        let mut unix_stream = unsafe { self.unix_stream.assume_init_ref() }
-            .lock()
-            .unwrap();
-        // Send the message
-        let message_bytes = unsafe {
-            std::slice::from_raw_parts(
-                &message as *const ControlMessage as *const u8,
-                std::mem::size_of::<ControlMessage>(),
-            )
-        };
-        unix_stream.write_all(message_bytes)?;
-
-        // Read response
-        let mut response = ControlMessage::new(ControlMessageType::ResponseSuccess);
-        let response_bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                &mut response as *mut ControlMessage as *mut u8,
-                std::mem::size_of::<ControlMessage>(),
-            )
-        };
-        unix_stream.read_exact(response_bytes)?;
-        let succ = response.control == ControlMessageType::ResponseSuccess;
-        if !succ {
-            tracing::error!(
-                "Failed to send control message, control: {:?}",
-                response.control
-            );
-        }
-        Ok(succ)
+    fn send_message(&self, _message: ControlMessage) -> Result<bool> {
+        todo!()
     }
 }
 
 impl GpuProcess for TensorFusionWorker {
-    fn id(&self) -> u32 {
+    fn pid(&self) -> u32 {
         self.id
     }
 
-    // fn state(&self) -> ProcessState {
-    //     *self.state.read().expect("poisoned")
-    // }
-
-    fn requested_resources(&self) -> GpuResources {
-        self.requested.clone()
+    fn name(&self) -> String {
+        format!("{}/{}", self.namespace, self.pod_name)
     }
 
-    fn current_resources(&self) -> GpuResources {
-        self.gpu_observer
-            .get_process_resources(&self.gpu_uuid, self.id)
-            .unwrap_or(GpuResources {
-                memory_bytes: 0,
-                compute_percentage: 0,
-                tflops_request: None,
-                tflops_limit: None,
-                memory_limit: None,
-            })
+    fn current_resources(&self) -> HashMap<&str, GpuResources> {
+        let mut resources: HashMap<&str, GpuResources> = HashMap::new();
+        for gpu_uuid in &self.gpu_uuids {
+            let resource = self
+                .gpu_observer
+                .get_process_resources(gpu_uuid, self.pid());
+            if let Some(resource) = resource {
+                resources.insert(gpu_uuid.as_str(), resource);
+            }
+        }
+        resources
     }
 
     fn pause(&self) -> Result<()> {
@@ -267,11 +182,38 @@ impl GpuProcess for TensorFusionWorker {
         }
     }
 
-    // fn gpu_uuid(&self) -> &str {
-    //     &self.gpu_uuid
-    // }
-
     fn qos_level(&self) -> super::QosLevel {
         self.qos_level
+    }
+}
+
+// Custom Clone implementation because some fields are not Clone
+impl Clone for TensorFusionWorker {
+    fn clone(&self) -> Self {
+        // Clone requested fields; reset non-cloneable unix_stream to uninit; clone state value
+        let state_value = *self.state.read().expect("poisoned");
+        Self {
+            id: self.id,
+            state: RwLock::new(state_value),
+            gpu_uuids: self.gpu_uuids.clone(),
+            gpu_observer: Arc::clone(&self.gpu_observer),
+            qos_level: self.qos_level,
+            pod_name: self.pod_name.clone(),
+            namespace: self.namespace.clone(),
+        }
+    }
+}
+
+// Manual Debug implementation to avoid issues with non-Debug fields
+impl std::fmt::Debug for TensorFusionWorker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TensorFusionWorker")
+            .field("id", &self.id)
+            .field("state", &*self.state.read().expect("poisoned"))
+            .field("gpu_uuids", &self.gpu_uuids)
+            .field("qos_level", &self.qos_level)
+            .field("pod_name", &self.pod_name)
+            .field("namespace", &self.namespace)
+            .finish()
     }
 }

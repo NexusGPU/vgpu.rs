@@ -21,6 +21,19 @@ use crate::TrapAction;
 use crate::TrapError;
 use crate::TrapFrame;
 use crate::TrapHandler;
+use crate::Waker;
+
+/// IPC implementation of Waker trait
+struct IpcWaker {
+    sender: Arc<Mutex<IpcSender<(u64, TrapAction)>>>,
+}
+
+impl Waker for IpcWaker {
+    fn send(&self, trap_id: u64, action: TrapAction) -> Result<(), TrapError> {
+        let sender = self.sender.lock().expect("poisoned");
+        sender.send((trap_id, action)).map_err(TrapError::Ipc)
+    }
+}
 
 /// Represents a pending trap request waiting for a response
 #[derive(Debug)]
@@ -294,11 +307,14 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
                             if let Some(client) = clients.get(&id) {
                                 // Handle the trap using the provided handler
                                 // The handler will now need to include the trap_id when sending the response
+                                let waker = IpcWaker {
+                                    sender: Arc::new(Mutex::new(client.sender.clone())),
+                                };
                                 self.handler.handle_trap(
                                     client.pid,
                                     trap_id,
                                     &frame,
-                                    client.sender.clone(),
+                                    Box::new(waker),
                                 );
                             }
                         }

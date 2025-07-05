@@ -8,6 +8,7 @@ members = [
   "crates/macro",
   "crates/utils",
   "crates/trap",
+  "crates/http-bidir-comm",
 ]
 exclude = [
   "crates/integration-test",
@@ -18,6 +19,7 @@ api-types = { path = "crates/api-types" }
 trap = { path = "crates/trap" }
 utils = { path = "crates/utils" }
 tf-macro = { path = "crates/macro" }
+http-bidir-comm = { path = "crates/http-bidir-comm" }
 tracing = "0.1"
 thiserror = "2.0"
 derive_more = "1.0"
@@ -42,12 +44,11 @@ tokio = "1.0"
 error-stack = "0.4"
 futures = "0.3"
 # Other dependencies
-notify = "8.0.0"
 priority-queue = "2.5.0"
 serde_yaml = "0.9"
 influxdb-line-protocol = "2.0.0"
 # Web framework dependencies
-poem = "3.1"
+poem = { version = "3.1", features = ["sse", "test"] }
 frida-gum = { git = "https://github.com/frida/frida-rust", rev = "e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f" }
 libc = "0.2.174"
 tempfile = "3.20.0"
@@ -60,3 +61,16 @@ syn = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 flate2 = "1.0"
 tar = "0.4"
+# HTTP trap dependencies
+axum = "0.7"
+uuid = "1.8"
+chrono = "0.4"
+# Test dependencies
+similar-asserts = "1.5"
+test-log = "0.2"
+async-stream = "0.3"
+tokio-stream = "0.1"
+reqwest-eventsource = "0.6"
+futures-util = "0.3"
+eventsource = "0.5"
+url = "2.5"

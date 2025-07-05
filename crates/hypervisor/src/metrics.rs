@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::RwLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -59,19 +58,21 @@ struct AccumulatedWorkerMetrics {
 }
 
 /// Run metrics collection asynchronously
-pub(crate) async fn run_metrics_async(
+pub(crate) async fn run_metrics(
     gpu_observer: Arc<GpuObserver>,
-    worker_pid_mapping: Arc<RwLock<HashMap<u32, (String, String)>>>,
     metrics_batch_size: usize,
-    gpu_node: String,
-    gpu_pool: String,
+    node_name: Option<String>,
+    gpu_pool: Option<String>,
 ) {
+    let node_name = node_name.unwrap_or("unknown".to_string());
+    let gpu_pool = gpu_pool.unwrap_or("unknown".to_string());
+
     let mut gpu_acc: HashMap<String, AccumulatedGpuMetrics> = HashMap::new();
     let mut worker_acc: HashMap<String, HashMap<u32, AccumulatedWorkerMetrics>> = HashMap::new();
     let mut counter = 0;
 
     let mut receiver = gpu_observer.subscribe();
-    while let Some(_) = receiver.recv().await {
+    while receiver.recv().await.is_some() {
         counter += 1;
         let metrics = gpu_observer.metrics.read().expect("poisoned");
         // Accumulate GPU metrics
@@ -121,7 +122,7 @@ pub(crate) async fn run_metrics_async(
                 if acc.count > 0 {
                     let lp = LineProtocolBuilder::new()
                         .measurement("tf_gpu_usage")
-                        .tag("node_name", gpu_node.as_str())
+                        .tag("node_name", node_name.as_str())
                         .tag("pool", gpu_pool.as_str())
                         .tag("uuid", gpu_uuid.as_str())
                         .field("rx", acc.rx / acc.count as f64)
@@ -146,22 +147,15 @@ pub(crate) async fn run_metrics_async(
             }
 
             // Output averaged worker metrics
-            let worker_pid_mapping = worker_pid_mapping.read().expect("poisoning");
             for (gpu_uuid, pid_metrics) in &worker_acc {
                 for (pid, acc) in pid_metrics {
                     if acc.count > 0 {
-                        let (worker_name, workload) = worker_pid_mapping
-                            .get(pid)
-                            .cloned()
-                            .unwrap_or((String::from("unknown"), String::from("unknown")));
-
                         let lp = LineProtocolBuilder::new()
                             .measurement("tf_worker_usage")
-                            .tag("node_name", gpu_node.as_str())
+                            .tag("node_name", node_name.as_str())
                             .tag("pool", gpu_pool.as_str())
                             .tag("uuid", gpu_uuid.as_str())
-                            .tag("worker", worker_name.as_str())
-                            .tag("workload", workload.as_str())
+                            .tag("pid", &pid.to_string())
                             .field("memory_bytes", acc.memory_bytes / acc.count as u64)
                             .field(
                                 "compute_percentage",

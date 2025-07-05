@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::ops::Deref;
 use std::ops::DerefMut;
 
+use api_types::QosLevel;
 use influxdb_line_protocol::LineProtocolBuilder;
 use priority_queue::PriorityQueue;
 
@@ -13,7 +14,7 @@ use crate::process::GpuProcess;
 
 struct Trap {
     pub frame: trap::TrapFrame,
-    pub waker: trap::Waker,
+    pub waker: Box<dyn trap::Waker>,
     pub round: u32,
 }
 struct WithTraps<Proc> {
@@ -52,10 +53,10 @@ trait Weight {
 impl<T: GpuProcess> Weight for WithTraps<T> {
     fn weight(&self) -> u32 {
         let qos = match self.process.qos_level() {
-            crate::process::QosLevel::Low => 1,
-            crate::process::QosLevel::Medium => 2,
-            crate::process::QosLevel::High => 3,
-            crate::process::QosLevel::Critical => 4,
+            QosLevel::Low => 1,
+            QosLevel::Medium => 2,
+            QosLevel::High => 3,
+            QosLevel::Critical => 4,
         };
 
         self.traps
@@ -67,7 +68,7 @@ impl<T: GpuProcess> Weight for WithTraps<T> {
 
 impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
     fn add_process(&mut self, process: Proc) {
-        let pid = process.id();
+        let pid = process.pid();
         let qos = process.qos_level();
         let process = WithTraps {
             process,
@@ -127,7 +128,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
         process_id: u32,
         _trap_id: u64,
         frame: &trap::TrapFrame,
-        waker: trap::Waker,
+        waker: Box<dyn trap::Waker>,
     ) {
         if let Some(process) = self.processes.get_mut(&process_id) {
             process.traps.push(Trap {
@@ -370,7 +371,8 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
         for pid in candidates {
             if let Some(process) = self.processes.get(&pid) {
                 let current_resources = process.current_resources();
-                released_memory += current_resources.memory_bytes;
+                let proc_mem: u64 = current_resources.values().map(|res| res.memory_bytes).sum();
+                released_memory += proc_mem;
                 let lp = LineProtocolBuilder::new()
                     .measurement("tf_scheduler_decision")
                     .tag("decision_type", "release")
@@ -476,15 +478,25 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
 
 #[cfg(test)]
 mod tests {
-    use ipc_channel::ipc;
-
     use super::*;
     use crate::process::tests::MockGpuProcess;
     use crate::scheduler::SchedulingDecision;
 
-    fn create_test_waker() -> trap::Waker {
-        let (sender, _receiver) = ipc::channel().unwrap();
-        sender
+    // A dummy waker for unit tests that simply ignores wake calls.
+    fn create_test_waker() -> Box<dyn trap::Waker> {
+        struct NoopWaker;
+
+        impl trap::Waker for NoopWaker {
+            fn send(
+                &self,
+                _trap_id: u64,
+                _action: trap::TrapAction,
+            ) -> Result<(), trap::TrapError> {
+                Ok(())
+            }
+        }
+
+        Box::new(NoopWaker)
     }
 
     #[test]
@@ -512,9 +524,8 @@ mod tests {
         let mut scheduler: WeightedScheduler<MockGpuProcess> = WeightedScheduler::new();
 
         // Create processes with different QoS levels
-        let process_low = MockGpuProcess::new_with_qos(1, 1024, 50, crate::process::QosLevel::Low);
-        let process_high =
-            MockGpuProcess::new_with_qos(2, 1024, 50, crate::process::QosLevel::High);
+        let process_low = MockGpuProcess::new_with_qos(1, 1024, 50, QosLevel::Low);
+        let process_high = MockGpuProcess::new_with_qos(2, 1024, 50, QosLevel::High);
 
         scheduler.add_process(process_low);
         scheduler.add_process(process_high);
@@ -630,8 +641,8 @@ mod tests {
 
         // Create two processes with different priorities
         // Process 1 has higher QoS than Process 2, so Process 2 should be released when Process 1 needs memory
-        let process1 = MockGpuProcess::new_with_qos(1, 1024, 50, crate::process::QosLevel::High);
-        let process2 = MockGpuProcess::new_with_qos(2, 1024, 50, crate::process::QosLevel::Low);
+        let process1 = MockGpuProcess::new_with_qos(1, 1024, 50, QosLevel::High);
+        let process2 = MockGpuProcess::new_with_qos(2, 1024, 50, QosLevel::Low);
 
         scheduler.add_process(process1);
         scheduler.add_process(process2);
@@ -701,9 +712,9 @@ mod tests {
         let mut scheduler: WeightedScheduler<MockGpuProcess> = WeightedScheduler::new();
 
         // Create three processes with different priorities
-        let process1 = MockGpuProcess::new_with_qos(1, 1024, 50, crate::process::QosLevel::Low);
-        let process2 = MockGpuProcess::new_with_qos(2, 1024, 50, crate::process::QosLevel::Medium);
-        let process3 = MockGpuProcess::new_with_qos(3, 1024, 50, crate::process::QosLevel::High);
+        let process1 = MockGpuProcess::new_with_qos(1, 1024, 50, QosLevel::Low);
+        let process2 = MockGpuProcess::new_with_qos(2, 1024, 50, QosLevel::Medium);
+        let process3 = MockGpuProcess::new_with_qos(3, 1024, 50, QosLevel::High);
 
         scheduler.add_process(process1);
         scheduler.add_process(process2);
