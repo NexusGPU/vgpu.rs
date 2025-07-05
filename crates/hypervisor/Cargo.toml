@@ -8,12 +8,11 @@ api-types = { workspace = true }
 nvml-wrapper = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-notify = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tracing-appender = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 priority-queue = { workspace = true }
-trap = { workspace = true }
+trap = { workspace = true, features = ["http"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -29,6 +28,8 @@ tokio = { workspace = true, features = ["full"] }
 error-stack = { workspace = true }
 futures = { workspace = true }
 poem = { workspace = true }
+http-bidir-comm = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
 
 [[bin]]
 name = "hypervisor"
@@ -36,3 +37,5 @@ path = "src/main.rs"
 
 [dev-dependencies]
 ipc-channel = { workspace = true }
+similar-asserts = { workspace = true }
+test-log = { workspace = true }

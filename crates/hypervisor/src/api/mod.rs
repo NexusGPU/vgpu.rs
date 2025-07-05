@@ -42,12 +42,8 @@ pub mod auth;
 pub mod errors;
 pub mod handlers;
 pub mod server;
-pub mod storage;
 pub mod types;
 
 // Re-export main types and functions for easy access
 pub use server::ApiServer;
-pub use storage::remove_pod_from_storage;
-pub use storage::update_pod_storage;
-pub use storage::PodStorage;
 pub use types::JwtAuthConfig;

@@ -11,3 +11,11 @@
 #include <stdlib.h>
 
 void set_limit(uint32_t gpu, uint32_t up_limit, uint64_t mem_limit);
+
+extern int tf_health_check(void);
+
+extern int tf_suspend(void);
+
+extern int tf_resume(void);
+
+extern int tf_vram_reclaim(void);

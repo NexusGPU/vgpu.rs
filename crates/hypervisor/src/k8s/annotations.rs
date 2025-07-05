@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
+use api_types::QosLevel;
 use error_stack::Report;
 use error_stack::ResultExt;
 
+use crate::api::types::WorkerInfo;
 use crate::k8s::types::KubernetesError;
 
 /// Domain prefix for tensor-fusion annotations.
@@ -10,18 +12,7 @@ const TENSOR_FUSION_DOMAIN: &str = "tensor-fusion.ai";
 
 /// Tensor-fusion specific annotations extracted from Kubernetes pods.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct TensorFusionAnnotations {
-    /// Requested TFLOPS for the workload
-    pub tflops_request: Option<f64>,
-    /// Requested VRAM in bytes for the workload
-    pub vram_request: Option<u64>,
-    /// Maximum TFLOPS limit for the workload
-    pub tflops_limit: Option<f64>,
-    /// Maximum VRAM limit in bytes for the workload
-    pub vram_limit: Option<u64>,
-    /// GPU UUIDs
-    pub gpu_uuids: Option<Vec<String>>,
-}
+pub(crate) struct TensorFusionAnnotations(pub WorkerInfo);
 
 impl TensorFusionAnnotations {
     /// Parse tensor-fusion annotations from a Kubernetes pod's annotations.
@@ -35,11 +26,11 @@ impl TensorFusionAnnotations {
     pub(crate) fn from_pod_annotations(
         annotations: &BTreeMap<String, String>,
     ) -> Result<Self, Report<KubernetesError>> {
-        let mut result = Self::default();
+        let mut worker_info = WorkerInfo::default();
 
         // Parse TFLOPS request
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/tflops-request")) {
-            result.tflops_request = Some(value.parse::<f64>().change_context(
+            worker_info.tflops_request = Some(value.parse::<f64>().change_context(
                 KubernetesError::AnnotationParseError {
                     message: format!("Invalid tflops-request value: {value}"),
                 },
@@ -48,12 +39,12 @@ impl TensorFusionAnnotations {
 
         // Parse VRAM request
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/vram-request")) {
-            result.vram_request = Some(parse_memory_value(value)?);
+            worker_info.vram_request = Some(parse_memory_value(value)?);
         }
 
         // Parse TFLOPS limit
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/tflops-limit")) {
-            result.tflops_limit = Some(value.parse::<f64>().change_context(
+            worker_info.tflops_limit = Some(value.parse::<f64>().change_context(
                 KubernetesError::AnnotationParseError {
                     message: format!("Invalid tflops-limit value: {value}"),
                 },
@@ -62,24 +53,45 @@ impl TensorFusionAnnotations {
 
         // Parse VRAM limit
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/vram-limit")) {
-            result.vram_limit = Some(parse_memory_value(value)?);
+            worker_info.vram_limit = Some(parse_memory_value(value)?);
         }
 
         // Parse GPU UUIDs
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/gpu-ids")) {
-            result.gpu_uuids = Some(value.split(',').map(|s| s.to_string()).collect());
+            worker_info.gpu_uuids = Some(value.split(',').map(|s| s.to_string()).collect());
         }
 
-        Ok(result)
+        // Parse QoS level
+        if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/qos")) {
+            // Extract worker configuration from annotations
+            let qos_level = match value.as_str() {
+                "High" | "high" => QosLevel::High,
+                "Low" | "low" => QosLevel::Low,
+                "Medium" | "medium" => QosLevel::Medium,
+                "Critical" | "critical" => QosLevel::Critical,
+                _ => QosLevel::Medium,
+            };
+
+            worker_info.qos_level = Some(qos_level);
+        }
+
+        // Parse container names
+        if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/inject-container")) {
+            worker_info.containers = Some(value.split(',').map(|s| s.to_string()).collect());
+        }
+
+        Ok(Self(worker_info))
     }
 
     /// Check if any tensor-fusion annotations are present.
     pub(crate) const fn has_annotations(&self) -> bool {
-        self.tflops_request.is_some()
-            || self.vram_request.is_some()
-            || self.tflops_limit.is_some()
-            || self.vram_limit.is_some()
-            || self.gpu_uuids.is_some()
+        self.0.tflops_request.is_some()
+            || self.0.vram_request.is_some()
+            || self.0.tflops_limit.is_some()
+            || self.0.vram_limit.is_some()
+            || self.0.gpu_uuids.is_some()
+            || self.0.qos_level.is_some()
+            || self.0.containers.is_some()
     }
 }
 
@@ -188,10 +200,10 @@ mod tests {
         let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
 
         assert!(result.has_annotations());
-        assert_eq!(result.tflops_request, Some(10.5));
-        assert_eq!(result.vram_request, Some(2 * 1024 * 1024 * 1024));
-        assert_eq!(result.tflops_limit, Some(20.0));
-        assert_eq!(result.vram_limit, Some(4 * 1024 * 1024 * 1024));
+        assert_eq!(result.0.tflops_request, Some(10.5));
+        assert_eq!(result.0.vram_request, Some(2 * 1024 * 1024 * 1024));
+        assert_eq!(result.0.tflops_limit, Some(20.0));
+        assert_eq!(result.0.vram_limit, Some(4 * 1024 * 1024 * 1024));
     }
 
     #[test]
@@ -206,8 +218,8 @@ mod tests {
         let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
 
         assert!(result.has_annotations());
-        assert_eq!(result.tflops_request, Some(5.0));
-        assert_eq!(result.vram_request, None);
+        assert_eq!(result.0.tflops_request, Some(5.0));
+        assert_eq!(result.0.vram_request, None);
     }
 
     #[test]
@@ -222,7 +234,7 @@ mod tests {
 
         assert!(result.has_annotations());
         assert_eq!(
-            result.gpu_uuids,
+            result.0.gpu_uuids,
             Some(vec!["GPU-12345678-1234-1234-1234-123456789abc".to_string()])
         );
     }
@@ -240,7 +252,7 @@ mod tests {
 
         assert!(result.has_annotations());
         assert_eq!(
-            result.gpu_uuids,
+            result.0.gpu_uuids,
             Some(vec![
                 "GPU-12345678-1234-1234-1234-123456789abc".to_string(),
                 "GPU-87654321-4321-4321-4321-cba987654321".to_string()
@@ -256,7 +268,7 @@ mod tests {
         let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
 
         assert!(result.has_annotations());
-        assert_eq!(result.gpu_uuids, Some(vec!["".to_string()]));
+        assert_eq!(result.0.gpu_uuids, Some(vec!["".to_string()]));
     }
 
     #[test]
@@ -284,12 +296,12 @@ mod tests {
         let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
 
         assert!(result.has_annotations());
-        assert_eq!(result.tflops_request, Some(10.5));
-        assert_eq!(result.vram_request, Some(2 * 1024 * 1024 * 1024));
-        assert_eq!(result.tflops_limit, Some(20.0));
-        assert_eq!(result.vram_limit, Some(4 * 1024 * 1024 * 1024));
+        assert_eq!(result.0.tflops_request, Some(10.5));
+        assert_eq!(result.0.vram_request, Some(2 * 1024 * 1024 * 1024));
+        assert_eq!(result.0.tflops_limit, Some(20.0));
+        assert_eq!(result.0.vram_limit, Some(4 * 1024 * 1024 * 1024));
         assert_eq!(
-            result.gpu_uuids,
+            result.0.gpu_uuids,
             Some(vec![
                 "GPU-11111111-1111-1111-1111-111111111111".to_string(),
                 "GPU-22222222-2222-2222-2222-222222222222".to_string()

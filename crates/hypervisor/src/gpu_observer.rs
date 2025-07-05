@@ -4,7 +4,6 @@ use std::sync::RwLock;
 use std::time::Duration;
 
 use anyhow::Result;
-use futures::future;
 use nvml_wrapper::enum_wrappers::device::PcieUtilCounter;
 use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
 use nvml_wrapper::enums::device::UsedGpuMemory;
@@ -36,6 +35,7 @@ pub(crate) struct Metrics {
     pub gpu_metrics: HashMap<GpuUuid, GpuMetrics>,
 }
 
+#[derive(Debug)]
 pub(crate) struct GpuObserver {
     nvml: Arc<Nvml>,
     pub metrics: RwLock<Metrics>,
@@ -56,36 +56,36 @@ impl GpuObserver {
     }
 
     /// Run the GPU observer loop asynchronously
-    pub(crate) async fn run_async(&self, update_interval: Duration) {
+    pub(crate) async fn run(&self, update_interval: Duration) {
         loop {
-            // handle metrics update in a new scope to avoid lock contention
-            {
-                let last_metrics = self.metrics.read().expect("poisoned");
-                match self.query_metrics(&last_metrics) {
-                    Ok(metrics) => {
-                        drop(last_metrics);
-                        *self.metrics.write().expect("poisoned") = metrics;
+            // Query new metrics without holding the lock across .await
+            let metrics_result = {
+                let last_metrics_guard = self.metrics.read().expect("poisoned");
+                self.query_metrics(&last_metrics_guard)
+            };
 
-                        // handle senders in a new scope to avoid lock contention
-                        {
-                            let senders = self.senders.read().expect("poisoned");
-                            // Send notifications to all subscribers concurrently
-                            let send_futures = senders.iter().map(|sender| async move {
-                                if let Err(e) = sender.send(()).await {
-                                    tracing::error!("Failed to send update signal: {}", e);
-                                }
-                            });
-                            
-                            // Wait for all send operations to complete
-                            future::join_all(send_futures).await;
-                        } // senders lock is released here
-                    }
-                    Err(e) => {
-                        drop(last_metrics); // ensure lock is released in case of error
-                        tracing::warn!("Failed to update GPU metrics: {}", e);
+            match metrics_result {
+                Ok(metrics) => {
+                    // Update the metrics – obtain write lock briefly
+                    *self.metrics.write().expect("poisoned") = metrics;
+
+                    // Clone sender list while holding read lock, then drop guard before await
+                    let sender_list = {
+                        let senders_guard = self.senders.read().expect("poisoned");
+                        senders_guard.clone()
+                    };
+
+                    // Notify subscribers concurrently (sender::send is async)
+                    for sender in sender_list {
+                        if let Err(e) = sender.send(()).await {
+                            tracing::error!("Failed to send update signal: {}", e);
+                        }
                     }
                 }
-            } // ensure all locks are released here
+                Err(e) => {
+                    tracing::warn!("Failed to update GPU metrics: {}", e);
+                }
+            }
 
             tokio::time::sleep(update_interval).await;
         }
@@ -202,7 +202,7 @@ impl GpuObserver {
     }
 
     pub(crate) fn subscribe(&self) -> mpsc::Receiver<()> {
-        let (sender, receiver) = mpsc::channel(32); // 缓冲区大小为 32
+        let (sender, receiver) = mpsc::channel(32);
         self.senders.write().expect("poisoned").push(sender);
         receiver
     }

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use anyhow::Result;
 
 use crate::process::GpuProcess;
@@ -5,7 +7,6 @@ use crate::process::GpuProcess;
 pub(crate) mod weighted;
 
 /// Scheduling decisions
-#[derive(Debug)]
 pub(crate) enum SchedulingDecision {
     /// Pause specified process
     #[allow(dead_code)]
@@ -15,7 +16,23 @@ pub(crate) enum SchedulingDecision {
     /// Resume specified process
     Resume(u32),
     /// Wake up a process
-    Wake(trap::Waker, u64, trap::TrapAction),
+    Wake(Box<dyn trap::Waker>, u64, trap::TrapAction),
+}
+
+impl fmt::Debug for SchedulingDecision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pause(pid) => f.debug_tuple("Pause").field(pid).finish(),
+            Self::Release(pid) => f.debug_tuple("Release").field(pid).finish(),
+            Self::Resume(pid) => f.debug_tuple("Resume").field(pid).finish(),
+            Self::Wake(_, trap_id, action) => f
+                .debug_tuple("Wake")
+                .field(&"<waker>")
+                .field(trap_id)
+                .field(action)
+                .finish(),
+        }
+    }
 }
 
 /// Trait for GPU scheduler
@@ -41,6 +58,6 @@ pub(crate) trait GpuScheduler<Proc: GpuProcess> {
         process_id: u32,
         trap_id: u64,
         frame: &trap::TrapFrame,
-        waker: trap::Waker,
+        waker: Box<dyn trap::Waker>,
     );
 }
