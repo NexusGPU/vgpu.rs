@@ -23,15 +23,14 @@
 //! type MyResult = String;
 //!
 //! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
+//! async fn main(){
 //!     let server = Arc::new(HttpServer::<MyTask, MyResult>::new());
 //!     let routes = create_routes(server.clone(), "/api");
 //!
 //!     // add the generated routes into your existing router tree
 //!     let app = Route::new().nest("/api", routes);
 //!     let listener = poem::listener::TcpListener::bind("0.0.0.0:8080");
-//!     Server::new(listener).run(app).await?;
-//!     Ok(())
+//!     Server::new(listener).run(app).await.unwrap();
 //! }
 //! ```
 
@@ -48,7 +47,7 @@ use poem::web::sse::SSE;
 use poem::web::FromRequest;
 use poem::web::Path;
 use poem::IntoResponse;
-use poem::Route;
+pub use poem::Route;
 
 use crate::server::HttpServer;
 use crate::types::TaskResult;

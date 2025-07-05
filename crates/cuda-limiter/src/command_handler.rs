@@ -6,7 +6,6 @@
 use std::env;
 use std::os::raw::c_int;
 use std::sync::Arc;
-use std::time::Duration;
 
 use api_types::LimiterCommand;
 use api_types::LimiterCommandResponse;
@@ -119,59 +118,26 @@ impl TaskProcessor<LimiterCommand, LimiterCommandResponse> for CommandProcessor 
 /// command handler configuration.
 #[derive(Debug, Clone)]
 pub struct CommandHandlerConfig {
-    /// Hypervisor server URL
-    pub server_url: String,
     /// Unique limiter ID
     pub limiter_id: String,
-    /// Polling interval for checking new commands
-    pub poll_interval: Duration,
-    /// HTTP request timeout
-    pub request_timeout: Duration,
-    /// Retry configuration
-    pub max_retries: u32,
-    pub retry_delay: Duration,
-    pub max_retry_delay: Duration,
+    client_config: ClientConfig,
 }
 
 impl CommandHandlerConfig {
     /// Create a new configuration with sensible defaults.
-    pub fn new(server_url: impl Into<String>) -> Self {
+    pub fn new(client_config: ClientConfig) -> Self {
         let limiter_id =
             env::var("LIMITER_ID").unwrap_or_else(|_| format!("limiter_{}", std::process::id()));
 
         Self {
-            server_url: server_url.into(),
+            client_config,
             limiter_id,
-            poll_interval: Duration::from_secs(1),
-            request_timeout: Duration::from_secs(30),
-            max_retries: 3,
-            retry_delay: Duration::from_millis(500),
-            max_retry_delay: Duration::from_secs(30),
         }
     }
 
     /// Set the limiter ID.
     pub fn with_limiter_id(mut self, limiter_id: impl Into<String>) -> Self {
         self.limiter_id = limiter_id.into();
-        self
-    }
-
-    /// Set the polling interval.
-    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
-        self.poll_interval = interval;
-        self
-    }
-
-    /// Set retry configuration.
-    pub fn with_retry_config(
-        mut self,
-        max_retries: u32,
-        base_delay: Duration,
-        max_delay: Duration,
-    ) -> Self {
-        self.max_retries = max_retries;
-        self.retry_delay = base_delay;
-        self.max_retry_delay = max_delay;
         self
     }
 }
@@ -194,22 +160,12 @@ impl CommandHandler {
     /// Returns an error if the HTTP client cannot be created
     pub fn new(config: CommandHandlerConfig) -> Result<Self, Report<http_bidir_comm::CommError>> {
         info!(
-            server_url = %config.server_url,
+            server_url = %config.client_config.server_url,
             limiter_id = %config.limiter_id,
             "Creating command handler"
         );
 
-        let client_config = ClientConfig::new(config.server_url)
-            .with_client_id(config.limiter_id)
-            .with_poll_interval(config.poll_interval)
-            .with_request_timeout(config.request_timeout)
-            .with_retry_config(
-                config.max_retries,
-                config.retry_delay,
-                config.max_retry_delay,
-            );
-
-        let client = BlockingHttpClient::new(client_config)?;
+        let client = BlockingHttpClient::new(config.client_config)?;
         let processor = Arc::new(CommandProcessor);
 
         Ok(Self { client, processor })
@@ -242,28 +198,8 @@ impl CommandHandler {
 /// * `ip` - Hypervisor IP address
 /// * `port` - Hypervisor port
 pub fn start_background_handler(ip: &str, port: &str) {
-    let config = CommandHandlerConfig::new(format!("http://{ip}:{port}"));
+    let config = CommandHandlerConfig::new(ClientConfig::new(format!("http://{ip}:{port}")));
 
-    std::thread::spawn(move || match CommandHandler::new(config) {
-        Ok(handler) => {
-            if let Err(e) = handler.start() {
-                error!(error = %e, "command handler failed");
-            }
-        }
-        Err(e) => {
-            error!(error = %e, "Failed to create command handler");
-        }
-    });
-}
-
-/// Start the background command handler with custom configuration.
-///
-/// This provides more control over the command handler behavior.
-///
-/// # Arguments
-///
-/// * `config` - Command handler configuration
-pub fn start_background_handler_with_config(config: CommandHandlerConfig) {
     std::thread::spawn(move || match CommandHandler::new(config) {
         Ok(handler) => {
             if let Err(e) = handler.start() {
@@ -280,31 +216,6 @@ pub fn start_background_handler_with_config(config: CommandHandlerConfig) {
 mod tests {
 
     use super::*;
-
-    #[test]
-    fn create_config() {
-        let config = CommandHandlerConfig::new("http://localhost:8080")
-            .with_limiter_id("test_limiter")
-            .with_poll_interval(Duration::from_millis(500))
-            .with_retry_config(5, Duration::from_millis(100), Duration::from_secs(10));
-
-        assert_eq!(config.server_url, "http://localhost:8080");
-        assert_eq!(config.limiter_id, "test_limiter");
-        assert_eq!(config.poll_interval, Duration::from_millis(500));
-        assert_eq!(config.max_retries, 5);
-    }
-
-    #[test]
-    fn create_handler() {
-        let config = CommandHandlerConfig::new("http://localhost:8080");
-
-        // Note: This will fail if the server is not running, but we're just testing
-        // that the handler can be created
-        let result = CommandHandler::new(config);
-
-        // The creation should succeed even if the server is not reachable
-        assert!(result.is_ok());
-    }
 
     #[test]
     fn process_command() {

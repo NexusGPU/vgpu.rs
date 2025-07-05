@@ -3,14 +3,14 @@
 //! This module demonstrates how to replace the existing limiter_comm implementation
 //! with the new generic HTTP bidirectional communication library.
 
+use std::sync::Arc;
+
 use error_stack::Report;
+use http_bidir_comm::poem;
 use http_bidir_comm::HttpServer;
 use http_bidir_comm::ServerConfig;
-use http_bidir_comm::TaskProcessor;
-use poem::Route;
 use serde::Deserialize;
 use serde::Serialize;
-use tracing::error;
 use tracing::info;
 use tracing::instrument;
 
@@ -20,7 +20,7 @@ use crate::api::types::LimiterCommandType;
 
 /// Command dispatcher using the new HTTP bidirectional communication library.
 pub struct CommandDispatcher {
-    server: HttpServer<LimiterCommand, LimiterCommandResponse>,
+    server: Arc<HttpServer<LimiterCommand, LimiterCommandResponse>>,
 }
 
 impl CommandDispatcher {
@@ -32,7 +32,7 @@ impl CommandDispatcher {
             enable_persistence: false,
         };
 
-        let server = HttpServer::with_config(config);
+        let server = Arc::new(HttpServer::with_config(config));
 
         info!("command dispatcher created");
 
@@ -80,50 +80,19 @@ impl CommandDispatcher {
     }
 
     /// Create Poem routes for the limiter communication API.
-    pub fn create_routes(&self) -> Route {
-        // TODO: expose HTTP routes once `http_bidir_comm::HttpServer::create_routes` is stabilized
-        // Currently return an empty `Route` placeholder to keep the build green.
-        Route::new()
+    pub fn create_routes(&self) -> poem::Route {
+        self.create_routes_with_path("")
     }
 
     /// Create routes with a custom base path.
-    pub fn create_routes_with_path(&self, base_path: &str) -> Route {
-        let _ = base_path; // suppress unused parameter warning
-        Route::new()
+    pub fn create_routes_with_path(&self, base_path: &str) -> poem::Route {
+        poem::create_routes(self.server.clone(), base_path)
     }
 }
 
 impl Default for CommandDispatcher {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Task processor for limiter commands (not used in this pattern but required by the library).
-///
-/// In the limiter communication pattern, the actual command execution happens on the client side,
-/// so this processor is a no-op. However, it's required by the generic library interface.
-pub struct LimiterCommandProcessor;
-
-impl TaskProcessor<LimiterCommand, LimiterCommandResponse> for LimiterCommandProcessor {
-    fn process_task(
-        &self,
-        task: &LimiterCommand,
-    ) -> Result<LimiterCommandResponse, Box<dyn std::error::Error + Send + Sync>> {
-        // In the limiter pattern, commands are processed by the client (limiter),
-        // not by the server. This processor would only be used if we wanted
-        // server-side command processing, which is not the case here.
-
-        error!(
-            "Unexpected server-side command processing for command {}",
-            task.id
-        );
-
-        Ok(LimiterCommandResponse {
-            id: task.id,
-            success: false,
-            message: Some("Commands should be processed by the limiter client".to_string()),
-        })
     }
 }
 
@@ -139,7 +108,7 @@ fn generate_command_id() -> u64 {
 ///
 /// This function creates both the command dispatcher and the necessary routes,
 /// making it easy to integrate into existing applications.
-pub fn create_limiter_communication_setup() -> (CommandDispatcher, Route)
+pub fn create_limiter_communication_setup() -> (CommandDispatcher, poem::Route)
 where
     LimiterCommand: for<'de> Deserialize<'de> + Serialize + Send + Sync + 'static,
     LimiterCommandResponse: for<'de> Deserialize<'de> + Serialize + Send + Sync + 'static,
