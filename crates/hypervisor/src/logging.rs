@@ -59,7 +59,7 @@ pub(crate) fn init<P: AsRef<Path>>(
     let gpu_metrics_file = gpu_metrics_file
         .as_ref()
         .map(|p| p.as_ref())
-        .unwrap_or(Path::new("logs/metrics.log"));
+        .unwrap_or(Path::new("/logs/metrics.log"));
 
     let path = gpu_metrics_file.parent().expect("path");
     let file = gpu_metrics_file.file_name().expect("log file");
