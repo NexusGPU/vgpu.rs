@@ -39,7 +39,11 @@ use worker_manager::WorkerManager;
 #[derive(Parser)]
 #[command(about, long_about, version = &**version::VERSION)]
 struct Cli {
-    #[arg(long, value_hint = clap::ValueHint::FilePath, help = "Path for printing GPU and worker metrics, e.g. /logs/metrics.log")]
+    #[arg(long, 
+        env = "GPU_METRICS_FILE",
+        value_hint = clap::ValueHint::FilePath, 
+        default_value = "/logs/metrics.log",
+        help = "Path for printing GPU and worker metrics, e.g. /logs/metrics.log")]
     gpu_metrics_file: Option<PathBuf>,
 
     #[arg(
@@ -67,14 +71,14 @@ struct Cli {
 
     #[arg(
         long,
-        env = "NODE_NAME",
+        env = "GPU_NODE_NAME",
         help = "Node name for filtering pods to this node only"
     )]
     node_name: Option<String>,
 
     #[arg(
         long,
-        env = "GPU_POOL",
+        env = "TENSOR_FUSION_POOL_NAME",
         help = "gpu pool is only used in metrics output"
     )]
     gpu_pool: Option<String>,
