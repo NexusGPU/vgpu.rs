@@ -125,13 +125,10 @@ pub struct CommandHandlerConfig {
 
 impl CommandHandlerConfig {
     /// Create a new configuration with sensible defaults.
-    pub fn new(client_config: ClientConfig) -> Self {
-        let limiter_id =
-            env::var("LIMITER_ID").unwrap_or_else(|_| format!("limiter_{}", std::process::id()));
-
+    pub fn new(host_pid: u32, client_config: ClientConfig) -> Self {
         Self {
             client_config,
-            limiter_id,
+            limiter_id: format!("limiter_{host_pid}"),
         }
     }
 
@@ -197,8 +194,9 @@ impl CommandHandler {
 ///
 /// * `ip` - Hypervisor IP address
 /// * `port` - Hypervisor port
-pub fn start_background_handler(ip: &str, port: &str) {
-    let config = CommandHandlerConfig::new(ClientConfig::new(format!("http://{ip}:{port}")));
+pub fn start_background_handler(ip: &str, port: &str, host_pid: u32) {
+    let config =
+        CommandHandlerConfig::new(host_pid, ClientConfig::new(format!("http://{ip}:{port}")));
 
     std::thread::spawn(move || match CommandHandler::new(config) {
         Ok(handler) => {

@@ -37,24 +37,6 @@ impl Hooker<'_> {
             )
             .map_err(Into::into)
     }
-
-    pub fn hook_export_fast(
-        &mut self,
-        symbol: &str,
-        detour: *mut c_void,
-    ) -> Result<NativePointer, Error> {
-        let function = if let Some(module_name) = self.module {
-            Module::load(&GUM, module_name).find_export_by_name(symbol)
-        } else {
-            Module::find_global_export_by_name(symbol)
-        }
-        .ok_or_else(|| Error::NoSymbolName(symbol.to_string()))?;
-
-        // we use `replace_fast` since we don't use the original function.
-        self.interceptor
-            .replace_fast(function, NativePointer(detour))
-            .map_err(Into::into)
-    }
 }
 
 /// Struct for managing the hooks using Frida.
@@ -98,16 +80,6 @@ impl HookManager {
         detour: *mut c_void,
     ) -> Result<NativePointer, Error> {
         self.hooker(module)?.hook_export(symbol, detour)
-    }
-
-    #[allow(dead_code)]
-    pub fn hook_export_fast(
-        &mut self,
-        module: Option<&str>,
-        symbol: &str,
-        detour: *mut c_void,
-    ) -> Result<NativePointer, Error> {
-        self.hooker(module)?.hook_export_fast(symbol, detour)
     }
 }
 

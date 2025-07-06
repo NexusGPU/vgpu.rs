@@ -183,7 +183,7 @@ unsafe fn entry_point() {
         std::env::var("HYPERVISOR_IP"),
         std::env::var("HYPERVISOR_PORT"),
     ) {
-        command_handler::start_background_handler(&ip, &port);
+        command_handler::start_background_handler(&ip, &port, device_config_result.host_pid);
     } else {
         tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
     }
