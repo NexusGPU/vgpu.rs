@@ -1,18 +1,4 @@
 #[macro_export]
-macro_rules! replace {
-    ($hooker:expr, $func:expr, $detour:expr) => {{
-        match $hooker.hook_export_fast($func, $detour as *mut std::ffi::c_void) {
-            Ok(_) => {
-                tracing::trace!("hooked {:?}", $func);
-            }
-            Err(err) => {
-                tracing::debug!("hook {:?} failed with err {err:?}", $func);
-            }
-        }
-    }};
-}
-
-#[macro_export]
 macro_rules! replace_symbol {
     ($hook_manager:expr, $mod:expr, $func:expr, $detour_function:expr, $detour_type:ty, $hook_fn:expr) => {{
         let intercept = |hook_manager: &mut $crate::hooks::HookManager,
