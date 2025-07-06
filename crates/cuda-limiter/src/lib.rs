@@ -110,20 +110,24 @@ unsafe fn entry_point() {
     };
 
     // parse device limits
-    let device_configs = match config::get_device_configs(&nvml) {
-        Ok(configs) => configs,
+    let device_config_result = match config::get_device_configs(&nvml) {
+        Ok(result) => result,
         Err(e) => {
             tracing::error!("failed to get device configs: {}", e);
             return;
         }
     };
 
-    if device_configs.is_empty() {
+    if device_config_result.device_configs.is_empty() {
         tracing::info!("no device configs, skipping limiter");
         return;
     }
 
-    let limiter = match Limiter::new(pid, nvml, &device_configs) {
+    let limiter = match Limiter::new(
+        device_config_result.host_pid,
+        nvml,
+        &device_config_result.device_configs,
+    ) {
         Ok(limiter) => limiter,
         Err(err) => {
             tracing::error!("failed to init limiter, err: {err}");

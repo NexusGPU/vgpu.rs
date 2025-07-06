@@ -23,7 +23,7 @@
 //! type MyResult = String;
 //!
 //! #[tokio::main]
-//! async fn main(){
+//! async fn main() {
 //!     let server = Arc::new(HttpServer::<MyTask, MyResult>::new());
 //!     let routes = create_routes(server.clone(), "/api");
 //!

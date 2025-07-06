@@ -19,6 +19,9 @@
 //!
 //! ```
 //! # use http_bidir_comm::{ClientConfig, BlockingHttpClient, HttpServer, ServerConfig};
+//! # use http_bidir_comm::poem::create_routes;
+//! # use poem::{Route, Server};
+//! # use std::sync::Arc;
 //! # use serde::{Deserialize, Serialize};
 //! #
 //! # #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,16 +38,19 @@
 //! # }
 //! #
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! // Client usage
+//! // Client usage - BlockingHttpClient should be used in non-async context
 //! let config = ClientConfig::new("http://localhost:8080");
 //! let client = BlockingHttpClient::<MyTask, MyResult>::new(config)?;
 //!
-//! // Server usage
-//! let server = HttpServer::<MyTask, MyResult>::new();
-//! let routes = create_routes(server.clone(), "/api/v1/tasks");
-//! let app = Route::new().nest("/api/v1/tasks", routes);
-//! let listener = poem::listener::TcpListener::bind("0.0.0.0:8080");
-//! Server::new(listener).run(app).await.unwrap();
+//! // Server usage - can be used in async context
+//! let rt = tokio::runtime::Runtime::new()?;
+//! rt.block_on(async {
+//!     let server = Arc::new(HttpServer::<MyTask, MyResult>::new());
+//!     let routes = create_routes(server.clone(), "/api/v1/tasks");
+//!     let app = Route::new().nest("/api/v1/tasks", routes);
+//!     let listener = poem::listener::TcpListener::bind("0.0.0.0:8080");
+//!     // Server::new(listener).run(app).await.unwrap();
+//! });
 //! # Ok(())
 //! # }
 //! ```

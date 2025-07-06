@@ -164,14 +164,12 @@ async fn main() -> Result<()> {
                 }
                 tracing::info!("new worker added: {}", worker.name());
                 hypervisor.add_process(worker);
-                // HTTP trap handling doesn't require client connection waiting
             }
         },
         {
             let hypervisor = hypervisor.clone();
             move |pid| {
                 hypervisor.remove_process(pid);
-                // HTTP trap handling doesn't require client removal
             }
         },
     ));

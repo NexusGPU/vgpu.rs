@@ -44,6 +44,8 @@ pub struct WorkerInfo {
     pub qos_level: Option<QosLevel>,
     /// Container names
     pub containers: Option<Vec<String>>,
+    /// Host pid
+    pub host_pid: u32,
 }
 
 /// Response format for Worker query API
