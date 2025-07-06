@@ -13,6 +13,13 @@ use reqwest::blocking::Client;
 
 use crate::limiter::DeviceConfig;
 
+/// Configuration result containing device configs and host PID
+#[derive(Debug, Clone)]
+pub struct DeviceConfigResult {
+    pub device_configs: Vec<DeviceConfig>,
+    pub host_pid: u32,
+}
+
 /// Error types for configuration operations
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -33,7 +40,7 @@ pub enum ConfigError {
 /// which is automatically mounted in Kubernetes pods.
 ///
 /// Otherwise, it falls back to parsing local environment variables.
-pub fn get_device_configs(nvml: &Nvml) -> Result<Vec<DeviceConfig>, Report<ConfigError>> {
+pub fn get_device_configs(nvml: &Nvml) -> Result<DeviceConfigResult, Report<ConfigError>> {
     // Check if hypervisor configuration is available
     if let (Ok(hypervisor_ip), Ok(hypervisor_port)) =
         (env::var("HYPERVISOR_IP"), env::var("HYPERVISOR_PORT"))
@@ -44,10 +51,20 @@ pub fn get_device_configs(nvml: &Nvml) -> Result<Vec<DeviceConfig>, Report<Confi
             hypervisor_port
         );
 
-        fetch_device_configs_from_hypervisor(&hypervisor_ip, &hypervisor_port)
+        let container_name = env::var("CONTAINER_NAME").unwrap_or_else(|_| {
+            tracing::warn!("CONTAINER_NAME environment variable not set, using empty string");
+            String::new()
+        });
+
+        fetch_device_configs_from_hypervisor(&hypervisor_ip, &hypervisor_port, &container_name)
     } else {
         tracing::info!("No hypervisor configuration found, using local environment variables");
-        Ok(parse_limits_and_create_device_configs(nvml))
+        let device_configs = parse_limits_and_create_device_configs(nvml);
+        let host_pid = std::process::id();
+        Ok(DeviceConfigResult {
+            device_configs,
+            host_pid,
+        })
     }
 }
 
@@ -55,20 +72,28 @@ pub fn get_device_configs(nvml: &Nvml) -> Result<Vec<DeviceConfig>, Report<Confi
 fn fetch_device_configs_from_hypervisor(
     hypervisor_ip: &str,
     hypervisor_port: &str,
-) -> Result<Vec<DeviceConfig>, Report<ConfigError>> {
+    container_name: &str,
+) -> Result<DeviceConfigResult, Report<ConfigError>> {
     // Get Kubernetes service account token
     let token = get_k8s_service_account_token().change_context(ConfigError::OidcAuth)?;
 
+    // Get container PID (this process's PID)
+    let container_pid = std::process::id();
+
     // Create HTTP client
     let client = Client::new();
-    let url = format!("http://{hypervisor_ip}:{hypervisor_port}/api/v1/pods");
+    let url = format!("http://{hypervisor_ip}:{hypervisor_port}/api/v1/worker");
 
     tracing::debug!("Fetching pod information from: {}", url);
 
-    // Make HTTP request with Bearer token
+    // Make HTTP request with Bearer token and container_pid query parameter
     let response = client
         .get(&url)
         .bearer_auth(&token)
+        .query(&[
+            ("container_pid", container_pid.to_string()),
+            ("container_name", container_name.to_string()),
+        ])
         .send()
         .change_context(ConfigError::HttpRequest)?;
 
@@ -112,7 +137,10 @@ fn fetch_device_configs_from_hypervisor(
         device_configs.len()
     );
 
-    Ok(device_configs)
+    Ok(DeviceConfigResult {
+        device_configs,
+        host_pid: pod_info.host_pid,
+    })
 }
 
 /// Get Kubernetes service account token from the pod

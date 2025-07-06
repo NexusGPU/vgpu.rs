@@ -20,16 +20,59 @@ use crate::host_pid_probe::SubscriptionRequest;
 use crate::k8s::TensorFusionAnnotations;
 use crate::process::worker::TensorFusionWorker;
 
-/// Entry that combines Kubernetes annotation info and optional running worker instance
+/// Container-level information within a pod
+#[derive(Clone)]
+pub struct ContainerInfo {
+    pub container_name: String,
+    /// Mapping from container PID to host PID for this container
+    pub container_pid_to_host_pid: HashMap<u32, u32>,
+    /// Optional worker instance for this container
+    pub worker: Option<Arc<TensorFusionWorker>>,
+}
+
+impl ContainerInfo {
+    fn new(container_name: String) -> Self {
+        Self {
+            container_name,
+            container_pid_to_host_pid: HashMap::new(),
+            worker: None,
+        }
+    }
+}
+
+/// Entry that combines Kubernetes annotation info and container-level information
 #[derive(Clone)]
 pub struct WorkerEntry {
     pub info: WorkerInfo,
-    pub worker: Option<Arc<TensorFusionWorker>>,
+    /// Container information keyed by container name
+    pub containers: HashMap<String, ContainerInfo>,
 }
 
 impl WorkerEntry {
     fn new(info: WorkerInfo) -> Self {
-        Self { info, worker: None }
+        let mut containers = HashMap::new();
+
+        // Initialize containers from WorkerInfo
+        if let Some(container_names) = &info.containers {
+            for container_name in container_names {
+                containers.insert(
+                    container_name.clone(),
+                    ContainerInfo::new(container_name.clone()),
+                );
+            }
+        }
+
+        Self { info, containers }
+    }
+
+    /// Get container info by container name
+    pub fn get_container(&self, container_name: &str) -> Option<&ContainerInfo> {
+        self.containers.get(container_name)
+    }
+
+    /// Get mutable container info by container name
+    pub fn get_container_mut(&mut self, container_name: &str) -> Option<&mut ContainerInfo> {
+        self.containers.get_mut(container_name)
     }
 }
 
@@ -122,6 +165,7 @@ where
         for container_name in container_names {
             let subscription_request = SubscriptionRequest {
                 pod_name: pod_name.clone(),
+                namespace: namespace.clone(),
                 container_name: container_name.clone(),
             };
 
@@ -152,7 +196,9 @@ where
             self.associate_discovered_worker(
                 pod_name.clone(),
                 namespace.clone(),
+                container_name.clone(),
                 process_info.host_pid,
+                process_info.container_pid,
                 gpu_observer.clone(),
             )
             .await?;
@@ -166,7 +212,9 @@ where
         &self,
         pod_name: String,
         namespace: String,
+        container_name: String,
         host_pid: u32,
+        container_pid: u32,
         gpu_observer: Arc<GpuObserver>,
     ) -> Result<()> {
         let worker_key = format!("{namespace}/{pod_name}");
@@ -174,16 +222,11 @@ where
         let mut registry = self.registry.write().await;
         if let Some(entry) = registry.get_mut(&worker_key) {
             let WorkerInfo {
-                namespace,
-                pod_name,
-                node_name: _,
+                namespace: info_namespace,
+                pod_name: info_pod_name,
                 gpu_uuids,
                 qos_level,
-                tflops_request: _,
-                tflops_limit: _,
-                vram_request: _,
-                vram_limit: _,
-                containers: _,
+                ..
             } = &entry.info;
 
             let gpu_uuids_vec = gpu_uuids.clone().unwrap_or_default();
@@ -194,14 +237,27 @@ where
                 qos,
                 gpu_uuids_vec,
                 gpu_observer,
-                namespace.clone(),
-                pod_name.clone(),
+                info_namespace.clone(),
+                info_pod_name.clone(),
             ));
 
-            entry.worker = Some(worker.clone());
+            // Find or create container entry
+            let container_info = entry
+                .containers
+                .entry(container_name.clone())
+                .or_insert_with(|| ContainerInfo::new(container_name.clone()));
+
+            // Update container info
+            container_info.worker = Some(worker.clone());
+            container_info
+                .container_pid_to_host_pid
+                .insert(container_pid, host_pid);
+
             (self.add_callback)(host_pid, worker);
 
-            info!("Associated worker {worker_key} with PID {host_pid}");
+            info!(
+                "Associated worker {worker_key} container {container_name} with host PID {host_pid} and container PID {container_pid}"
+            );
         } else {
             warn!("Attempted to associate PID with non-existent worker: {worker_key}");
             return Err(anyhow::anyhow!("Worker not found in registry"));
@@ -250,10 +306,13 @@ where
             if let Some(entry) = registry.remove(&worker_key) {
                 info!("Removed worker from registry: {worker_key}");
 
-                // Call remove callback if worker has an associated PID
-                if let Some(worker) = &entry.worker {
-                    use crate::process::GpuProcess;
-                    (self.remove_callback)(worker.pid());
+                // Call remove callback for all containers with workers
+                for (container_name, container_info) in &entry.containers {
+                    if let Some(worker) = &container_info.worker {
+                        use crate::process::GpuProcess;
+                        info!("Removing worker for container: {container_name}");
+                        (self.remove_callback)(worker.pid());
+                    }
                 }
             } else {
                 warn!("Attempted to remove non-existent worker: {worker_key}");
@@ -261,5 +320,137 @@ where
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use api_types::QosLevel;
+
+    use super::*;
+
+    #[test]
+    fn worker_entry_new_with_containers() {
+        let worker_info = WorkerInfo {
+            pod_name: "test-pod".to_string(),
+            namespace: "test-namespace".to_string(),
+            node_name: Some("test-node".to_string()),
+            containers: Some(vec!["container1".to_string(), "container2".to_string()]),
+            tflops_request: Some(1.0),
+            vram_request: Some(1024),
+            tflops_limit: Some(2.0),
+            vram_limit: Some(2048),
+            gpu_uuids: Some(vec!["gpu1".to_string()]),
+            qos_level: Some(QosLevel::High),
+            host_pid: 0,
+        };
+
+        let entry = WorkerEntry::new(worker_info);
+
+        assert_eq!(entry.containers.len(), 2);
+        assert!(entry.containers.contains_key("container1"));
+        assert!(entry.containers.contains_key("container2"));
+    }
+
+    #[test]
+    fn worker_entry_new_without_containers() {
+        let worker_info = WorkerInfo {
+            pod_name: "test-pod".to_string(),
+            namespace: "test-namespace".to_string(),
+            node_name: Some("test-node".to_string()),
+            containers: None,
+            tflops_request: Some(1.0),
+            vram_request: Some(1024),
+            tflops_limit: Some(2.0),
+            vram_limit: Some(2048),
+            gpu_uuids: Some(vec!["gpu1".to_string()]),
+            qos_level: Some(QosLevel::High),
+            host_pid: 0,
+        };
+
+        let entry = WorkerEntry::new(worker_info);
+
+        assert_eq!(entry.containers.len(), 0);
+    }
+
+    #[test]
+    fn worker_entry_get_container() {
+        let worker_info = WorkerInfo {
+            pod_name: "test-pod".to_string(),
+            namespace: "test-namespace".to_string(),
+            node_name: Some("test-node".to_string()),
+            containers: Some(vec!["container1".to_string()]),
+            tflops_request: Some(1.0),
+            vram_request: Some(1024),
+            tflops_limit: Some(2.0),
+            vram_limit: Some(2048),
+            gpu_uuids: Some(vec!["gpu1".to_string()]),
+            qos_level: Some(QosLevel::High),
+            host_pid: 0,
+        };
+
+        let entry = WorkerEntry::new(worker_info);
+
+        let container = entry.get_container("container1");
+        assert!(container.is_some());
+        assert_eq!(container.unwrap().container_name, "container1");
+
+        let non_existent = entry.get_container("non-existent");
+        assert!(non_existent.is_none());
+    }
+
+    #[test]
+    fn container_info_new() {
+        let container_info = ContainerInfo::new("test-container".to_string());
+
+        assert_eq!(container_info.container_name, "test-container");
+        assert!(container_info.container_pid_to_host_pid.is_empty());
+        assert!(container_info.worker.is_none());
+    }
+
+    #[test]
+    fn container_info_pid_mapping() {
+        let mut container_info = ContainerInfo::new("test-container".to_string());
+
+        container_info.container_pid_to_host_pid.insert(100, 1234);
+        container_info.container_pid_to_host_pid.insert(101, 1235);
+
+        assert_eq!(
+            container_info.container_pid_to_host_pid.get(&100),
+            Some(&1234)
+        );
+        assert_eq!(
+            container_info.container_pid_to_host_pid.get(&101),
+            Some(&1235)
+        );
+        assert_eq!(container_info.container_pid_to_host_pid.get(&102), None);
+    }
+
+    #[tokio::test]
+    async fn worker_manager_new() {
+        let host_pid_probe = Arc::new(HostPidProbe::new(Duration::from_millis(100)));
+
+        let add_count = Arc::new(AtomicU32::new(0));
+        let remove_count = Arc::new(AtomicU32::new(0));
+
+        let add_count_clone = add_count.clone();
+        let remove_count_clone = remove_count.clone();
+
+        let add_callback = move |_pid: u32, _worker: Arc<TensorFusionWorker>| {
+            add_count_clone.fetch_add(1, Ordering::SeqCst);
+        };
+
+        let remove_callback = move |_pid: u32| {
+            remove_count_clone.fetch_add(1, Ordering::SeqCst);
+        };
+
+        let worker_manager = WorkerManager::new(host_pid_probe, add_callback, remove_callback);
+
+        assert!(worker_manager.registry().read().await.is_empty());
     }
 }

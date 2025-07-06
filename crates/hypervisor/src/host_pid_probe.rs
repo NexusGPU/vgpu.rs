@@ -36,6 +36,8 @@ pub struct PodProcessInfo {
     pub container_pid: u32,
     /// Pod name
     pub pod_name: String,
+    /// Pod namespace
+    pub namespace: String,
     /// Container name
     pub container_name: String,
 }
@@ -45,6 +47,8 @@ pub struct PodProcessInfo {
 pub struct SubscriptionRequest {
     /// Name of the pod to monitor
     pub pod_name: String,
+    /// Namespace of the pod
+    pub namespace: String,
     /// Name of the container within the pod to monitor
     pub container_name: String,
 }
@@ -119,6 +123,7 @@ impl HostPidProbe {
     /// let probe = HostPidProbe::new(Duration::from_secs(1));
     /// let request = SubscriptionRequest {
     ///     pod_name: "my-pod".to_string(),
+    ///     namespace: "my-namespace".to_string(),
     ///     container_name: "my-container".to_string(),
     /// };
     ///
@@ -213,7 +218,9 @@ impl HostPidProbe {
 
         for (request, _) in subscriptions_guard.iter() {
             if let Some(_process_info) = found_processes.iter().find(|info| {
-                info.pod_name == request.pod_name && info.container_name == request.container_name
+                info.pod_name == request.pod_name
+                    && info.namespace == request.namespace
+                    && info.container_name == request.container_name
             }) {
                 completed_requests.push(request.clone());
             }
@@ -224,6 +231,7 @@ impl HostPidProbe {
             if let Some(sender) = subscriptions_guard.remove(&request) {
                 if let Some(process_info) = found_processes.iter().find(|info| {
                     info.pod_name == request.pod_name
+                        && info.namespace == request.namespace
                         && info.container_name == request.container_name
                 }) {
                     if sender.send(process_info.clone()).is_err() {
@@ -315,8 +323,9 @@ impl HostPidProbe {
                 message: format!("Cannot read {environ_path}: {e}"),
             })?;
 
-        // Extract pod and container names from environment
-        let (pod_name, container_name) = Self::parse_environment_variables(&environ_data)?;
+        // Extract pod name, namespace, and container name from environment
+        let (pod_name, namespace, container_name) =
+            Self::parse_environment_variables(&environ_data)?;
 
         // Read status file to get namespace PID
         let status_data =
@@ -330,33 +339,38 @@ impl HostPidProbe {
             host_pid: pid,
             container_pid,
             pod_name,
+            namespace,
             container_name,
         })
     }
 
-    /// Parses environment variables to extract pod and container names.
+    /// Parses environment variables to extract pod name, namespace, and container name.
     ///
     /// # Errors
     ///
     /// - [`HostPidProbeError::ParseError`] if required environment variables are not found
     fn parse_environment_variables(
         environ_data: &str,
-    ) -> Result<(String, String), HostPidProbeError> {
+    ) -> Result<(String, String, String), HostPidProbeError> {
         let mut pod_name = None;
+        let mut namespace = None;
         let mut container_name = None;
 
         for env_var in environ_data.split('\0') {
             if let Some(value) = env_var.strip_prefix("POD_NAME=") {
                 pod_name = Some(value.to_string());
+            } else if let Some(value) = env_var.strip_prefix("POD_NAMESPACE=") {
+                namespace = Some(value.to_string());
             } else if let Some(value) = env_var.strip_prefix("CONTAINER_NAME=") {
                 container_name = Some(value.to_string());
             }
         }
 
-        match (pod_name, container_name) {
-            (Some(pod), Some(container)) => Ok((pod, container)),
+        match (pod_name, namespace, container_name) {
+            (Some(pod), Some(ns), Some(container)) => Ok((pod, ns, container)),
             _ => Err(HostPidProbeError::ParseError {
-                message: "POD_NAME or CONTAINER_NAME not found in environment".to_string(),
+                message: "POD_NAME, POD_NAMESPACE, or CONTAINER_NAME not found in environment"
+                    .to_string(),
             }),
         }
     }
@@ -429,6 +443,7 @@ mod tests {
         let probe = HostPidProbe::new(Duration::from_millis(100));
         let request = SubscriptionRequest {
             pod_name: "test-pod".to_string(),
+            namespace: "test-namespace".to_string(),
             container_name: "test-container".to_string(),
         };
 
@@ -444,7 +459,7 @@ mod tests {
     #[test]
     fn parse_environment_variables_success() {
         let environ_data =
-            "PATH=/usr/bin\0POD_NAME=my-pod\0CONTAINER_NAME=my-container\0HOME=/root\0";
+            "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=my-namespace\0CONTAINER_NAME=my-container\0HOME=/root\0";
 
         let result = HostPidProbe::parse_environment_variables(environ_data);
 
@@ -452,8 +467,9 @@ mod tests {
             result.is_ok(),
             "Should parse environment variables successfully"
         );
-        let (pod_name, container_name) = result.unwrap();
+        let (pod_name, namespace, container_name) = result.unwrap();
         assert_eq!(pod_name, "my-pod");
+        assert_eq!(namespace, "my-namespace");
         assert_eq!(container_name, "my-container");
     }
 
@@ -468,7 +484,8 @@ mod tests {
 
     #[test]
     fn parse_environment_variables_missing_container_name() {
-        let environ_data = "PATH=/usr/bin\0POD_NAME=my-pod\0HOME=/root\0";
+        let environ_data =
+            "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=my-namespace\0HOME=/root\0";
 
         let result = HostPidProbe::parse_environment_variables(environ_data);
 
@@ -476,6 +493,76 @@ mod tests {
             result.is_err(),
             "Should fail when CONTAINER_NAME is missing"
         );
+    }
+
+    #[test]
+    fn parse_environment_variables_missing_namespace() {
+        let environ_data =
+            "PATH=/usr/bin\0POD_NAME=my-pod\0CONTAINER_NAME=my-container\0HOME=/root\0";
+
+        let result = HostPidProbe::parse_environment_variables(environ_data);
+
+        assert!(result.is_err(), "Should fail when POD_NAMESPACE is missing");
+    }
+
+    #[test]
+    fn subscription_request_with_different_namespaces() {
+        let request1 = SubscriptionRequest {
+            pod_name: "pod1".to_string(),
+            namespace: "namespace1".to_string(),
+            container_name: "container1".to_string(),
+        };
+
+        let request2 = SubscriptionRequest {
+            pod_name: "pod1".to_string(),
+            namespace: "namespace2".to_string(),
+            container_name: "container1".to_string(),
+        };
+
+        assert_ne!(
+            request1, request2,
+            "Requests with different namespaces should not be equal"
+        );
+    }
+
+    #[test]
+    fn pod_process_info_with_different_namespaces() {
+        let info1 = PodProcessInfo {
+            host_pid: 1234,
+            container_pid: 1,
+            pod_name: "pod1".to_string(),
+            namespace: "namespace1".to_string(),
+            container_name: "container1".to_string(),
+        };
+
+        let info2 = PodProcessInfo {
+            host_pid: 1234,
+            container_pid: 1,
+            pod_name: "pod1".to_string(),
+            namespace: "namespace2".to_string(),
+            container_name: "container1".to_string(),
+        };
+
+        assert_ne!(
+            info1, info2,
+            "Process info with different namespaces should not be equal"
+        );
+    }
+
+    #[test]
+    fn parse_environment_variables_with_extra_vars() {
+        let environ_data = "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=my-namespace\0CONTAINER_NAME=my-container\0HOME=/root\0EXTRA_VAR=extra_value\0";
+
+        let result = HostPidProbe::parse_environment_variables(environ_data);
+
+        assert!(
+            result.is_ok(),
+            "Should parse environment variables successfully even with extra vars"
+        );
+        let (pod_name, namespace, container_name) = result.unwrap();
+        assert_eq!(pod_name, "my-pod");
+        assert_eq!(namespace, "my-namespace");
+        assert_eq!(container_name, "my-container");
     }
 
     #[test]
@@ -520,16 +607,19 @@ mod tests {
     fn subscription_request_equality() {
         let request1 = SubscriptionRequest {
             pod_name: "pod1".to_string(),
+            namespace: "namespace1".to_string(),
             container_name: "container1".to_string(),
         };
 
         let request2 = SubscriptionRequest {
             pod_name: "pod1".to_string(),
+            namespace: "namespace1".to_string(),
             container_name: "container1".to_string(),
         };
 
         let request3 = SubscriptionRequest {
             pod_name: "pod2".to_string(),
+            namespace: "namespace1".to_string(),
             container_name: "container1".to_string(),
         };
 
@@ -543,6 +633,7 @@ mod tests {
             host_pid: 1234,
             container_pid: 1,
             pod_name: "pod1".to_string(),
+            namespace: "namespace1".to_string(),
             container_name: "container1".to_string(),
         };
 
@@ -550,6 +641,7 @@ mod tests {
             host_pid: 1234,
             container_pid: 1,
             pod_name: "pod1".to_string(),
+            namespace: "namespace1".to_string(),
             container_name: "container1".to_string(),
         };
 
@@ -561,6 +653,7 @@ mod tests {
         let probe = HostPidProbe::new(Duration::from_millis(100));
         let request = SubscriptionRequest {
             pod_name: "test-pod".to_string(),
+            namespace: "test-namespace".to_string(),
             container_name: "test-container".to_string(),
         };
 

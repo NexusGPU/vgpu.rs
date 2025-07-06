@@ -1,59 +1,364 @@
 use poem::handler;
 use poem::web::Data;
+use poem::web::Query;
 use poem::Request;
-use tracing::error;
+use serde::Deserialize;
 use tracing::info;
 
 use super::types::JwtPayload;
 use crate::api::types::WorkerQueryResponse;
 use crate::worker_manager::WorkerRegistry;
 
-/// Core logic for getting pod resource information from WorkerRegistry
-async fn get_worker_info_from_registry_impl(
-    jwt_payload: &JwtPayload,
-    worker_registry: &WorkerRegistry,
-) -> poem::Result<WorkerQueryResponse> {
-    let pod_name = &jwt_payload.kubernetes.pod.name;
-    let namespace = &jwt_payload.kubernetes.namespace;
-
-    info!(
-        pod_name = pod_name,
-        namespace = namespace,
-        "Querying worker info from registry"
-    );
-
-    if let Some(worker_entry) = worker_registry.read().await.get(pod_name) {
-        info!(pod_name = pod_name, "Worker found in registry");
-        Ok(WorkerQueryResponse {
-            success: true,
-            data: Some(worker_entry.info.clone()),
-            message: "Worker information retrieved successfully".to_string(),
-        })
-    } else {
-        info!(pod_name = pod_name, "Worker not found in registry");
-        Ok(WorkerQueryResponse {
-            success: false,
-            data: None,
-            message: format!("Worker {pod_name} not found in namespace {namespace}"),
-        })
-    }
+/// Query parameters for worker lookup
+#[derive(Debug, Deserialize)]
+pub struct WorkerQuery {
+    pub container_name: String,
+    pub container_pid: u32,
 }
 
-/// Get pod resource information
+/// Get pod resource information using JWT token info and container details
 #[handler]
 pub async fn get_worker_info(
     req: &Request,
+    query: Query<WorkerQuery>,
     worker_registry: Data<&WorkerRegistry>,
 ) -> poem::Result<poem::web::Json<WorkerQueryResponse>> {
     // Extract JWT payload from request extensions
     let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
-        error!("JWT payload not found in request extensions");
         poem::Error::from_string(
-            "Authentication information missing",
-            poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "JWT payload not found in request",
+            poem::http::StatusCode::UNAUTHORIZED,
         )
     })?;
 
-    let response = get_worker_info_from_registry_impl(jwt_payload, &worker_registry).await?;
-    Ok(poem::web::Json(response))
+    let pod_name = &jwt_payload.kubernetes.pod.name;
+    let namespace = &jwt_payload.kubernetes.namespace;
+    let container_name = &query.container_name;
+    let container_pid = query.container_pid;
+
+    info!(
+        pod_name = pod_name,
+        namespace = namespace,
+        container_name = container_name,
+        container_pid = container_pid,
+        "Querying worker info using JWT and container details"
+    );
+
+    let registry = worker_registry.read().await;
+    let worker_key = format!("{namespace}/{pod_name}");
+
+    // First, check if the worker exists for this pod
+    if let Some(worker_entry) = registry.get(&worker_key) {
+        info!(pod_name = pod_name, "Worker found in registry");
+
+        // Then check if the container exists and has the requested PID
+        if let Some(container_info) = worker_entry.get_container(container_name) {
+            if let Some(&host_pid) = container_info.container_pid_to_host_pid.get(&container_pid) {
+                info!(
+                    pod_name = pod_name,
+                    namespace = namespace,
+                    container_name = container_name,
+                    container_pid = container_pid,
+                    host_pid = host_pid,
+                    "Found worker by JWT pod info and container details"
+                );
+
+                // Update the WorkerInfo with host_pid
+                let mut worker_info = worker_entry.info.clone();
+                worker_info.host_pid = host_pid;
+
+                Ok(poem::web::Json(WorkerQueryResponse {
+                    success: true,
+                    data: Some(worker_info),
+                    message: format!(
+                        "Worker found for pod {pod_name} in namespace {namespace}, container {container_name} with container PID {container_pid}, host PID {host_pid}"
+                    ),
+                }))
+            } else {
+                info!(
+                    pod_name = pod_name,
+                    namespace = namespace,
+                    container_name = container_name,
+                    container_pid = container_pid,
+                    "Container found but container PID not found"
+                );
+                Ok(poem::web::Json(WorkerQueryResponse {
+                    success: false,
+                    data: None,
+                    message: format!(
+                        "Container PID {container_pid} not found for container {container_name} in pod {pod_name} in namespace {namespace}"
+                    ),
+                }))
+            }
+        } else {
+            info!(
+                pod_name = pod_name,
+                namespace = namespace,
+                container_name = container_name,
+                "Worker found but container not found"
+            );
+            Ok(poem::web::Json(WorkerQueryResponse {
+                success: false,
+                data: None,
+                message: format!(
+                    "Container {container_name} not found for pod {pod_name} in namespace {namespace}"
+                ),
+            }))
+        }
+    } else {
+        info!(
+            pod_name = pod_name,
+            namespace = namespace,
+            "Worker not found in registry"
+        );
+        Ok(poem::web::Json(WorkerQueryResponse {
+            success: false,
+            data: None,
+            message: format!("Worker {pod_name} not found in namespace {namespace}"),
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use api_types::*;
+    use tokio::sync::RwLock;
+
+    use super::*;
+    use crate::worker_manager::ContainerInfo;
+    use crate::worker_manager::WorkerEntry;
+
+    fn create_test_jwt_payload() -> JwtPayload {
+        JwtPayload {
+            kubernetes: KubernetesInfo {
+                namespace: "test-namespace".to_string(),
+                node: KubernetesNode {
+                    name: "test-node".to_string(),
+                    uid: "node-uuid-123".to_string(),
+                },
+                pod: KubernetesPod {
+                    name: "test-pod".to_string(),
+                    uid: "pod-uuid-456".to_string(),
+                },
+                serviceaccount: KubernetesServiceAccount {
+                    name: "test-sa".to_string(),
+                    uid: "sa-uuid-789".to_string(),
+                },
+            },
+            nbf: 1751311081,
+            sub: "test-subject".to_string(),
+        }
+    }
+
+    fn create_test_worker_entry() -> WorkerEntry {
+        let worker_info = WorkerInfo {
+            pod_name: "test-pod".to_string(),
+            namespace: "test-namespace".to_string(),
+            node_name: Some("test-node".to_string()),
+            containers: Some(vec!["container1".to_string(), "container2".to_string()]),
+            tflops_request: Some(1.0),
+            vram_request: Some(1024),
+            tflops_limit: Some(2.0),
+            vram_limit: Some(2048),
+            gpu_uuids: Some(vec!["gpu1".to_string()]),
+            qos_level: Some(QosLevel::High),
+            host_pid: 0,
+        };
+
+        WorkerEntry {
+            info: worker_info.clone(),
+            containers: {
+                let mut containers = HashMap::new();
+                containers.insert("container1".to_string(), ContainerInfo {
+                    container_name: "container1".to_string(),
+                    container_pid_to_host_pid: {
+                        let mut map = HashMap::new();
+                        map.insert(100, 1234);
+                        map.insert(101, 1235);
+                        map
+                    },
+                    worker: None,
+                });
+                containers.insert("container2".to_string(), ContainerInfo {
+                    container_name: "container2".to_string(),
+                    container_pid_to_host_pid: {
+                        let mut map = HashMap::new();
+                        map.insert(200, 2234);
+                        map.insert(201, 2235);
+                        map
+                    },
+                    worker: None,
+                });
+                containers
+            },
+        }
+    }
+
+    #[test]
+    fn worker_query_construction() {
+        let query = WorkerQuery {
+            container_name: "container1".to_string(),
+            container_pid: 100,
+        };
+
+        assert_eq!(query.container_name, "container1");
+        assert_eq!(query.container_pid, 100);
+    }
+
+    #[test]
+    fn worker_query_with_different_containers() {
+        let query1 = WorkerQuery {
+            container_name: "container1".to_string(),
+            container_pid: 100,
+        };
+
+        let query2 = WorkerQuery {
+            container_name: "container2".to_string(),
+            container_pid: 100,
+        };
+
+        assert_ne!(query1.container_name, query2.container_name);
+        assert_eq!(query1.container_pid, query2.container_pid);
+    }
+
+    #[tokio::test]
+    async fn test_worker_registry_lookup() {
+        let mut registry = HashMap::new();
+        let worker_key = "test-namespace/test-pod".to_string();
+        registry.insert(worker_key.clone(), create_test_worker_entry());
+
+        let worker_registry = Arc::new(RwLock::new(registry));
+
+        // Test successful lookup
+        {
+            let guard = worker_registry.read().await;
+            let entry = guard.get(&worker_key).unwrap();
+
+            let container1 = entry.get_container("container1").unwrap();
+            assert_eq!(container1.container_pid_to_host_pid.get(&100), Some(&1234));
+
+            let container2 = entry.get_container("container2").unwrap();
+            assert_eq!(container2.container_pid_to_host_pid.get(&200), Some(&2234));
+        }
+
+        // Test non-existent container
+        {
+            let guard = worker_registry.read().await;
+            let entry = guard.get(&worker_key).unwrap();
+
+            let non_existent = entry.get_container("non-existent");
+            assert!(non_existent.is_none());
+        }
+    }
+
+    #[test]
+    fn jwt_payload_extraction() {
+        let payload = create_test_jwt_payload();
+
+        assert_eq!(payload.kubernetes.pod.name, "test-pod");
+        assert_eq!(payload.kubernetes.namespace, "test-namespace");
+        assert_eq!(payload.kubernetes.node.name, "test-node");
+    }
+
+    #[test]
+    fn worker_entry_container_operations() {
+        let mut entry = create_test_worker_entry();
+
+        // Test get_container
+        let container1 = entry.get_container("container1");
+        assert!(container1.is_some());
+        assert_eq!(container1.unwrap().container_name, "container1");
+
+        // Test get_container_mut
+        if let Some(container1_mut) = entry.get_container_mut("container1") {
+            container1_mut.container_pid_to_host_pid.insert(102, 1236);
+        }
+
+        let container1_after = entry.get_container("container1").unwrap();
+        assert_eq!(
+            container1_after.container_pid_to_host_pid.get(&102),
+            Some(&1236)
+        );
+    }
+
+    #[test]
+    fn container_info_multiple_pids() {
+        let worker_info = WorkerInfo {
+            pod_name: "test-pod".to_string(),
+            namespace: "test-namespace".to_string(),
+            node_name: Some("test-node".to_string()),
+            containers: Some(vec!["test-container".to_string()]),
+            tflops_request: Some(1.0),
+            vram_request: Some(1024),
+            tflops_limit: Some(2.0),
+            vram_limit: Some(2048),
+            gpu_uuids: Some(vec!["gpu1".to_string()]),
+            qos_level: Some(QosLevel::High),
+            host_pid: 0,
+        };
+
+        let entry = WorkerEntry {
+            info: worker_info.clone(),
+            containers: {
+                let mut containers = HashMap::new();
+                containers.insert("test-container".to_string(), ContainerInfo {
+                    container_name: "test-container".to_string(),
+                    container_pid_to_host_pid: {
+                        let mut map = HashMap::new();
+                        map.insert(100, 1234);
+                        map.insert(101, 1235);
+                        map.insert(102, 1236);
+                        map
+                    },
+                    worker: None,
+                });
+                containers
+            },
+        };
+
+        let container_info = entry.get_container("test-container").unwrap();
+        assert_eq!(container_info.container_pid_to_host_pid.len(), 3);
+        assert_eq!(
+            container_info.container_pid_to_host_pid.get(&100),
+            Some(&1234)
+        );
+        assert_eq!(
+            container_info.container_pid_to_host_pid.get(&101),
+            Some(&1235)
+        );
+        assert_eq!(
+            container_info.container_pid_to_host_pid.get(&102),
+            Some(&1236)
+        );
+    }
+
+    #[test]
+    fn complete_worker_identification_flow() {
+        // Test the complete flow: pod + namespace + container + container_pid
+        let entry = create_test_worker_entry();
+
+        // Simulate the lookup flow
+        let pod_name = "test-pod";
+        let namespace = "test-namespace";
+        let container_name = "container1";
+        let container_pid = 100u32;
+
+        let worker_key = format!("{namespace}/{pod_name}");
+        assert_eq!(worker_key, "test-namespace/test-pod");
+
+        let container_info = entry.get_container(container_name).unwrap();
+        let host_pid = container_info
+            .container_pid_to_host_pid
+            .get(&container_pid)
+            .unwrap();
+        assert_eq!(*host_pid, 1234);
+
+        // Test different container
+        let container2_info = entry.get_container("container2").unwrap();
+        let host_pid2 = container2_info.container_pid_to_host_pid.get(&200).unwrap();
+        assert_eq!(*host_pid2, 2234);
+    }
 }
