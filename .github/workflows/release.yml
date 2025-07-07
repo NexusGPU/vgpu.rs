@@ -179,7 +179,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: !(*.dockerbuild)
+          pattern: "!(*.dockerbuild)"
 
 
       - name: Download tensor-fusion components
