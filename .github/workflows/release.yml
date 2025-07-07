@@ -120,7 +120,7 @@ jobs:
         run: sudo apt-get install gcc-aarch64-linux-gnu
 
       - name: Install CUDA toolkit
-        uses: Jimver/cuda-toolkit@v0.2.25
+        uses: Jimver/cuda-toolkit@v0.2.26
         with:
           sub-packages: '["nvcc", "cudart-dev"]'
           method: network
