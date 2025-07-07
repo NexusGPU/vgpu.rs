@@ -100,9 +100,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             platform: linux-x64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            platform: linux-arm64
+          # - os: ubuntu-latest
+          #   target: aarch64-unknown-linux-gnu
+          #   platform: linux-arm64
 
     name: build_libraries (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -190,12 +190,12 @@ jobs:
       - name: Compress artifacts
         run: |
           tar -czf libcuda_limiter-x64.tar.gz -C artifacts/libcuda_limiter-linux-x64 libcuda_limiter.so
-          tar -czf libcuda_limiter-arm64.tar.gz -C artifacts/libcuda_limiter-linux-arm64 libcuda_limiter.so
+          # tar -czf libcuda_limiter-arm64.tar.gz -C artifacts/libcuda_limiter-linux-arm64 libcuda_limiter.so
           tar -czf libadd_path-x64.tar.gz -C artifacts/libadd_path-linux-x64 libadd_path.so
-          tar -czf libadd_path-arm64.tar.gz -C artifacts/libadd_path-linux-arm64 libadd_path.so
+          # tar -czf libadd_path-arm64.tar.gz -C artifacts/libadd_path-linux-arm64 libadd_path.so
           tar -czf tensor-fusion-components.tar.gz -C artifacts/tensor-fusion-components .
           tar -czf bootstrap-x64.tar.gz -C artifacts/bootstrap-linux-x64 bootstrap
-          tar -czf bootstrap-arm64.tar.gz -C artifacts/bootstrap-linux-arm64 bootstrap
+          # tar -czf bootstrap-arm64.tar.gz -C artifacts/bootstrap-linux-arm64 bootstrap
 
       
       - name: Add assets to manual release
@@ -205,12 +205,12 @@ jobs:
           tag_name: ${{ needs.release.outputs.version }}
           files: |
             libcuda_limiter-x64.tar.gz
-            libcuda_limiter-arm64.tar.gz
+            # libcuda_limiter-arm64.tar.gz
             libadd_path-x64.tar.gz
-            libadd_path-arm64.tar.gz
+            # libadd_path-arm64.tar.gz
             tensor-fusion-components.tar.gz
             bootstrap-x64.tar.gz
-            bootstrap-arm64.tar.gz
+            # bootstrap-arm64.tar.gz
 
       - name: Add assets to semantic release
         if: github.event_name != 'workflow_dispatch'
@@ -219,9 +219,9 @@ jobs:
           tag_name: v${{ needs.release.outputs.version }}
           files: |
             libcuda_limiter-x64.tar.gz
-            libcuda_limiter-arm64.tar.gz
+            # libcuda_limiter-arm64.tar.gz
             libadd_path-x64.tar.gz
-            libadd_path-arm64.tar.gz
+            # libadd_path-arm64.tar.gz
             tensor-fusion-components.tar.gz
 
   publish_x86:
@@ -277,76 +277,77 @@ jobs:
           build-args: |
             BINARY_PATH=target/x86_64-unknown-linux-gnu/release/hypervisor
 
-  publish_arm:
-    needs:
-      - release
-    if: needs.release.outputs.published == 'true'
-    runs-on: ubuntu-latest
-    env:
-      arch: arm64
-    outputs:
-      image_digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  # publish_arm:
+  #   needs:
+  #     - release
+  #   if: needs.release.outputs.published == 'true'
+  #   runs-on: ubuntu-latest
+  #   env:
+  #     arch: arm64
+  #   outputs:
+  #     image_digest: ${{ steps.build.outputs.digest }}
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
       
-      - name: Install rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          target: aarch64-unknown-linux-gnu
+  #     - name: Install rust
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         target: aarch64-unknown-linux-gnu
 
-      - name: Configure cache
-        uses: Swatinem/rust-cache@v2
+  #     - name: Configure cache
+  #       uses: Swatinem/rust-cache@v2
 
-      - name: Install cross
-        run: |
-          if ! (command -v cross &> /dev/null && command -v cross-util &> /dev/null); then
-            cargo install cross --git https://github.com/cross-rs/cross
-          else
-            echo "cross is already installed, skipping installation."
-          fi
+  #     - name: Install cross
+  #       run: |
+  #         if ! (command -v cross &> /dev/null && command -v cross-util &> /dev/null); then
+  #           cargo install cross --git https://github.com/cross-rs/cross
+  #         else
+  #           echo "cross is already installed, skipping installation."
+  #         fi
 
-      - name: Build for arm64
-        run: VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target aarch64-unknown-linux-gnu
+  #     - name: Build for arm64
+  #       run: VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target aarch64-unknown-linux-gnu
 
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            tensorfusion/tensor-fusion-hypervisor
-          tags: |
-            type=raw,value=${{ needs.release.outputs.version }}_${{ env.arch }}
+  #     - id: meta
+  #       uses: docker/metadata-action@v5
+  #       with:
+  #         images: |
+  #           tensorfusion/tensor-fusion-hypervisor
+  #         tags: |
+  #           type=raw,value=${{ needs.release.outputs.version }}_${{ env.arch }}
 
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+  #     - name: Login to DockerHub
+  #       uses: docker/login-action@v3
+  #       with:
+  #         username: ${{ secrets.DOCKER_USERNAME }}
+  #         password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker
-          driver-opts: |
-            image=moby/buildkit:master
-            network=host
+  #     - uses: docker/setup-buildx-action@v3
+  #       with:
+  #         driver: docker
+  #         driver-opts: |
+  #           image=moby/buildkit:master
+  #           network=host
 
-      - id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/${{ env.arch }}
-          tags: ${{ steps.meta.outputs.tags }}
-          no-cache: true
-          build-args: |
-            BINARY_PATH=target/aarch64-unknown-linux-gnu/release/hypervisor
+  #     - id: build
+  #       uses: docker/build-push-action@v6
+  #       with:
+  #         context: .
+  #         push: true
+  #         platforms: linux/${{ env.arch }}
+  #         tags: ${{ steps.meta.outputs.tags }}
+  #         no-cache: true
+  #         build-args: |
+  #           BINARY_PATH=target/aarch64-unknown-linux-gnu/release/hypervisor
 
   merge_images:
     needs:
       - release
       - publish_x86
-      - publish_arm
-    if: needs.publish_x86.outputs.image_digest && needs.publish_arm.outputs.image_digest
+      # - publish_arm
+    if: needs.publish_x86.outputs.image_digest
+    # if: needs.publish_x86.outputs.image_digest && needs.publish_arm.outputs.image_digest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -366,7 +367,7 @@ jobs:
             -t tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }} \
             -t tensorfusion/tensor-fusion-hypervisor:latest \
             tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64 \
-            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
+            # tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
 
       - name: Create and push manifest for manual release
         if: github.event_name == 'workflow_dispatch'
@@ -374,4 +375,4 @@ jobs:
           docker buildx imagetools create \
             -t tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }} \
             tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64 \
-            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
+            # tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
