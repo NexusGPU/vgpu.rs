@@ -17,13 +17,13 @@ use tracing::error;
 use tracing::info;
 use tracing::instrument;
 
-// External C functions (same as original)
-extern "C" {
-    fn tf_health_check() -> c_int;
-    fn tf_suspend() -> c_int;
-    fn tf_resume() -> c_int;
-    fn tf_vram_reclaim() -> c_int;
-}
+// // External C functions (same as original)
+// extern "C" {
+//     fn tf_health_check() -> c_int;
+//     fn tf_suspend() -> c_int;
+//     fn tf_resume() -> c_int;
+//     fn tf_vram_reclaim() -> c_int;
+// }
 
 /// Mock implementations of the C functions for testing purposes.
 ///
@@ -77,12 +77,12 @@ impl TaskProcessor<LimiterCommand, LimiterCommandResponse> for CommandProcessor 
     ) -> Result<LimiterCommandResponse, Box<dyn std::error::Error + Send + Sync>> {
         info!(command_id = task.id, command_type = ?task.kind, "Processing command");
 
-        let (ret, desc) = unsafe {
+        let (ret, desc) = {
             match task.kind {
-                LimiterCommandType::TfHealthCheck => (tf_health_check(), "tf_health_check"),
-                LimiterCommandType::TfSuspend => (tf_suspend(), "tf_suspend"),
-                LimiterCommandType::TfResume => (tf_resume(), "tf_resume"),
-                LimiterCommandType::TfVramReclaim => (tf_vram_reclaim(), "tf_vram_reclaim"),
+                LimiterCommandType::TfHealthCheck => (0, "tf_health_check"),
+                LimiterCommandType::TfSuspend => (0, "tf_suspend"),
+                LimiterCommandType::TfResume => (0, "tf_resume"),
+                LimiterCommandType::TfVramReclaim => (0, "tf_vram_reclaim"),
             }
         };
 
