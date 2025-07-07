@@ -144,8 +144,9 @@ fn fetch_device_configs_from_hypervisor(
 
     if let Some(gpu_uuids) = worker_info.gpu_uuids {
         if gpu_uuids.len() > 0 {
-            env::set_var("CUDA_VISIBLE_DEVICES", &gpu_uuids.join(","));
-            env::set_var("NVIDIA_VISIBLE_DEVICES", &gpu_uuids.join(","));
+            let visible_devices = gpu_uuids.join(",").replace("gpu-", "GPU-");
+            env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
+            env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
         }
     }
 
