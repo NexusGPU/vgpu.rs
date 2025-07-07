@@ -12,9 +12,9 @@ const TENSOR_FUSION_DOMAIN: &str = "tensor-fusion.ai";
 
 /// Tensor-fusion specific annotations extracted from Kubernetes pods.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct TensorFusionAnnotations(pub WorkerInfo);
+pub(crate) struct TensorFusionPodInfo(pub WorkerInfo);
 
-impl TensorFusionAnnotations {
+impl TensorFusionPodInfo {
     /// Parse tensor-fusion annotations from a Kubernetes pod's annotations.
     ///
     /// Extracts and validates tensor-fusion specific annotations from the provided
@@ -23,10 +23,14 @@ impl TensorFusionAnnotations {
     /// # Errors
     ///
     /// - [`KubernetesError::AnnotationParseError`] if annotation values are invalid
-    pub(crate) fn from_pod_annotations(
+    pub(crate) fn from_pod_annotations_labels(
         annotations: &BTreeMap<String, String>,
+        labels: &BTreeMap<String, String>,
     ) -> Result<Self, Report<KubernetesError>> {
         let mut worker_info = WorkerInfo::default();
+
+        worker_info.labels = labels.clone();
+        worker_info.workload_name = labels.get(&format!("{TENSOR_FUSION_DOMAIN}/workload")).cloned();
 
         // Parse TFLOPS request
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/tflops-request")) {
@@ -176,7 +180,7 @@ mod tests {
     #[test]
     fn from_pod_annotations_empty() {
         let annotations = BTreeMap::new();
-        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+        let result = TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new()).unwrap();
         assert!(!result.has_annotations());
     }
 
@@ -197,7 +201,7 @@ mod tests {
         );
         annotations.insert("tensor-fusion.ai/vram-limit".to_string(), "4Gi".to_string());
 
-        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+        let result = TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new()).unwrap();
 
         assert!(result.has_annotations());
         assert_eq!(result.0.tflops_request, Some(10.5));
@@ -215,7 +219,7 @@ mod tests {
             "5.0".to_string(),
         );
 
-        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+        let result = TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new()).unwrap();
 
         assert!(result.has_annotations());
         assert_eq!(result.0.tflops_request, Some(5.0));
@@ -230,7 +234,7 @@ mod tests {
             "GPU-12345678-1234-1234-1234-123456789abc".to_string(),
         );
 
-        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+        let result = TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new()).unwrap();
 
         assert!(result.has_annotations());
         assert_eq!(
@@ -248,7 +252,7 @@ mod tests {
                 .to_string(),
         );
 
-        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+        let result = TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new()).unwrap();
 
         assert!(result.has_annotations());
         assert_eq!(
@@ -265,7 +269,7 @@ mod tests {
         let mut annotations = BTreeMap::new();
         annotations.insert("tensor-fusion.ai/gpu-ids".to_string(), "".to_string());
 
-        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+        let result = TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new()).unwrap();
 
         assert!(result.has_annotations());
         assert_eq!(result.0.gpu_uuids, Some(vec!["".to_string()]));
@@ -293,7 +297,7 @@ mod tests {
                 .to_string(),
         );
 
-        let result = TensorFusionAnnotations::from_pod_annotations(&annotations).unwrap();
+        let result = TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new()).unwrap();
 
         assert!(result.has_annotations());
         assert_eq!(result.0.tflops_request, Some(10.5));

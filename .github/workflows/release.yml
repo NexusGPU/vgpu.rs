@@ -138,11 +138,20 @@ jobs:
       - name: Build cuda-limiter
         run: VERSION=${{ needs.release.outputs.version }} cargo build -p cuda-limiter --release --target ${{ matrix.target }}
 
+      - name: Build bootstrap program
+        run: VERSION=${{ needs.release.outputs.version }} cargo build -p bootstrap --release --target ${{ matrix.target }}
+
       - name: Upload cuda-limiter artifact
         uses: actions/upload-artifact@v4
         with:
           name: libcuda_limiter-${{ matrix.platform }}
           path: target/${{ matrix.target }}/release/libcuda_limiter.so
+
+      - name: Upload bootstrap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-${{ matrix.platform }}
+          path: target/${{ matrix.target }}/release/bootstrap
 
       - name: Build add-path
         run: VERSION=${{ needs.release.outputs.version }} cargo build -p add-path --release --target ${{ matrix.target }}
@@ -185,7 +194,9 @@ jobs:
           tar -czf libadd_path-x64.tar.gz -C artifacts/libadd_path-linux-x64 libadd_path.so
           tar -czf libadd_path-arm64.tar.gz -C artifacts/libadd_path-linux-arm64 libadd_path.so
           tar -czf tensor-fusion-components.tar.gz -C artifacts/tensor-fusion-components .
-      
+          tar -czf bootstrap-x64.tar.gz -C artifacts/bootstrap-linux-x64 bootstrap
+          tar -czf bootstrap-arm64.tar.gz -C artifacts/bootstrap-linux-arm64 bootstrap
+
       
       - name: Add assets to manual release
         if: github.event_name == 'workflow_dispatch'
@@ -198,6 +209,8 @@ jobs:
             libadd_path-x64.tar.gz
             libadd_path-arm64.tar.gz
             tensor-fusion-components.tar.gz
+            bootstrap-x64.tar.gz
+            bootstrap-arm64.tar.gz
 
       - name: Add assets to semantic release
         if: github.event_name != 'workflow_dispatch'

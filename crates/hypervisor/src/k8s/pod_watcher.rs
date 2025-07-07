@@ -19,7 +19,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::k8s::annotations::TensorFusionAnnotations;
+use crate::k8s::pod_info::TensorFusionPodInfo;
 use crate::k8s::types::KubernetesError;
 use crate::k8s::types::WorkerUpdate;
 
@@ -185,13 +185,14 @@ impl PodWatcher {
         let metadata = pod.metadata;
         let pod_name = metadata.name.unwrap_or_else(|| "unknown".to_string());
         let namespace = metadata.namespace.unwrap_or_else(|| "default".to_string());
+        let labels = metadata.labels.unwrap_or_default();
 
         // Extract annotations
         let annotations = metadata.annotations.unwrap_or_default();
-        let tf_annotations = TensorFusionAnnotations::from_pod_annotations(&annotations)?;
+        let tf_info = TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &labels)?;
 
         // Only process pods with tensor-fusion annotations
-        if !tf_annotations.has_annotations() {
+        if !tf_info.has_annotations() {
             return Ok(());
         }
 
@@ -210,7 +211,7 @@ impl PodWatcher {
             WorkerUpdate::PodCreated {
                 pod_name,
                 namespace,
-                annotations: tf_annotations,
+                pod_info: tf_info,
                 node_name,
             }
         };

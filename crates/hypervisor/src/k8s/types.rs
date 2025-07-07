@@ -1,6 +1,6 @@
 use core::error::Error;
 
-use crate::k8s::TensorFusionAnnotations;
+use crate::k8s::TensorFusionPodInfo;
 
 /// Represents updates to workers based on Kubernetes pod events.
 #[derive(Debug, Clone)]
@@ -10,7 +10,7 @@ pub(crate) enum WorkerUpdate {
     PodCreated {
         pod_name: String,
         namespace: String,
-        annotations: TensorFusionAnnotations,
+        pod_info: TensorFusionPodInfo,
         node_name: Option<String>,
     },
     /// An existing pod's annotations were updated
@@ -18,11 +18,14 @@ pub(crate) enum WorkerUpdate {
     PodUpdated {
         pod_name: String,
         namespace: String,
-        annotations: TensorFusionAnnotations,
+        pod_info: TensorFusionPodInfo,
         node_name: Option<String>,
     },
     /// A pod was deleted
-    PodDeleted { pod_name: String, namespace: String },
+    PodDeleted { 
+        pod_name: String, 
+        namespace: String,
+    },
 }
 
 /// Errors that can occur during Kubernetes operations.

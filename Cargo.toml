@@ -9,6 +9,7 @@ members = [
   "crates/utils",
   "crates/trap",
   "crates/http-bidir-comm",
+  "crates/bootstrap",
 ]
 exclude = [
   "crates/integration-test",
