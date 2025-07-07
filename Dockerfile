@@ -6,3 +6,5 @@ ARG BINARY_PATH=target/release/hypervisor
 
 # Copy the pre-built binary from the host
 COPY ${BINARY_PATH} ./hypervisor
+
+ENTRYPOINT ["./hypervisor"]

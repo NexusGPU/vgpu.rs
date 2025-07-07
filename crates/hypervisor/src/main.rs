@@ -62,7 +62,7 @@ struct Cli {
     )]
     gpu_info_path: Option<PathBuf>,
 
-    #[arg(long, help = "Enable Kubernetes pod monitoring")]
+    #[arg(long, help = "Enable Kubernetes pod monitoring", default_value = "true")]
     enable_k8s: bool,
 
     #[arg(
@@ -96,7 +96,7 @@ struct Cli {
     #[arg(
         long,
         env = "API_LISTEN_ADDR",
-        default_value = "127.0.0.1:8080",
+        default_value = "0.0.0.0:8080",
         help = "HTTP API server listen address"
     )]
     api_listen_addr: String,
