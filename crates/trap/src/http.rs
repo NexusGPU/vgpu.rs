@@ -110,7 +110,7 @@ impl BlockingHttpTrap {
         let process_id = std::process::id();
 
         let request = HttpTrapRequest {
-            trap_id: trap_id.clone(),
+            trap_id,
             process_id,
             frame,
             timeout_seconds: self.config.timeout.as_secs(),

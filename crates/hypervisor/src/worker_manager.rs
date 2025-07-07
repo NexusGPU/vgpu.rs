@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::Ok;
 use anyhow::Result;
 use api_types::QosLevel;
 use api_types::WorkerInfo;
@@ -16,6 +17,7 @@ use tracing::warn;
 
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
+use crate::host_pid_probe::PodProcessInfo;
 use crate::host_pid_probe::SubscriptionRequest;
 use crate::k8s::TensorFusionPodInfo;
 use crate::process::worker::TensorFusionWorker;
@@ -153,83 +155,60 @@ where
             registry.insert(worker_key.clone(), WorkerEntry::new(pod_info.0.clone()));
             info!("Added worker to registry: {worker_key}");
         }
-
-        // Start PID discovery for the pod
-        self.discover_worker_pid(pod_name, namespace, gpu_observer)
-            .await?;
-
         Ok(())
     }
 
     /// Discover worker PID using HostPidProbe and automatically associate it.
-    async fn discover_worker_pid(
+    pub async fn discover_worker_pid(
         &self,
         pod_name: String,
         namespace: String,
+        container_name: String,
+        container_pid: u32,
         gpu_observer: Arc<GpuObserver>,
-    ) -> Result<()> {
-        let worker_key = format!("{namespace}/{pod_name}");
-
-        // Collect all container names for this pod. If the list is empty or not present,
-        // fall back to using the pod name as a single container.
-        let container_names = {
-            let registry = self.registry.read().await;
-            if let Some(entry) = registry.get(&worker_key) {
-                // Clone the container list if present; otherwise use an empty vec.
-                let mut names = entry.info.containers.clone().unwrap_or_default();
-                if names.is_empty() {
-                    names.push(pod_name.clone());
-                }
-                names
-            } else {
-                warn!("Worker not found in registry: {worker_key}");
-                return Err(anyhow::anyhow!("Worker not found in registry"));
-            }
+    ) -> Result<PodProcessInfo> {
+        let subscription_request = SubscriptionRequest {
+            pod_name: pod_name.clone(),
+            namespace: namespace.clone(),
+            container_name: container_name.clone(),
+            container_pid: container_pid,
         };
 
-        for container_name in container_names {
-            let subscription_request = SubscriptionRequest {
-                pod_name: pod_name.clone(),
-                namespace: namespace.clone(),
-                container_name: container_name.clone(),
-            };
+        info!(
+            pod_name = %pod_name,
+            namespace = %namespace,
+            container_name = %container_name,
+            "Starting PID discovery for worker"
+        );
 
-            info!(
-                pod_name = %pod_name,
-                namespace = %namespace,
-                container_name = %container_name,
-                "Starting PID discovery for worker"
-            );
+        let receiver = self.host_pid_probe.subscribe(subscription_request).await;
 
-            let receiver = self.host_pid_probe.subscribe(subscription_request).await;
+        // Handle PID discovery result without spawning a task (sequential processing)
+        let process_info = receiver
+            .await
+            .map_err(|_| anyhow::anyhow!("PID discovery subscription was cancelled"))?;
 
-            // Handle PID discovery result without spawning a task (sequential processing)
-            let process_info = receiver
-                .await
-                .map_err(|_| anyhow::anyhow!("PID discovery subscription was cancelled"))?;
+        info!(
+            pod_name = %pod_name,
+            namespace = %namespace,
+            container_name = %container_name,
+            host_pid = process_info.host_pid,
+            container_pid = process_info.container_pid,
+            "Discovered worker PID"
+        );
 
-            info!(
-                pod_name = %pod_name,
-                namespace = %namespace,
-                container_name = %container_name,
-                host_pid = process_info.host_pid,
-                container_pid = process_info.container_pid,
-                "Discovered worker PID"
-            );
+        // Associate the worker with the discovered PID
+        self.associate_discovered_worker(
+            pod_name.clone(),
+            namespace.clone(),
+            container_name.clone(),
+            process_info.host_pid,
+            process_info.container_pid,
+            gpu_observer.clone(),
+        )
+        .await?;
 
-            // Associate the worker with the discovered PID
-            self.associate_discovered_worker(
-                pod_name.clone(),
-                namespace.clone(),
-                container_name.clone(),
-                process_info.host_pid,
-                process_info.container_pid,
-                gpu_observer.clone(),
-            )
-            .await?;
-        }
-
-        Ok(())
+        Ok(process_info)
     }
 
     /// Associate a worker with a discovered PID.

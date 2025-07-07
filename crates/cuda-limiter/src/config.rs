@@ -87,13 +87,15 @@ fn fetch_device_configs_from_hypervisor(
     tracing::debug!("Fetching pod information from: {}", url);
 
     // Make HTTP request with Bearer token and container_pid query parameter
+    let pid_string = container_pid.to_string();
+    let query_params: &[(&str, &str)] = &[
+        ("container_pid", &pid_string),
+        ("container_name", container_name),
+    ];
     let response = client
         .get(&url)
         .bearer_auth(&token)
-        .query(&[
-            ("container_pid", container_pid.to_string()),
-            ("container_name", container_name.to_string()),
-        ])
+        .query(query_params)
         .send()
         .change_context(ConfigError::HttpRequest)?;
 

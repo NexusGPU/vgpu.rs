@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::c_void;
 use std::ops::Deref;
 use std::sync::LazyLock;
@@ -28,7 +29,7 @@ impl Hooker<'_> {
         } else {
             Module::find_global_export_by_name(symbol)
         }
-        .ok_or_else(|| Error::NoSymbolName(symbol.to_string()))?;
+        .ok_or_else(|| Error::NoSymbolName(Cow::Owned(symbol.to_string())))?;
         self.interceptor
             .replace(
                 function,
@@ -60,7 +61,7 @@ impl HookManager {
             module.map(|m: &str| self.module_names.iter().find(|x| x.starts_with(m)));
 
         let module = match found_module {
-            Some(None) => return Err(Error::NoModuleName(module.unwrap().to_string())),
+            Some(None) => return Err(Error::NoModuleName(Cow::Owned(module.unwrap().to_string()))),
             Some(m) => m.map(|s| s.as_str()),
             None => None,
         };

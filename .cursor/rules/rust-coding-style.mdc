@@ -33,6 +33,32 @@ In short, centralize dependency source/version management in the workspace root,
 pub struct UserId(Uuid);
 ```
 
+### When implementing methods for a generic struct in Rust, prefer placing methods that do not
+depend on trait bounds in impl blocks without where clauses.
+
+Purpose: This improves code readability, avoids unnecessary repetition of bounds, and helps separate general methods from those requiring specific constraints.
+```rust
+struct MyStruct<T> {
+    value: T,
+}
+
+// Methods without trait bounds go here
+impl<T> MyStruct<T> {
+    pub fn new(value: T) -> Self {
+        Self { value }
+    }
+}
+
+// Methods that require trait bounds go here
+impl<T> MyStruct<T>
+where
+    T: std::fmt::Display,
+{
+    pub fn print(&self) {
+        println!("{}", self.value);
+    }
+}
+```
 ## Async Patterns
 
 - Use `impl Future<Output = T> + Send` in trait definitions:

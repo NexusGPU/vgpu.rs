@@ -51,6 +51,8 @@ pub struct SubscriptionRequest {
     pub namespace: String,
     /// Name of the container within the pod to monitor
     pub container_name: String,
+    /// The PID within the container's namespace to find.
+    pub container_pid: u32,
 }
 
 /// Errors that can occur during host PID probing operations.
@@ -109,10 +111,11 @@ impl HostPidProbe {
         }
     }
 
-    /// Subscribes to receive notification when a specific pod/container is found.
+    /// Subscribes to receive notification for a single, specific process.
     ///
-    /// Returns a [`oneshot::Receiver`] that will receive a [`PodProcessInfo`]
-    /// when the requested pod and container combination is discovered.
+    /// The `request` must contain a `container_pid`. Returns a [`oneshot::Receiver`]
+    /// that will receive a [`PodProcessInfo`] when the requested pod, container,
+    /// and container PID combination is discovered.
     ///
     /// # Examples
     ///
@@ -125,6 +128,7 @@ impl HostPidProbe {
     ///     pod_name: "my-pod".to_string(),
     ///     namespace: "my-namespace".to_string(),
     ///     container_name: "my-container".to_string(),
+    ///     container_pid: 42,
     /// };
     ///
     /// let receiver = probe.subscribe(request).await;
@@ -150,6 +154,7 @@ impl HostPidProbe {
         info!(
             pod_name = %request.pod_name,
             container_name = %request.container_name,
+            container_pid = %request.container_pid,
             "Added subscription"
         );
 
@@ -214,41 +219,35 @@ impl HostPidProbe {
         };
 
         let mut subscriptions_guard = subscriptions.lock().await;
-        let mut completed_requests = Vec::new();
+        if subscriptions_guard.is_empty() {
+            return false;
+        }
 
-        for (request, _) in subscriptions_guard.iter() {
-            if let Some(_process_info) = found_processes.iter().find(|info| {
-                info.pod_name == request.pod_name
-                    && info.namespace == request.namespace
-                    && info.container_name == request.container_name
-            }) {
-                completed_requests.push(request.clone());
+        if found_processes.is_empty() {
+            return true; // Keep scanning if there are subscriptions
+        }
+
+        let mut fulfilled_requests = Vec::new();
+
+        for process in found_processes {
+            let key = SubscriptionRequest {
+                pod_name: process.pod_name.clone(),
+                namespace: process.namespace.clone(),
+                container_name: process.container_name.clone(),
+                container_pid: process.container_pid,
+            };
+
+            if subscriptions_guard.contains_key(&key) {
+                fulfilled_requests.push((key, process));
             }
         }
 
-        // Send notifications and remove completed subscriptions
-        for request in completed_requests {
-            if let Some(sender) = subscriptions_guard.remove(&request) {
-                if let Some(process_info) = found_processes.iter().find(|info| {
-                    info.pod_name == request.pod_name
-                        && info.namespace == request.namespace
-                        && info.container_name == request.container_name
-                }) {
-                    if sender.send(process_info.clone()).is_err() {
-                        warn!(
-                            pod_name = %request.pod_name,
-                            container_name = %request.container_name,
-                            "Receiver dropped for subscription"
-                        );
-                    } else {
-                        info!(
-                            pod_name = %request.pod_name,
-                            container_name = %request.container_name,
-                            host_pid = process_info.host_pid,
-                            container_pid = process_info.container_pid,
-                            "Notified subscriber"
-                        );
-                    }
+        for (key, process_info) in fulfilled_requests {
+            if let Some(sender) = subscriptions_guard.remove(&key) {
+                if sender.send(process_info).is_err() {
+                    warn!(?key, "Receiver dropped for subscription");
+                } else {
+                    info!(?key, "Notified subscriber");
                 }
             }
         }
@@ -445,6 +444,7 @@ mod tests {
             pod_name: "test-pod".to_string(),
             namespace: "test-namespace".to_string(),
             container_name: "test-container".to_string(),
+            container_pid: 123,
         };
 
         let _receiver = probe.subscribe(request.clone()).await;
@@ -511,12 +511,14 @@ mod tests {
             pod_name: "pod1".to_string(),
             namespace: "namespace1".to_string(),
             container_name: "container1".to_string(),
+            container_pid: 1,
         };
 
         let request2 = SubscriptionRequest {
             pod_name: "pod1".to_string(),
             namespace: "namespace2".to_string(),
             container_name: "container1".to_string(),
+            container_pid: 1,
         };
 
         assert_ne!(
@@ -609,18 +611,21 @@ mod tests {
             pod_name: "pod1".to_string(),
             namespace: "namespace1".to_string(),
             container_name: "container1".to_string(),
+            container_pid: 1,
         };
 
         let request2 = SubscriptionRequest {
             pod_name: "pod1".to_string(),
             namespace: "namespace1".to_string(),
             container_name: "container1".to_string(),
+            container_pid: 1,
         };
 
         let request3 = SubscriptionRequest {
             pod_name: "pod2".to_string(),
             namespace: "namespace1".to_string(),
             container_name: "container1".to_string(),
+            container_pid: 1,
         };
 
         assert_eq!(request1, request2, "Identical requests should be equal");
@@ -655,6 +660,7 @@ mod tests {
             pod_name: "test-pod".to_string(),
             namespace: "test-namespace".to_string(),
             container_name: "test-container".to_string(),
+            container_pid: 123,
         };
 
         let _receiver = probe.subscribe(request).await;
