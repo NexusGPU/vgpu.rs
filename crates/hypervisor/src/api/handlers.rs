@@ -121,6 +121,7 @@ pub async fn get_worker_info(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -166,6 +167,8 @@ mod tests {
             gpu_uuids: Some(vec!["gpu1".to_string()]),
             qos_level: Some(QosLevel::High),
             host_pid: 0,
+            workload_name: Some("test-workload".to_string()),
+            labels: BTreeMap::new(),
         };
 
         WorkerEntry {
@@ -298,6 +301,8 @@ mod tests {
             gpu_uuids: Some(vec!["gpu1".to_string()]),
             qos_level: Some(QosLevel::High),
             host_pid: 0,
+            workload_name: Some("test-workload".to_string()),
+            labels: BTreeMap::new(),
         };
 
         let entry = WorkerEntry {

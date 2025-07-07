@@ -38,3 +38,4 @@ path = "src/main.rs"
 [dev-dependencies]
 similar-asserts = { workspace = true }
 test-log = { workspace = true }
+criterion = { version = "0.6", features = ["html_reports"] }
