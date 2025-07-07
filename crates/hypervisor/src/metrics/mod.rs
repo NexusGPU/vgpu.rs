@@ -4,11 +4,12 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use influxdb_line_protocol::LineProtocolBuilder;
-
 use crate::config::GPU_CAPACITY_MAP;
 use crate::gpu_observer::GpuObserver;
 use crate::worker_manager::WorkerManager;
+
+pub mod encoders;
+use encoders::create_encoder;
 
 // Wrapper struct for Vec<u8> that implements Display
 pub struct BytesWrapper(Vec<u8>);
@@ -65,11 +66,12 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
     node_name: Option<String>,
     gpu_pool: Option<String>,
     worker_mgr: Arc<WorkerManager<AddCB, RemoveCB>>,
-    _metrics_format: String,
+    metrics_format: String,
     metrics_extra_labels: Option<String>,
 ) {
     let node_name = node_name.unwrap_or("unknown".to_string());
     let gpu_pool = gpu_pool.unwrap_or("unknown".to_string());
+    let encoder = create_encoder(&metrics_format);
 
     let mut gpu_acc: HashMap<String, AccumulatedGpuMetrics> = HashMap::new();
 
@@ -153,30 +155,21 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
             // Output averaged PCIE metrics
             for (gpu_uuid, acc) in &gpu_acc {
                 if acc.count > 0 {
-                    let lp = LineProtocolBuilder::new()
-                        .measurement("tf_gpu_usage")
-                        .tag("node", node_name.as_str())
-                        .tag("pool", gpu_pool.as_str())
-                        .tag("uuid", gpu_uuid.as_str())
-                        .field("rx", acc.rx / acc.count as f64)
-                        .field("tx", acc.tx / acc.count as f64)
-                        .field("temperature", acc.temperature / acc.count as f64)
-                        .field("memory_bytes", acc.memory_bytes / acc.count as u64)
-                        .field(
-                            "compute_percentage",
-                            acc.compute_percentage / acc.count as f64,
-                        )
-                        .field("compute_tflops", acc.compute_tflops / acc.count as f64)
-                        // TODO, calculate memory percentage based on GPU capacity read from nvml once
-                        // .field("memory_percentage", acc.memory_bytes / acc.count as u64)
-                        .timestamp(timestamp)
-                        .close_line()
-                        .build();
-                    // Convert BytesWrapper to string first
-                    let lp_str = BytesWrapper::from(lp).to_string();
+                    let metrics_str = encoder.encode_gpu_metrics(
+                        gpu_uuid,
+                        &node_name,
+                        &gpu_pool,
+                        acc.rx / acc.count as f64,
+                        acc.tx / acc.count as f64,
+                        acc.temperature / acc.count as f64,
+                        acc.memory_bytes / acc.count as u64,
+                        acc.compute_percentage / acc.count as f64,
+                        acc.compute_tflops / acc.count as f64,
+                        timestamp,
+                    );
                     tracing::info!(
                         target: "metrics",
-                        msg = %lp_str,
+                        msg = %metrics_str,
                     );
                 }
             }
@@ -190,36 +183,33 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
                     let labels = worker_entry.info.labels.clone();
 
                     if acc.count > 0 {
-                        let mut lp = LineProtocolBuilder::new()
-                            .measurement("tf_worker_usage")
-                            .tag("node", node_name.as_str())
-                            .tag("pool", gpu_pool.as_str())
-                            .tag("uuid", gpu_uuid.as_str())
-                            .tag("worker", pod_identifier)
-                            .tag("namespace", worker_entry.info.namespace.as_str())
-                            .tag("workload", worker_entry.info.workload_name.as_deref().unwrap_or("unknown"));
-
+                        let mut extra_labels = HashMap::new();
                         if has_dynamic_metrics_labels {
                             for label in &metrics_extra_labels {
-                                lp = lp.tag(label, labels.get(*label).unwrap_or(&String::from("unknown")));
+                                extra_labels.insert(
+                                    label.to_string(),
+                                    labels.get(*label).unwrap_or(&String::from("unknown")).clone(),
+                                );
                             }
                         }
-                        let lp_with_tags = lp.field("memory_bytes", acc.memory_bytes / acc.count as u64)
-                            .field(
-                                "compute_percentage",
-                                acc.compute_percentage / acc.count as f64,
-                            )
-                            .field("compute_tflops", acc.compute_tflops / acc.count as f64)
-                            .field("memory_percentage", (acc.memory_bytes as f64 / acc.count as f64) / worker_entry.info.vram_limit.unwrap_or(0) as f64)
-                            .field("memory_bytes", acc.memory_bytes / acc.count as u64)
-                            .timestamp(timestamp)
-                            .close_line()
-                            .build();
-                        // Convert BytesWrapper to string first
-                        let lp_str = BytesWrapper::from(lp_with_tags).to_string();
+
+                        let metrics_str = encoder.encode_worker_metrics(
+                            gpu_uuid,
+                            &node_name,
+                            &gpu_pool,
+                            pod_identifier,
+                            &worker_entry.info.namespace,
+                            worker_entry.info.workload_name.as_deref().unwrap_or("unknown"),
+                            acc.memory_bytes / acc.count as u64,
+                            acc.compute_percentage / acc.count as f64,
+                            acc.compute_tflops / acc.count as f64,
+                            (acc.memory_bytes as f64 / acc.count as f64) / worker_entry.info.vram_limit.unwrap_or(0) as f64,
+                            timestamp,
+                            &extra_labels,
+                        );
                         tracing::info!(
                             target: "metrics",
-                            msg = %lp_str,
+                            msg = %metrics_str,
                         );
                     }
                 }
