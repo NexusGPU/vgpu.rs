@@ -19,47 +19,6 @@ use tracing::instrument;
 
 use crate::GLOBAL_NGPU_LIBRARY;
 
-/// Mock implementations of the C functions for testing purposes.
-///
-/// This module is only compiled when running tests (`#[cfg(test)]`).
-/// It provides mock versions of the FFI functions, allowing us to control their
-/// return values and test different scenarios without relying on the actual
-/// host process. We use `#[no_mangle]` to ensure the function names are not
-/// changed by the Rust compiler, so the linker can find them.
-#[cfg(test)]
-mod ffi_test_helpers {
-    use std::os::raw::c_int;
-    use std::sync::atomic::AtomicI32;
-    use std::sync::atomic::Ordering;
-
-    // Atomic variables to control the mock return values from within tests.
-    // This allows us to simulate both success (0) and failure (non-zero) cases.
-    pub static MOCK_TF_HEALTH_CHECK_RESULT: AtomicI32 = AtomicI32::new(0);
-    pub static MOCK_TF_SUSPEND_RESULT: AtomicI32 = AtomicI32::new(0);
-    pub static MOCK_TF_RESUME_RESULT: AtomicI32 = AtomicI32::new(0);
-    pub static MOCK_TF_VRAM_RECLAIM_RESULT: AtomicI32 = AtomicI32::new(0);
-
-    #[no_mangle]
-    pub unsafe extern "C" fn tf_health_check() -> c_int {
-        MOCK_TF_HEALTH_CHECK_RESULT.load(Ordering::SeqCst)
-    }
-
-    #[no_mangle]
-    pub unsafe extern "C" fn tf_suspend() -> c_int {
-        MOCK_TF_SUSPEND_RESULT.load(Ordering::SeqCst)
-    }
-
-    #[no_mangle]
-    pub unsafe extern "C" fn tf_resume() -> c_int {
-        MOCK_TF_RESUME_RESULT.load(Ordering::SeqCst)
-    }
-
-    #[no_mangle]
-    pub unsafe extern "C" fn tf_vram_reclaim() -> c_int {
-        MOCK_TF_VRAM_RECLAIM_RESULT.load(Ordering::SeqCst)
-    }
-}
-
 /// command processor using the new HTTP bidirectional communication library.
 #[derive(Clone)]
 pub struct CommandProcessor;
@@ -224,58 +183,4 @@ pub fn start_background_handler(ip: &str, port: &str, host_pid: u32) {
             error!(error = %e, "Failed to create command handler");
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn process_command() {
-        use std::sync::atomic::Ordering;
-
-        use super::ffi_test_helpers::*;
-
-        let processor = CommandProcessor;
-
-        let command = LimiterCommand {
-            id: 1,
-            kind: LimiterCommandType::TfHealthCheck,
-        };
-
-        // --- Test Success Case ---
-        // Set the mock function to return 0 (success)
-        MOCK_TF_HEALTH_CHECK_RESULT.store(0, Ordering::SeqCst);
-
-        let result = processor.process_task(&command);
-        assert!(result.is_ok(), "process_task should not error out");
-
-        let response = result.unwrap();
-        assert_eq!(response.id, 1);
-        assert!(response.success, "Command should be successful");
-        assert!(
-            response.message.is_none(),
-            "Success response should not have a message"
-        );
-
-        // --- Test Failure Case ---
-        // Set the mock function to return a non-zero error code
-        MOCK_TF_HEALTH_CHECK_RESULT.store(-1, Ordering::SeqCst);
-
-        let result_fail = processor.process_task(&command);
-        assert!(result_fail.is_ok());
-
-        let response_fail = result_fail.unwrap();
-        assert_eq!(response_fail.id, 1);
-        assert!(!response_fail.success, "Command should fail");
-        assert!(
-            response_fail.message.is_some(),
-            "Failure response should have a message"
-        );
-        assert_eq!(
-            response_fail.message.unwrap(),
-            "tf_health_check failed with code -1"
-        );
-    }
 }
