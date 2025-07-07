@@ -17,17 +17,16 @@
                 "filter": {
                     "name": "hypervisor",
                     "kind": "bin"
-                }
+                },
             },
             "env": {
                 "TF_ENABLE_LOG": "1",
-                "TF_LOG_PATH": "logs/tf.log",
+                "GPU_NODE_NAME": "gpu-2"
             },
             "args": [
-                "--sock-path",
-                "/tensor-fusion/worker/sock/",
-                "--ipc-path",
-                "/tensor-fusion/worker/ipc"
+                "--enable-k8s",
+                "--gpu-metrics-file",
+                "logs/metrics.log"
             ],
             "cwd": "${workspaceFolder}"
         }
