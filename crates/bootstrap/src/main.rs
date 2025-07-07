@@ -7,8 +7,9 @@ const TENSOR_FUSION_DIR: &str = "/tensor-fusion";
 const SOURCE_DIR: &str = "/home/app";
 const NVIDIA_SMI_SOURCE: &str = "nvidia-smi-linux";
 const PRELOAD_CONFIG_PATH: &str = "/tensor-fusion/ld.so.preload";
-const PRELOAD_LIBS: &str = "/tensor-fusion/libadd_path.so\n/tensor-fusion/libcuda.so\n";
-const NGPU_PRELOAD_LIBS: &str = "/tensor-fusion/libcuda_limiter.so\n";
+const PRELOAD_ADD_PATH_LIBS: &str = "/tensor-fusion/libadd_path.so\n";
+const PRELOAD_CUDA_STUB_LIBS: &str = "/tensor-fusion/libcuda.so\n";
+const PRELOAD_NGPU_LIBS: &str = "/tensor-fusion/libcuda_limiter.so\n";
 const NVIDIA_ML_LIB: &str = "/tensor-fusion/libnvidia-ml.so";
 const NVIDIA_ML_SYMLINK: &str = "/tensor-fusion/libnvidia-ml.so.1";
 const NVIDIA_SMI_TARGET: &str = "/tensor-fusion/nvidia-smi";
@@ -42,13 +43,13 @@ fn write_ld_preload_config() -> Result<()> {
             log_info("nGPU mode detected");
             if std::env::var("DISABLE_GPU_LIMITER").unwrap_or_default() == "true" {
                 log_info("GPU limiter disabled");
-                PRELOAD_LIBS.to_string()
+                format!("{}{}", PRELOAD_ADD_PATH_LIBS, PRELOAD_CUDA_STUB_LIBS)
             } else {
-                format!("{}{}", PRELOAD_LIBS, NGPU_PRELOAD_LIBS)
+                format!("{}{}", PRELOAD_ADD_PATH_LIBS, PRELOAD_NGPU_LIBS)
             }
         } else {
             log_info("vGPU mode detected");
-            PRELOAD_LIBS.to_string()
+            format!("{}{}", PRELOAD_ADD_PATH_LIBS, PRELOAD_CUDA_STUB_LIBS)
         },
     )
     .map_err(|e| {
