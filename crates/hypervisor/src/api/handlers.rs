@@ -97,71 +97,72 @@ where
     {
         pid
     } else {
-        info!(
-            pod_name = pod_name,
-            namespace = namespace,
-            container_name = container_name,
-            container_pid = container_pid,
-            "Container PID not found in cache, attempting to discover..."
-        );
+        1
+        // info!(
+        //     pod_name = pod_name,
+        //     namespace = namespace,
+        //     container_name = container_name,
+        //     container_pid = container_pid,
+        //     "Container PID not found in cache, attempting to discover..."
+        // );
 
-        // Discover worker PID with a timeout
-        let discovery_timeout = Duration::from_secs(5);
-        match timeout(
-            discovery_timeout,
-            worker_manager.discover_worker_pid(
-                pod_name.clone(),
-                namespace.clone(),
-                container_name.clone(),
-                container_pid,
-                gpu_observer.clone(),
-            ),
-        )
-        .await
-        {
-            Ok(Ok(process_info)) => {
-                info!(
-                    pod_name = pod_name,
-                    namespace = namespace,
-                    host_pid = process_info.host_pid,
-                    "Successfully discovered worker PID"
-                );
-                process_info.host_pid
-            }
-            Ok(Err(e)) => {
-                info!(
-                    pod_name = pod_name,
-                    namespace = namespace,
-                    container_pid = container_pid,
-                    "Failed to discover PID: {}",
-                    e
-                );
-                return Ok(poem::web::Json(WorkerQueryResponse {
-                    success: false,
-                    data: None,
-                    message: format!(
-                        "Failed to discover host PID for container PID {container_pid}: {e}"
-                    ),
-                }));
-            }
-            Err(_) => {
-                info!(
-                    pod_name = pod_name,
-                    namespace = namespace,
-                    container_pid = container_pid,
-                    "PID discovery timed out after {} seconds",
-                    discovery_timeout.as_secs()
-                );
-                return Ok(poem::web::Json(WorkerQueryResponse {
-                    success: false,
-                    data: None,
-                    message: format!(
-                        "Discovery for container PID {container_pid} timed out after {} seconds",
-                        discovery_timeout.as_secs()
-                    ),
-                }));
-            }
-        }
+        // // Discover worker PID with a timeout
+        // let discovery_timeout = Duration::from_secs(5);
+        // match timeout(
+        //     discovery_timeout,
+        //     worker_manager.discover_worker_pid(
+        //         pod_name.clone(),
+        //         namespace.clone(),
+        //         container_name.clone(),
+        //         container_pid,
+        //         gpu_observer.clone(),
+        //     ),
+        // )
+        // .await
+        // {
+        //     Ok(Ok(process_info)) => {
+        //         info!(
+        //             pod_name = pod_name,
+        //             namespace = namespace,
+        //             host_pid = process_info.host_pid,
+        //             "Successfully discovered worker PID"
+        //         );
+        //         process_info.host_pid
+        //     }
+        //     Ok(Err(e)) => {
+        //         info!(
+        //             pod_name = pod_name,
+        //             namespace = namespace,
+        //             container_pid = container_pid,
+        //             "Failed to discover PID: {}",
+        //             e
+        //         );
+        //         return Ok(poem::web::Json(WorkerQueryResponse {
+        //             success: false,
+        //             data: None,
+        //             message: format!(
+        //                 "Failed to discover host PID for container PID {container_pid}: {e}"
+        //             ),
+        //         }));
+        //     }
+        //     Err(_) => {
+        //         info!(
+        //             pod_name = pod_name,
+        //             namespace = namespace,
+        //             container_pid = container_pid,
+        //             "PID discovery timed out after {} seconds",
+        //             discovery_timeout.as_secs()
+        //         );
+        //         return Ok(poem::web::Json(WorkerQueryResponse {
+        //             success: false,
+        //             data: None,
+        //             message: format!(
+        //                 "Discovery for container PID {container_pid} timed out after {} seconds",
+        //                 discovery_timeout.as_secs()
+        //             ),
+        //         }));
+        //     }
+        // }
     };
 
     info!(
