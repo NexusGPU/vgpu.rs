@@ -105,15 +105,18 @@ fn fetch_device_configs_from_hypervisor(
     }
 
     // Parse response
-    let pod_response: WorkerQueryResponse =
+    let worker_info_response: WorkerQueryResponse =
         response.json().change_context(ConfigError::JsonParsing)?;
 
-    if !pod_response.success {
-        tracing::error!("Hypervisor API returned error: {}", pod_response.message);
+    if !worker_info_response.success {
+        tracing::error!(
+            "Hypervisor API returned error: {}",
+            worker_info_response.message
+        );
         return Err(Report::new(ConfigError::HttpRequest));
     }
 
-    let pod_info = pod_response.data.ok_or_else(|| {
+    let worker_info = worker_info_response.data.ok_or_else(|| {
         tracing::error!("No pod data returned from hypervisor API");
         Report::new(ConfigError::JsonParsing)
     })?;
@@ -122,7 +125,7 @@ fn fetch_device_configs_from_hypervisor(
     // Note: We need to extract device configuration from the pod resource info
     // For now, we'll create a single device config based on the resource limits
     let device_configs = if let (Some(tflops_limit), Some(vram_limit)) =
-        (pod_info.tflops_limit, pod_info.vram_limit)
+        (worker_info.tflops_limit, worker_info.vram_limit)
     {
         vec![DeviceConfig {
             device_idx: 0,                   // Default to device 0, may need to be configurable
@@ -139,9 +142,16 @@ fn fetch_device_configs_from_hypervisor(
         device_configs.len()
     );
 
+    if let Some(gpu_uuids) = worker_info.gpu_uuids {
+        if gpu_uuids.len() > 0 {
+            env::set_var("CUDA_VISIBLE_DEVICES", &gpu_uuids.join(","));
+            env::set_var("NVIDIA_VISIBLE_DEVICES", &gpu_uuids.join(","));
+        }
+    }
+
     Ok(DeviceConfigResult {
         device_configs,
-        host_pid: pod_info.host_pid,
+        host_pid: worker_info.host_pid,
     })
 }
 
