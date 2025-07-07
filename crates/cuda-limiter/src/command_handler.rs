@@ -3,7 +3,6 @@
 //! This module demonstrates how to replace the existing command_handler implementation
 //! with the new generic HTTP bidirectional communication library.
 
-use std::env;
 use std::os::raw::c_int;
 use std::sync::Arc;
 
@@ -130,12 +129,6 @@ impl CommandHandlerConfig {
             client_config,
             limiter_id: format!("limiter_{host_pid}"),
         }
-    }
-
-    /// Set the limiter ID.
-    pub fn with_limiter_id(mut self, limiter_id: impl Into<String>) -> Self {
-        self.limiter_id = limiter_id.into();
-        self
     }
 }
 

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use error_stack::Report;
-use poem::get;
 use poem::listener::TcpListener;
 use poem::middleware::Tracing;
 use poem::post;
@@ -24,33 +23,42 @@ use super::auth::JwtAuthMiddleware;
 use super::errors::ApiError;
 use super::types::JwtAuthConfig;
 use crate::api::handlers::get_worker_info;
+use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
+use crate::worker_manager::WorkerManager;
 use crate::worker_manager::WorkerRegistry;
 
 /// HTTP API server for querying pod resource information
-pub struct ApiServer {
-    worker_registry: WorkerRegistry,
+pub struct ApiServer<AddCB, RemoveCB> {
+    worker_manager: Arc<WorkerManager<AddCB, RemoveCB>>,
     listen_addr: String,
     jwt_config: JwtAuthConfig,
     trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
     command_dispatcher: Arc<CommandDispatcher>,
+    gpu_observer: Arc<GpuObserver>,
 }
 
-impl ApiServer {
+impl<AddCB, RemoveCB> ApiServer<AddCB, RemoveCB>
+where
+    AddCB: Fn(u32, Arc<crate::process::worker::TensorFusionWorker>) + Send + Sync + 'static,
+    RemoveCB: Fn(u32) + Send + Sync + 'static,
+{
     /// Create a new API server
     pub fn new(
-        worker_registry: WorkerRegistry,
+        worker_manager: Arc<WorkerManager<AddCB, RemoveCB>>,
         listen_addr: String,
         jwt_config: JwtAuthConfig,
         trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
         command_dispatcher: Arc<CommandDispatcher>,
+        gpu_observer: Arc<GpuObserver>,
     ) -> Self {
         Self {
-            worker_registry,
+            worker_manager,
             listen_addr,
             jwt_config,
             trap_handler,
             command_dispatcher,
+            gpu_observer,
         }
     }
 
@@ -67,11 +75,16 @@ impl ApiServer {
         let limiter_routes = self.command_dispatcher.create_routes();
 
         let app = Route::new()
-            .at("/api/v1/worker", get(get_worker_info))
+            .at(
+                "/api/v1/worker",
+                get_worker_info::<AddCB, RemoveCB>::default(),
+            )
             .nest("/api/v1/trap", trap_routes)
             .nest("/api/v1/limiter", limiter_routes)
-            .data(self.worker_registry)
+            .data(self.worker_manager.registry().clone())
+            .data(self.worker_manager.clone())
             .data(self.command_dispatcher.clone())
+            .data(self.gpu_observer.clone())
             .with(JwtAuthMiddleware::new(self.jwt_config))
             .with(Tracing);
 

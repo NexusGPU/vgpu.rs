@@ -7,6 +7,9 @@ alwaysApply: false
 
 ## Error Handling Basics
 
+- Apply the fail-fast principle: functions should return early on errors instead of nesting logic or continuing execution after an error has occurred.
+- Use early return Err(...) or ? for propagating errors to simplify control flow and improve readability.
+- Avoid deeply nested if let or match blocks for error handling—prefer early exits.
 - Use error-stack (`Report<MyError>`) instead of anyhow or eyre for error handling
 - Use `Box<dyn Error>` only in tests or prototyping code
 - Use concrete error types with `Report<E>`, not `Report<Box<dyn Error>>`

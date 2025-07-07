@@ -64,7 +64,7 @@ pub(crate) fn load_gpu_info(
     // Update the global GPU capacity map
     let mut capacity_map_guard = GPU_CAPACITY_MAP.write().expect("poisoned");
     for (uuid, gpu_name) in gpu_uuid_to_name_map {
-        map_gpu_to_capacity(&mut capacity_map_guard, &gpu_name, &uuid, &model_mappings);
+        map_gpu_to_capacity(&mut capacity_map_guard, &gpu_name, uuid, &model_mappings);
     }
     Ok(())
 }
@@ -73,18 +73,18 @@ pub(crate) fn load_gpu_info(
 fn map_gpu_to_capacity(
     capacity_map: &mut HashMap<String, f64>,
     gpu_name: &str,
-    uuid: &str,
+    uuid: String,
     model_mappings: &HashMap<String, (String, f64)>,
 ) {
     // Try direct model match first
     if let Some((_, capacity)) = model_mappings.get(gpu_name) {
-        capacity_map.insert(uuid.to_string(), *capacity);
         tracing::info!(
             "Mapped GPU {} to model {} with capacity {} TFlops",
             uuid,
             gpu_name,
             capacity
         );
+        capacity_map.insert(uuid, *capacity);
         return;
     }
     // No match found, use default
@@ -92,5 +92,5 @@ fn map_gpu_to_capacity(
         "Could not find matching GPU model for {} in config",
         gpu_name
     );
-    capacity_map.insert(uuid.to_string(), DEFAULT_TFLOPS);
+    capacity_map.insert(uuid, DEFAULT_TFLOPS);
 }

@@ -1,12 +1,19 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use poem::handler;
 use poem::web::Data;
 use poem::web::Query;
 use poem::Request;
 use serde::Deserialize;
+use tokio::time::timeout;
 use tracing::info;
 
 use super::types::JwtPayload;
 use crate::api::types::WorkerQueryResponse;
+use crate::gpu_observer::GpuObserver;
+use crate::process::worker::TensorFusionWorker;
+use crate::worker_manager::WorkerManager;
 use crate::worker_manager::WorkerRegistry;
 
 /// Query parameters for worker lookup
@@ -18,11 +25,17 @@ pub struct WorkerQuery {
 
 /// Get pod resource information using JWT token info and container details
 #[handler]
-pub async fn get_worker_info(
+pub async fn get_worker_info<AddCB, RemoveCB>(
     req: &Request,
     query: Query<WorkerQuery>,
     worker_registry: Data<&WorkerRegistry>,
-) -> poem::Result<poem::web::Json<WorkerQueryResponse>> {
+    worker_manager: Data<&Arc<WorkerManager<AddCB, RemoveCB>>>,
+    gpu_observer: Data<&Arc<GpuObserver>>,
+) -> poem::Result<poem::web::Json<WorkerQueryResponse>>
+where
+    AddCB: Fn(u32, Arc<TensorFusionWorker>) + Send + Sync + 'static,
+    RemoveCB: Fn(u32) + Send + Sync + 'static,
+{
     // Extract JWT payload from request extensions
     let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
         poem::Error::from_string(
@@ -48,75 +61,129 @@ pub async fn get_worker_info(
     let worker_key = format!("{namespace}/{pod_name}");
 
     // First, check if the worker exists for this pod
-    if let Some(worker_entry) = registry.get(&worker_key) {
-        info!(pod_name = pod_name, "Worker found in registry");
-
-        // Then check if the container exists and has the requested PID
-        if let Some(container_info) = worker_entry.get_container(container_name) {
-            if let Some(&host_pid) = container_info.container_pid_to_host_pid.get(&container_pid) {
-                info!(
-                    pod_name = pod_name,
-                    namespace = namespace,
-                    container_name = container_name,
-                    container_pid = container_pid,
-                    host_pid = host_pid,
-                    "Found worker by JWT pod info and container details"
-                );
-
-                // Update the WorkerInfo with host_pid
-                let mut worker_info = worker_entry.info.clone();
-                worker_info.host_pid = host_pid;
-
-                Ok(poem::web::Json(WorkerQueryResponse {
-                    success: true,
-                    data: Some(worker_info),
-                    message: format!(
-                        "Worker found for pod {pod_name} in namespace {namespace}, container {container_name} with container PID {container_pid}, host PID {host_pid}"
-                    ),
-                }))
-            } else {
-                info!(
-                    pod_name = pod_name,
-                    namespace = namespace,
-                    container_name = container_name,
-                    container_pid = container_pid,
-                    "Container found but container PID not found"
-                );
-                Ok(poem::web::Json(WorkerQueryResponse {
-                    success: false,
-                    data: None,
-                    message: format!(
-                        "Container PID {container_pid} not found for container {container_name} in pod {pod_name} in namespace {namespace}"
-                    ),
-                }))
-            }
-        } else {
-            info!(
-                pod_name = pod_name,
-                namespace = namespace,
-                container_name = container_name,
-                "Worker found but container not found"
-            );
-            Ok(poem::web::Json(WorkerQueryResponse {
-                success: false,
-                data: None,
-                message: format!(
-                    "Container {container_name} not found for pod {pod_name} in namespace {namespace}"
-                ),
-            }))
-        }
-    } else {
+    let Some(worker_entry) = registry.get(&worker_key) else {
         info!(
             pod_name = pod_name,
             namespace = namespace,
             "Worker not found in registry"
         );
-        Ok(poem::web::Json(WorkerQueryResponse {
+        return Ok(poem::web::Json(WorkerQueryResponse {
             success: false,
             data: None,
             message: format!("Worker {pod_name} not found in namespace {namespace}"),
-        }))
-    }
+        }));
+    };
+    info!(pod_name = pod_name, "Worker found in registry");
+
+    // Then check if the container exists
+    let Some(container_info) = worker_entry.get_container(container_name) else {
+        info!(
+            pod_name = pod_name,
+            namespace = namespace,
+            container_name = container_name,
+            "Worker found but container not found"
+        );
+        return Ok(poem::web::Json(WorkerQueryResponse {
+            success: false,
+            data: None,
+            message: format!(
+                "Container {container_name} not found for pod {pod_name} in namespace {namespace}"
+            ),
+        }));
+    };
+
+    // Check if the container has the requested PID
+    let host_pid = if let Some(&pid) = container_info.container_pid_to_host_pid.get(&container_pid)
+    {
+        pid
+    } else {
+        info!(
+            pod_name = pod_name,
+            namespace = namespace,
+            container_name = container_name,
+            container_pid = container_pid,
+            "Container PID not found in cache, attempting to discover..."
+        );
+
+        // Discover worker PID with a timeout
+        let discovery_timeout = Duration::from_secs(5);
+        match timeout(
+            discovery_timeout,
+            worker_manager.discover_worker_pid(
+                pod_name.clone(),
+                namespace.clone(),
+                container_name.clone(),
+                container_pid,
+                gpu_observer.clone(),
+            ),
+        )
+        .await
+        {
+            Ok(Ok(process_info)) => {
+                info!(
+                    pod_name = pod_name,
+                    namespace = namespace,
+                    host_pid = process_info.host_pid,
+                    "Successfully discovered worker PID"
+                );
+                process_info.host_pid
+            }
+            Ok(Err(e)) => {
+                info!(
+                    pod_name = pod_name,
+                    namespace = namespace,
+                    container_pid = container_pid,
+                    "Failed to discover PID: {}",
+                    e
+                );
+                return Ok(poem::web::Json(WorkerQueryResponse {
+                    success: false,
+                    data: None,
+                    message: format!(
+                        "Failed to discover host PID for container PID {container_pid}: {e}"
+                    ),
+                }));
+            }
+            Err(_) => {
+                info!(
+                    pod_name = pod_name,
+                    namespace = namespace,
+                    container_pid = container_pid,
+                    "PID discovery timed out after {} seconds",
+                    discovery_timeout.as_secs()
+                );
+                return Ok(poem::web::Json(WorkerQueryResponse {
+                    success: false,
+                    data: None,
+                    message: format!(
+                        "Discovery for container PID {container_pid} timed out after {} seconds",
+                        discovery_timeout.as_secs()
+                    ),
+                }));
+            }
+        }
+    };
+
+    info!(
+        pod_name = pod_name,
+        namespace = namespace,
+        container_name = container_name,
+        container_pid = container_pid,
+        host_pid = host_pid,
+        "Found worker by JWT pod info and container details"
+    );
+
+    // Update the WorkerInfo with host_pid
+    let mut worker_info = worker_entry.info.clone();
+    worker_info.host_pid = host_pid;
+
+    Ok(poem::web::Json(WorkerQueryResponse {
+        success: true,
+        data: Some(worker_info),
+        message: format!(
+            "Worker found for pod {pod_name} in namespace {namespace}, container {container_name} with container PID {container_pid}, host PID {host_pid}"
+        ),
+    }))
 }
 
 #[cfg(test)]

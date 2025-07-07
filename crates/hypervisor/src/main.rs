@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
 
         tracing::info!("Found GPU {}: {} ({})", i, uuid, name);
         // Store GPU name and UUID mapping for config lookup
-        gpu_uuid_to_name_map.insert(uuid.clone(), name);
+        gpu_uuid_to_name_map.insert(uuid, name);
     }
 
     // Load GPU information from config file
@@ -332,15 +332,13 @@ async fn main() -> Result<()> {
         })
     };
 
-    // Start HTTP API server task
+    // Start API server task
     let api_task = {
-        let worker_registry = worker_manager.registry().clone();
-        let api_listen_addr = cli.api_listen_addr.clone();
         let hypervisor_for_api = hypervisor.clone();
         let command_dispatcher = command_dispatcher.clone();
         tokio::spawn(async move {
             tracing::info!("Starting HTTP API server task");
-            // TODO: Configure JWT public key from environment or config file
+            // The API server needs to own the trap handler
             let jwt_config = JwtAuthConfig {
                 public_key: std::env::var("JWT_PUBLIC_KEY").unwrap_or_else(|_| {
                     tracing::warn!("JWT_PUBLIC_KEY not set, using default placeholder");
@@ -348,14 +346,15 @@ async fn main() -> Result<()> {
                 }),
             };
             let api_server = ApiServer::new(
-                worker_registry,
-                api_listen_addr,
+                worker_manager.clone(),
+                cli.api_listen_addr.clone(),
                 jwt_config,
                 hypervisor_for_api,
                 command_dispatcher.clone(),
+                gpu_observer.clone(),
             );
             if let Err(e) = api_server.run(api_shutdown_receiver).await {
-                tracing::error!("HTTP API server failed: {e:?}");
+                tracing::error!("API server failed: {e}");
             }
         })
     };
