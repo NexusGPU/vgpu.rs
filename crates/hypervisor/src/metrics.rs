@@ -8,6 +8,7 @@ use influxdb_line_protocol::LineProtocolBuilder;
 
 use crate::config::GPU_CAPACITY_MAP;
 use crate::gpu_observer::GpuObserver;
+use crate::worker_manager::WorkerManager;
 
 // Wrapper struct for Vec<u8> that implements Display
 pub struct BytesWrapper(Vec<u8>);
@@ -58,25 +59,33 @@ struct AccumulatedWorkerMetrics {
 }
 
 /// Run metrics collection asynchronously
-pub(crate) async fn run_metrics(
+pub(crate) async fn run_metrics<AddCB, RemoveCB>(
     gpu_observer: Arc<GpuObserver>,
     metrics_batch_size: usize,
     node_name: Option<String>,
     gpu_pool: Option<String>,
+    worker_mgr: Arc<WorkerManager<AddCB, RemoveCB>>,
+    metrics_format: String,
+    metrics_extra_labels: Option<String>,
 ) {
     let node_name = node_name.unwrap_or("unknown".to_string());
     let gpu_pool = gpu_pool.unwrap_or("unknown".to_string());
 
     let mut gpu_acc: HashMap<String, AccumulatedGpuMetrics> = HashMap::new();
-    let mut worker_acc: HashMap<String, HashMap<u32, AccumulatedWorkerMetrics>> = HashMap::new();
+
+    // level 1 key is gpu_uuid, level 2 key is pod_ns/pod_name, value is GPU usage metrics
+    let mut worker_acc: HashMap<String, HashMap<String, AccumulatedWorkerMetrics>> = HashMap::new();
     let mut counter = 0;
 
+    let metrics_extra_labels = metrics_extra_labels.unwrap_or_default();
+    let metrics_extra_labels = metrics_extra_labels.split(',').collect::<Vec<&str>>();
+    let has_dynamic_metrics_labels = metrics_extra_labels.len() > 0;
+    
     let mut receiver = gpu_observer.subscribe();
     while receiver.recv().await.is_some() {
         counter += 1;
-        let metrics = gpu_observer.metrics.read().expect("poisoned");
         // Accumulate GPU metrics
-        for (gpu_uuid, gpu) in metrics.gpu_metrics.iter() {
+        for (gpu_uuid, gpu) in gpu_observer.metrics.read().expect("poisoned").gpu_metrics.iter() {
             let acc = gpu_acc.entry(gpu_uuid.clone()).or_default();
             acc.rx += gpu.rx as f64;
             acc.tx += gpu.tx as f64;
@@ -97,18 +106,42 @@ pub(crate) async fn run_metrics(
             acc.count += 1;
         }
 
+
         // Accumulate process metrics
-        for (gpu_uuid, (process_metrics, _)) in metrics.process_metrics.iter() {
-            let gpu_acc = worker_acc.entry(gpu_uuid.clone()).or_default();
+        // Create a snapshot of process metrics data to avoid holding RwLockReadGuard across await
+        let process_metrics_snapshot: Vec<(String, Vec<(u32, crate::GpuResources)>)> = {
+            let metrics_guard = gpu_observer.metrics.read().expect("poisoned");
+            metrics_guard.process_metrics.iter()
+                .map(|(gpu_uuid, (process_metrics, _))| {
+                    let processes: Vec<(u32, crate::GpuResources)> = process_metrics.iter()
+                        .map(|(pid, resources)| (*pid, resources.clone()))
+                        .collect();
+                    (gpu_uuid.clone(), processes)
+                })
+                .collect()
+        }; // RwLockReadGuard is dropped here
+        
+        for (gpu_uuid, process_metrics) in process_metrics_snapshot {
+            let worker_acc = worker_acc.entry(gpu_uuid.clone()).or_default();
             for (pid, resources) in process_metrics.iter() {
-                let acc = gpu_acc.entry(*pid).or_default();
+                let worker_entry = worker_mgr.find_worker_by_pid(*pid).await;
+                if worker_entry.is_none() {
+                    tracing::debug!(
+                        msg = "Failed to find worker, GPU may used by unknown process not managed by TensorFusion",
+                        pid = *pid,
+                    );
+                    continue;
+                }
+                let worker_info = worker_entry.unwrap().info;
+                let pod_identifier = format!("{}:{}", worker_info.namespace, worker_info.pod_name);
+                let acc = worker_acc.entry(pod_identifier).or_default();
                 acc.memory_bytes += resources.memory_bytes;
                 acc.compute_percentage += resources.compute_percentage as f64;
                 acc.compute_tflops += resources.compute_percentage as f64
                     * GPU_CAPACITY_MAP
                         .read()
                         .expect("poisoned")
-                        .get(gpu_uuid)
+                        .get(&gpu_uuid)
                         .unwrap();
                 acc.count += 1;
             }
@@ -122,7 +155,7 @@ pub(crate) async fn run_metrics(
                 if acc.count > 0 {
                     let lp = LineProtocolBuilder::new()
                         .measurement("tf_gpu_usage")
-                        .tag("node_name", node_name.as_str())
+                        .tag("node", node_name.as_str())
                         .tag("pool", gpu_pool.as_str())
                         .tag("uuid", gpu_uuid.as_str())
                         .field("rx", acc.rx / acc.count as f64)
@@ -134,6 +167,7 @@ pub(crate) async fn run_metrics(
                             acc.compute_percentage / acc.count as f64,
                         )
                         .field("compute_tflops", acc.compute_tflops / acc.count as f64)
+                        .field("memory_percentage", acc.memory_bytes / acc.count as u64)
                         .timestamp(timestamp)
                         .close_line()
                         .build();
@@ -147,26 +181,41 @@ pub(crate) async fn run_metrics(
             }
 
             // Output averaged worker metrics
-            for (gpu_uuid, pid_metrics) in &worker_acc {
-                for (pid, acc) in pid_metrics {
+            let worker_registry = worker_mgr.registry().read().await;
+            for (gpu_uuid, pod_metrics) in &worker_acc {
+                for (pod_identifier, acc) in pod_metrics {
+
+                    let worker_entry = worker_registry.get(pod_identifier).unwrap();
+                    let labels = worker_entry.info.labels.clone();
+
                     if acc.count > 0 {
-                        let lp = LineProtocolBuilder::new()
+                        let mut lp = LineProtocolBuilder::new()
                             .measurement("tf_worker_usage")
-                            .tag("node_name", node_name.as_str())
+                            .tag("node", node_name.as_str())
                             .tag("pool", gpu_pool.as_str())
                             .tag("uuid", gpu_uuid.as_str())
-                            .tag("pid", &pid.to_string())
-                            .field("memory_bytes", acc.memory_bytes / acc.count as u64)
+                            .tag("worker", pod_identifier)
+                            .tag("namespace", worker_entry.info.namespace.as_str())
+                            .tag("workload", worker_entry.info.workload_name.as_deref().unwrap_or("unknown"));
+
+                        if has_dynamic_metrics_labels {
+                            for label in &metrics_extra_labels {
+                                lp = lp.tag(label, labels.get(*label).unwrap_or(&String::from("unknown")));
+                            }
+                        }
+                        let lp_with_tags = lp.field("memory_bytes", acc.memory_bytes / acc.count as u64)
                             .field(
                                 "compute_percentage",
                                 acc.compute_percentage / acc.count as f64,
                             )
                             .field("compute_tflops", acc.compute_tflops / acc.count as f64)
+                            .field("memory_percentage", (acc.memory_bytes as f64 / acc.count as f64) / worker_entry.info.vram_limit.unwrap_or(0) as f64)
+                            .field("memory_bytes", acc.memory_bytes / acc.count as u64)
                             .timestamp(timestamp)
                             .close_line()
                             .build();
                         // Convert BytesWrapper to string first
-                        let lp_str = BytesWrapper::from(lp).to_string();
+                        let lp_str = BytesWrapper::from(lp_with_tags).to_string();
                         tracing::info!(
                             target: "metrics",
                             msg = %lp_str,
@@ -187,5 +236,5 @@ pub fn current_time() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_nanos() as i64
+        .as_millis() as i64
 }

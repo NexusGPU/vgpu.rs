@@ -17,7 +17,7 @@ use tracing::warn;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::host_pid_probe::SubscriptionRequest;
-use crate::k8s::TensorFusionAnnotations;
+use crate::k8s::TensorFusionPodInfo;
 use crate::process::worker::TensorFusionWorker;
 
 /// Container-level information within a pod
@@ -76,15 +76,41 @@ impl WorkerEntry {
     }
 }
 
+impl Default for WorkerEntry {
+    fn default() -> Self {
+        Self {
+            info: WorkerInfo::default(),
+            containers: HashMap::new(),
+        }
+    }
+}
+
 /// Worker registry for storing and managing worker information.
 pub type WorkerRegistry = Arc<RwLock<HashMap<String, WorkerEntry>>>;
+
+/// PID registry for mapping PIDs to worker entries.
+pub type PidRegistry = Arc<RwLock<HashMap<u32, WorkerEntry>>>;
 
 /// Worker manager that handles worker lifecycle based on pod events.
 pub struct WorkerManager<AddCB, RemoveCB> {
     registry: WorkerRegistry,
+    pid_registry: PidRegistry,
     add_callback: AddCB,
     remove_callback: RemoveCB,
     host_pid_probe: Arc<HostPidProbe>,
+}
+
+impl<AddCB, RemoveCB> WorkerManager<AddCB, RemoveCB> {
+    /// Find a worker by its PID.
+    pub async fn find_worker_by_pid(&self, pid: u32) -> Option<WorkerEntry> {
+        let pid_registry = self.pid_registry.read().await;
+        pid_registry.get(&pid).cloned()
+    }
+
+    /// Get the worker registry for API queries.
+    pub fn registry(&self) -> &WorkerRegistry {
+        &self.registry
+    }
 }
 
 impl<AddCB, RemoveCB> WorkerManager<AddCB, RemoveCB>
@@ -100,23 +126,22 @@ where
     ) -> Self {
         Self {
             registry: Arc::new(RwLock::new(HashMap::new())),
+            pid_registry: Arc::new(RwLock::new(HashMap::new())),
             add_callback,
             remove_callback,
             host_pid_probe,
         }
     }
 
-    /// Get the worker registry for API queries.
-    pub fn registry(&self) -> &WorkerRegistry {
-        &self.registry
-    }
+
+
 
     /// Handle a pod creation event.
     pub async fn handle_pod_created(
         &self,
         pod_name: String,
         namespace: String,
-        annotations: TensorFusionAnnotations,
+        pod_info: TensorFusionPodInfo,
         gpu_observer: Arc<GpuObserver>,
     ) -> Result<()> {
         let worker_key = format!("{namespace}/{pod_name}");
@@ -125,7 +150,7 @@ where
         // Store worker info in registry
         {
             let mut registry = self.registry.write().await;
-            registry.insert(worker_key.clone(), WorkerEntry::new(annotations.0.clone()));
+            registry.insert(worker_key.clone(), WorkerEntry::new(pod_info.0.clone()));
             info!("Added worker to registry: {worker_key}");
         }
 
@@ -255,6 +280,12 @@ where
 
             (self.add_callback)(host_pid, worker);
 
+            // Add to PID registry
+            {
+                let mut pid_registry = self.pid_registry.write().await;
+                pid_registry.insert(host_pid, entry.clone());
+            }
+
             info!(
                 "Associated worker {worker_key} container {container_name} with host PID {host_pid} and container PID {container_pid}"
             );
@@ -271,7 +302,7 @@ where
         &self,
         pod_name: String,
         namespace: String,
-        annotations: TensorFusionAnnotations,
+        pod_info: TensorFusionPodInfo,
         node_name: Option<String>,
     ) -> Result<()> {
         let worker_key = format!("{namespace}/{pod_name}");
@@ -282,10 +313,10 @@ where
         {
             let mut registry = self.registry.write().await;
             if let Some(entry) = registry.get_mut(&worker_key) {
-                entry.info.tflops_request = annotations.0.tflops_request;
-                entry.info.tflops_limit = annotations.0.tflops_limit;
-                entry.info.vram_request = annotations.0.vram_request;
-                entry.info.vram_limit = annotations.0.vram_limit;
+                entry.info.tflops_request = pod_info.0.tflops_request;
+                entry.info.tflops_limit = pod_info.0.tflops_limit;
+                entry.info.vram_request = pod_info.0.vram_request;
+                entry.info.vram_limit = pod_info.0.vram_limit;
                 entry.info.node_name = node_name;
                 info!("Updated worker in registry: {worker_key}");
             } else {
@@ -314,6 +345,11 @@ where
                         (self.remove_callback)(worker.pid());
                     }
                 }
+
+                {
+                    let mut pid_registry = self.pid_registry.write().await;
+                    pid_registry.remove(&entry.info.host_pid);
+                }
             } else {
                 warn!("Attempted to remove non-existent worker: {worker_key}");
             }
@@ -325,6 +361,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::atomic::AtomicU32;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -348,6 +385,8 @@ mod tests {
             gpu_uuids: Some(vec!["gpu1".to_string()]),
             qos_level: Some(QosLevel::High),
             host_pid: 0,
+            labels: BTreeMap::new(),
+            workload_name: Some("unknown".to_string()),
         };
 
         let entry = WorkerEntry::new(worker_info);
@@ -371,6 +410,8 @@ mod tests {
             gpu_uuids: Some(vec!["gpu1".to_string()]),
             qos_level: Some(QosLevel::High),
             host_pid: 0,
+            labels: BTreeMap::new(),
+            workload_name: Some("unknown".to_string()),
         };
 
         let entry = WorkerEntry::new(worker_info);
@@ -392,6 +433,8 @@ mod tests {
             gpu_uuids: Some(vec!["gpu1".to_string()]),
             qos_level: Some(QosLevel::High),
             host_pid: 0,
+            labels: BTreeMap::new(),
+            workload_name: Some("unknown".to_string()),
         };
 
         let entry = WorkerEntry::new(worker_info);

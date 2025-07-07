@@ -4,6 +4,8 @@
 //! in the vgpu project, including Pod resource information, query response formats,
 //! and related Kubernetes authentication types.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -46,6 +48,10 @@ pub struct WorkerInfo {
     pub containers: Option<Vec<String>>,
     /// Host pid
     pub host_pid: u32,
+    /// Workload name
+    pub workload_name: Option<String>,
+    /// Pod labels
+    pub labels: BTreeMap<String, String>,
 }
 
 /// Response format for Worker query API

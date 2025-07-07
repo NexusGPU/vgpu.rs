@@ -98,6 +98,21 @@ struct Cli {
         help = "HTTP API server listen address"
     )]
     api_listen_addr: String,
+
+    #[arg(
+        long,
+        env = "TF_HYPERVISOR_METRICS_FORMAT",
+        default_value = "influx",
+        help = "Metrics format, either 'influx' or 'json' or 'otel'"
+    )]
+    metrics_format: String,
+
+    #[arg(
+        long,
+        env = "TF_HYPERVISOR_METRICS_EXTRA_LABELS",
+        help = "Extra labels to add to metrics"
+    )]
+    metrics_extra_labels: Option<String>,
 }
 
 #[tokio::main]
@@ -199,9 +214,19 @@ async fn main() -> Result<()> {
         let metrics_batch_size = cli.metrics_batch_size;
         let node_name = cli.node_name.clone();
         let gpu_pool = cli.gpu_pool.clone();
+        let worker_manager = worker_manager.clone();
         tokio::spawn(async move {
             tracing::info!("Starting metrics collection task");
-            metrics::run_metrics(gpu_observer, metrics_batch_size, node_name, gpu_pool).await;
+            metrics::run_metrics(
+                gpu_observer,
+                metrics_batch_size,
+                node_name,
+                gpu_pool,
+                worker_manager,
+                cli.metrics_format,
+                cli.metrics_extra_labels,
+            )
+            .await;
         })
     };
 
@@ -245,21 +270,21 @@ async fn main() -> Result<()> {
                     WorkerUpdate::PodCreated {
                         pod_name,
                         namespace,
-                        annotations,
+                        pod_info,
                         node_name,
                     } => {
                         tracing::info!(
                             "Pod created: {}/{} with annotations: {:?}, node: {:?}",
                             namespace,
                             pod_name,
-                            annotations,
+                            pod_info,
                             node_name
                         );
                         if let Err(e) = worker_manager
                             .handle_pod_created(
                                 pod_name,
                                 namespace,
-                                annotations,
+                                pod_info,
                                 gpu_observer.clone(),
                             )
                             .await
@@ -270,18 +295,18 @@ async fn main() -> Result<()> {
                     WorkerUpdate::PodUpdated {
                         pod_name,
                         namespace,
-                        annotations,
+                        pod_info,
                         node_name,
                     } => {
                         tracing::info!(
                             "Pod updated: {}/{} with annotations: {:?}, node: {:?}",
                             namespace,
                             pod_name,
-                            annotations,
+                            pod_info,
                             node_name
                         );
                         if let Err(e) = worker_manager
-                            .handle_pod_updated(pod_name, namespace, annotations, node_name)
+                            .handle_pod_updated(pod_name, namespace, pod_info, node_name)
                             .await
                         {
                             tracing::error!("Failed to handle pod update: {e}");
