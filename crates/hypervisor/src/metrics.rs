@@ -65,7 +65,7 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
     node_name: Option<String>,
     gpu_pool: Option<String>,
     worker_mgr: Arc<WorkerManager<AddCB, RemoveCB>>,
-    metrics_format: String,
+    _metrics_format: String,
     metrics_extra_labels: Option<String>,
 ) {
     let node_name = node_name.unwrap_or("unknown".to_string());
@@ -106,9 +106,8 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
             acc.count += 1;
         }
 
-
         // Accumulate process metrics
-        // Create a snapshot of process metrics data to avoid holding RwLockReadGuard across await
+        // First, collect all the process metrics data to avoid holding the lock across await points
         let process_metrics_snapshot: Vec<(String, Vec<(u32, crate::GpuResources)>)> = {
             let metrics_guard = gpu_observer.metrics.read().expect("poisoned");
             metrics_guard.process_metrics.iter()
@@ -120,7 +119,8 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
                 })
                 .collect()
         }; // RwLockReadGuard is dropped here
-        
+
+        // Now process the collected data with async operations
         for (gpu_uuid, process_metrics) in process_metrics_snapshot {
             let worker_acc = worker_acc.entry(gpu_uuid.clone()).or_default();
             for (pid, resources) in process_metrics.iter() {
@@ -167,7 +167,8 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
                             acc.compute_percentage / acc.count as f64,
                         )
                         .field("compute_tflops", acc.compute_tflops / acc.count as f64)
-                        .field("memory_percentage", acc.memory_bytes / acc.count as u64)
+                        // TODO, calculate memory percentage based on GPU capacity read from nvml once
+                        // .field("memory_percentage", acc.memory_bytes / acc.count as u64)
                         .timestamp(timestamp)
                         .close_line()
                         .build();
