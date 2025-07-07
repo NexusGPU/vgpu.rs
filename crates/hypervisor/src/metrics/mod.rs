@@ -82,12 +82,18 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
     let metrics_extra_labels = metrics_extra_labels.unwrap_or_default();
     let metrics_extra_labels = metrics_extra_labels.split(',').collect::<Vec<&str>>();
     let has_dynamic_metrics_labels = metrics_extra_labels.len() > 0;
-    
+
     let mut receiver = gpu_observer.subscribe();
     while receiver.recv().await.is_some() {
         counter += 1;
         // Accumulate GPU metrics
-        for (gpu_uuid, gpu) in gpu_observer.metrics.read().expect("poisoned").gpu_metrics.iter() {
+        for (gpu_uuid, gpu) in gpu_observer
+            .metrics
+            .read()
+            .expect("poisoned")
+            .gpu_metrics
+            .iter()
+        {
             let acc = gpu_acc.entry(gpu_uuid.clone()).or_default();
             acc.rx += gpu.rx as f64;
             acc.tx += gpu.tx as f64;
@@ -112,9 +118,12 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
         // First, collect all the process metrics data to avoid holding the lock across await points
         let process_metrics_snapshot: Vec<(String, Vec<(u32, crate::GpuResources)>)> = {
             let metrics_guard = gpu_observer.metrics.read().expect("poisoned");
-            metrics_guard.process_metrics.iter()
+            metrics_guard
+                .process_metrics
+                .iter()
                 .map(|(gpu_uuid, (process_metrics, _))| {
-                    let processes: Vec<(u32, crate::GpuResources)> = process_metrics.iter()
+                    let processes: Vec<(u32, crate::GpuResources)> = process_metrics
+                        .iter()
                         .map(|(pid, resources)| (*pid, resources.clone()))
                         .collect();
                     (gpu_uuid.clone(), processes)
@@ -178,7 +187,6 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
             let worker_registry = worker_mgr.registry().read().await;
             for (gpu_uuid, pod_metrics) in &worker_acc {
                 for (pod_identifier, acc) in pod_metrics {
-
                     let worker_entry = worker_registry.get(pod_identifier).unwrap();
                     let labels = worker_entry.info.labels.clone();
 
@@ -188,7 +196,10 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
                             for label in &metrics_extra_labels {
                                 extra_labels.insert(
                                     label.to_string(),
-                                    labels.get(*label).unwrap_or(&String::from("unknown")).clone(),
+                                    labels
+                                        .get(*label)
+                                        .unwrap_or(&String::from("unknown"))
+                                        .clone(),
                                 );
                             }
                         }
@@ -199,11 +210,16 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
                             &gpu_pool,
                             pod_identifier,
                             &worker_entry.info.namespace,
-                            worker_entry.info.workload_name.as_deref().unwrap_or("unknown"),
+                            worker_entry
+                                .info
+                                .workload_name
+                                .as_deref()
+                                .unwrap_or("unknown"),
                             acc.memory_bytes / acc.count as u64,
                             acc.compute_percentage / acc.count as f64,
                             acc.compute_tflops / acc.count as f64,
-                            (acc.memory_bytes as f64 / acc.count as f64) / worker_entry.info.vram_limit.unwrap_or(0) as f64,
+                            (acc.memory_bytes as f64 / acc.count as f64)
+                                / worker_entry.info.vram_limit.unwrap_or(0) as f64,
                             timestamp,
                             &extra_labels,
                         );

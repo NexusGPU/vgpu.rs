@@ -135,9 +135,6 @@ where
         }
     }
 
-
-
-
     /// Handle a pod creation event.
     pub async fn handle_pod_created(
         &self,

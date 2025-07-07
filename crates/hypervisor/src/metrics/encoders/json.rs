@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+
 use serde_json::json;
-use super::{MetricsEncoder, FieldValue};
+
+use super::FieldValue;
+use super::MetricsEncoder;
 
 /// JSON encoder for metrics
 pub struct JsonEncoder;
@@ -25,10 +28,14 @@ impl MetricsEncoder for JsonEncoder {
             .map(|(k, v)| {
                 let json_value = match v {
                     FieldValue::String(s) => serde_json::Value::String(s.clone()),
-                    FieldValue::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
-                    FieldValue::UnsignedInteger(u) => serde_json::Value::Number(serde_json::Number::from(*u)),
+                    FieldValue::Integer(i) => {
+                        serde_json::Value::Number(serde_json::Number::from(*i))
+                    }
+                    FieldValue::UnsignedInteger(u) => {
+                        serde_json::Value::Number(serde_json::Number::from(*u))
+                    }
                     FieldValue::Float(f) => serde_json::Value::Number(
-                        serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0))
+                        serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0)),
                     ),
                     FieldValue::Boolean(b) => serde_json::Value::Bool(*b),
                 };
@@ -48,9 +55,11 @@ impl MetricsEncoder for JsonEncoder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashMap;
+
     use serde_json::Value;
+
+    use super::*;
 
     #[test]
     fn test_json_encoder_new() {
@@ -65,16 +74,16 @@ mod tests {
         let mut tags = HashMap::new();
         tags.insert("host".to_string(), "server1".to_string());
         tags.insert("region".to_string(), "us-west".to_string());
-        
+
         let mut fields = HashMap::new();
         fields.insert("cpu_usage".to_string(), 85.5.into());
         fields.insert("memory_usage".to_string(), 1024u64.into());
-        
+
         let result = encoder.encode_metrics("system_metrics", &tags, &fields, 1609459200);
-        
+
         // Parse the JSON to verify structure
         let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
-        
+
         assert_eq!(parsed["measure"], "system_metrics");
         assert_eq!(parsed["ts"], 1609459200);
         assert_eq!(parsed["tag"]["host"], "server1");
@@ -89,10 +98,10 @@ mod tests {
         let tags = HashMap::new();
         let mut fields = HashMap::new();
         fields.insert("value".to_string(), 42.0.into());
-        
+
         let result = encoder.encode_metrics("test_metric", &tags, &fields, 1234567890);
         let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
-        
+
         assert_eq!(parsed["measure"], "test_metric");
         assert_eq!(parsed["ts"], 1234567890);
         assert!(parsed["tag"].as_object().unwrap().is_empty());
@@ -105,10 +114,10 @@ mod tests {
         let mut tags = HashMap::new();
         tags.insert("service".to_string(), "api".to_string());
         let fields = HashMap::new();
-        
+
         let result = encoder.encode_metrics("empty_fields", &tags, &fields, 1234567890);
         let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
-        
+
         assert_eq!(parsed["measure"], "empty_fields");
         assert_eq!(parsed["ts"], 1234567890);
         assert_eq!(parsed["tag"]["service"], "api");
@@ -120,17 +129,17 @@ mod tests {
         let encoder = JsonEncoder::new();
         let mut tags = HashMap::new();
         tags.insert("app".to_string(), "test".to_string());
-        
+
         let mut fields = HashMap::new();
         fields.insert("string_val".to_string(), "hello world".into());
         fields.insert("int_val".to_string(), (-42i64).into());
         fields.insert("uint_val".to_string(), 42u64.into());
         fields.insert("float_val".to_string(), 3.14159.into());
         fields.insert("bool_val".to_string(), true.into());
-        
+
         let result = encoder.encode_metrics("mixed_types", &tags, &fields, 1234567890);
         let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
-        
+
         assert_eq!(parsed["measure"], "mixed_types");
         assert_eq!(parsed["ts"], 1234567890);
         assert_eq!(parsed["tag"]["app"], "test");
@@ -156,9 +165,9 @@ mod tests {
             18.7,
             1609459200,
         );
-        
+
         let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
-        
+
         assert_eq!(parsed["measure"], "tf_gpu_usage");
         assert_eq!(parsed["ts"], 1609459200);
         assert_eq!(parsed["tag"]["node"], "worker-node-1");
@@ -178,7 +187,7 @@ mod tests {
         let mut extra_labels = HashMap::new();
         extra_labels.insert("environment".to_string(), "production".to_string());
         extra_labels.insert("team".to_string(), "ml-ops".to_string());
-        
+
         let result = encoder.encode_worker_metrics(
             "gpu-456",
             "worker-node-2",
@@ -193,9 +202,9 @@ mod tests {
             1609459200,
             &extra_labels,
         );
-        
+
         let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
-        
+
         assert_eq!(parsed["measure"], "tf_worker_usage");
         assert_eq!(parsed["ts"], 1609459200);
         assert_eq!(parsed["tag"]["node"], "worker-node-2");
@@ -216,7 +225,7 @@ mod tests {
     fn test_encode_worker_metrics_no_extra_labels() {
         let encoder = JsonEncoder::new();
         let extra_labels = HashMap::new();
-        
+
         let result = encoder.encode_worker_metrics(
             "gpu-789",
             "worker-node-3",
@@ -231,9 +240,9 @@ mod tests {
             1609459200,
             &extra_labels,
         );
-        
+
         let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
-        
+
         assert_eq!(parsed["measure"], "tf_worker_usage");
         assert_eq!(parsed["tag"]["node"], "worker-node-3");
         assert_eq!(parsed["tag"]["pool"], "test-pool");
@@ -250,21 +259,33 @@ mod tests {
     fn test_json_output_is_valid() {
         let encoder = JsonEncoder::new();
         let mut tags = HashMap::new();
-        tags.insert("key with spaces".to_string(), "value with spaces".to_string());
-        tags.insert("key_with_special_chars".to_string(), "value!@#$%^&*()".to_string());
-        
+        tags.insert(
+            "key with spaces".to_string(),
+            "value with spaces".to_string(),
+        );
+        tags.insert(
+            "key_with_special_chars".to_string(),
+            "value!@#$%^&*()".to_string(),
+        );
+
         let mut fields = HashMap::new();
-        fields.insert("field with spaces".to_string(), "string with \"quotes\"".into());
+        fields.insert(
+            "field with spaces".to_string(),
+            "string with \"quotes\"".into(),
+        );
         fields.insert("numeric_field".to_string(), 123.456.into());
-        
+
         let result = encoder.encode_metrics("special_chars_test", &tags, &fields, 1234567890);
-        
+
         // Should be able to parse as valid JSON despite special characters
         let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
         assert_eq!(parsed["measure"], "special_chars_test");
         assert_eq!(parsed["tag"]["key with spaces"], "value with spaces");
         assert_eq!(parsed["tag"]["key_with_special_chars"], "value!@#$%^&*()");
-        assert_eq!(parsed["field"]["field with spaces"], "string with \"quotes\"");
+        assert_eq!(
+            parsed["field"]["field with spaces"],
+            "string with \"quotes\""
+        );
         assert_eq!(parsed["field"]["numeric_field"], 123.456);
     }
 }

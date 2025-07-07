@@ -22,10 +22,7 @@ pub(crate) enum WorkerUpdate {
         node_name: Option<String>,
     },
     /// A pod was deleted
-    PodDeleted { 
-        pod_name: String, 
-        namespace: String,
-    },
+    PodDeleted { pod_name: String, namespace: String },
 }
 
 /// Errors that can occur during Kubernetes operations.
