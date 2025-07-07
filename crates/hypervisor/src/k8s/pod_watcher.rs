@@ -150,10 +150,9 @@ impl PodWatcher {
             None => Api::all(self.client.clone()),
         };
 
-        let mut config = Config::default().labels("tensor-fusion.ai/component=worker");
-        
-        // Filter by node name if specified
-        config = config.fields(&format!("spec.nodeName={}", self.node_name));
+        let config = Config::default()
+            .labels("tensor-fusion.ai/component=worker")
+            .fields(&format!("spec.nodeName={}", self.node_name));
 
         let mut stream = watcher(api, config).applied_objects().boxed();
 
@@ -196,7 +195,6 @@ impl PodWatcher {
 
         let node_name = pod.spec.and_then(|spec| spec.node_name);
 
-
         // Determine the type of event
         let update = if metadata.deletion_timestamp.is_some() {
             WorkerUpdate::PodDeleted {
@@ -210,9 +208,7 @@ impl PodWatcher {
             // For simplicity, treat all non-deleted pods as "created"
             // In a more sophisticated implementation, we could track pod generations
             // or resource versions to distinguish between creates and updates
-            WorkerUpdate::PodCreated {
-                pod_info: tf_info,
-            }
+            WorkerUpdate::PodCreated { pod_info: tf_info }
         };
 
         if let Err(e) = self.update_sender.send(update) {
