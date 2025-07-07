@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 error-stack = { workspace = true }
-reqwest = { workspace = true, features = ["json", "blocking"] }
+reqwest = { workspace = true, features = ["json", "blocking", "rustls-tls", "stream"], default-features = false }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
