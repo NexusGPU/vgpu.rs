@@ -23,6 +23,8 @@ reqwest = { workspace = true, features = ["json", "blocking", "rustls-tls"], def
 serde = { workspace = true, features = ["derive"] }
 error-stack = { workspace = true }
 http-bidir-comm = { workspace = true }
+libloading = { workspace = true }
+once_cell = { workspace = true }
 
 [build-dependencies]
 cbindgen = { workspace = true }
