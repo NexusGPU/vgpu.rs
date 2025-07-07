@@ -189,7 +189,7 @@ impl PodWatcher {
 
         // Extract annotations
         let annotations = metadata.annotations.unwrap_or_default();
-        let tf_info = TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &labels)?;
+        let mut tf_info = TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &labels)?;
 
         // Only process pods with tensor-fusion annotations
         if !tf_info.has_annotations() {
@@ -198,6 +198,7 @@ impl PodWatcher {
 
         let node_name = pod.spec.and_then(|spec| spec.node_name);
 
+
         // Determine the type of event
         let update = if metadata.deletion_timestamp.is_some() {
             WorkerUpdate::PodDeleted {
@@ -205,14 +206,14 @@ impl PodWatcher {
                 namespace,
             }
         } else {
+            tf_info.0.node_name = node_name;
+            tf_info.0.namespace = namespace;
+            tf_info.0.pod_name = pod_name;
             // For simplicity, treat all non-deleted pods as "created"
             // In a more sophisticated implementation, we could track pod generations
             // or resource versions to distinguish between creates and updates
             WorkerUpdate::PodCreated {
-                pod_name,
-                namespace,
                 pod_info: tf_info,
-                node_name,
             }
         };
 
@@ -274,8 +275,8 @@ mod tests {
 
         let update = rx.recv().unwrap();
         match update {
-            WorkerUpdate::PodCreated { pod_name, .. } => {
-                assert_eq!(pod_name, "test-pod");
+            WorkerUpdate::PodCreated { pod_info } => {
+                assert_eq!(pod_info.0.pod_name, "test-pod");
             }
             _ => panic!("Expected PodCreated event"),
         }

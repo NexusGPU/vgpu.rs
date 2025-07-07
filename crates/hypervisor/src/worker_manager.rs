@@ -138,12 +138,9 @@ where
     /// Handle a pod creation event.
     pub async fn handle_pod_created(
         &self,
-        pod_name: String,
-        namespace: String,
         pod_info: TensorFusionPodInfo,
-        gpu_observer: Arc<GpuObserver>,
     ) -> Result<()> {
-        let worker_key = format!("{namespace}/{pod_name}");
+        let worker_key = format!("{}/{}", pod_info.0.namespace, pod_info.0.pod_name);
         info!("Processing pod creation: {worker_key}");
 
         // Store worker info in registry
@@ -175,6 +172,7 @@ where
             pod_name = %pod_name,
             namespace = %namespace,
             container_name = %container_name,
+            container_pid = %container_pid,
             "Starting PID discovery for worker"
         );
 

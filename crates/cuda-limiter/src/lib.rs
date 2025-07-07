@@ -9,7 +9,6 @@ use std::ffi::OsStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use ctor::ctor;
 use limiter::Limiter;
