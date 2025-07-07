@@ -76,7 +76,7 @@ struct Cli {
         env = "GPU_NODE_NAME",
         help = "Node name for filtering pods to this node only"
     )]
-    node_name: Option<String>,
+    node_name: String,
 
     #[arg(
         long,

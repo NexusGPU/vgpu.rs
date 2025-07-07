@@ -31,7 +31,7 @@ use crate::k8s::types::WorkerUpdate;
 pub(crate) struct PodWatcher {
     client: Client,
     namespace: Option<String>,
-    node_name: Option<String>,
+    node_name: String,
     update_sender: mpsc::Sender<WorkerUpdate>,
 }
 
@@ -42,7 +42,7 @@ impl PodWatcher {
     ///
     /// * `kubeconfig` - Optional path to kubeconfig file (None for default config)
     /// * `namespace` - Kubernetes namespace to watch (None for all namespaces)
-    /// * `node_name` - Filter pods by node name (None for all nodes)
+    /// * `node_name` - Filter pods by node name
     /// * `update_sender` - Channel to send worker updates
     ///
     /// # Errors
@@ -51,7 +51,7 @@ impl PodWatcher {
     pub(crate) async fn new(
         kubeconfig: Option<PathBuf>,
         namespace: Option<String>,
-        node_name: Option<String>,
+        node_name: String,
         update_sender: mpsc::Sender<WorkerUpdate>,
     ) -> Result<Self, Report<KubernetesError>> {
         let client = match kubeconfig {
@@ -150,12 +150,10 @@ impl PodWatcher {
             None => Api::all(self.client.clone()),
         };
 
-        let mut config = Config::default();
-
+        let mut config = Config::default().labels("tensor-fusion.ai/component=worker");
+        
         // Filter by node name if specified
-        if let Some(node_name) = &self.node_name {
-            config = config.fields(&format!("spec.nodeName={node_name}"));
-        }
+        config = config.fields(&format!("spec.nodeName={}", self.node_name));
 
         let mut stream = watcher(api, config).applied_objects().boxed();
 
@@ -259,7 +257,7 @@ mod tests {
                     .unwrap()
             }),
             namespace: None,
-            node_name: None,
+            node_name: "test-node".to_string(),
             update_sender: tx,
         };
 
@@ -291,7 +289,7 @@ mod tests {
                     .unwrap()
             }),
             namespace: None,
-            node_name: None,
+            node_name: "test-node".to_string(),
             update_sender: tx,
         };
 
