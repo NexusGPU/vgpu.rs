@@ -264,26 +264,22 @@ async fn main() -> Result<()> {
     // Start worker update processor for Kubernetes events
     let k8s_processor_task = if cli.enable_k8s {
         let worker_manager = worker_manager.clone();
-        let gpu_observer = gpu_observer.clone();
         tokio::spawn(async move {
             tracing::info!("Starting Kubernetes update processor task");
             for update in k8s_update_receiver {
                 match update {
                     WorkerUpdate::PodCreated {
-                        pod_name,
-                        namespace,
                         pod_info,
-                        node_name,
                     } => {
                         tracing::info!(
                             "Pod created: {}/{} with annotations: {:?}, node: {:?}",
-                            namespace,
-                            pod_name,
+                            pod_info.0.namespace,
+                            pod_info.0.pod_name,
                             pod_info,
-                            node_name
+                            pod_info.0.node_name
                         );
                         if let Err(e) = worker_manager
-                            .handle_pod_created(pod_name, namespace, pod_info, gpu_observer.clone())
+                            .handle_pod_created(pod_info)
                             .await
                         {
                             tracing::error!("Failed to handle pod creation: {e}");

@@ -8,10 +8,7 @@ use crate::k8s::TensorFusionPodInfo;
 pub(crate) enum WorkerUpdate {
     /// A new pod was created with tensor-fusion annotations
     PodCreated {
-        pod_name: String,
-        namespace: String,
         pod_info: TensorFusionPodInfo,
-        node_name: Option<String>,
     },
     /// An existing pod's annotations were updated
     #[allow(dead_code)]
