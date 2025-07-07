@@ -9,6 +9,7 @@ use std::ffi::OsStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use ctor::ctor;
 use limiter::Limiter;
@@ -27,6 +28,7 @@ mod detour;
 mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
+static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
 
 thread_local! {
     static LIBCUDA_HOOKED: RefCell<bool> = const { RefCell::new(false) };
@@ -95,6 +97,7 @@ pub fn global_trap() -> impl trap::Trap {
 #[ctor]
 unsafe fn entry_point() {
     logging::init();
+
     let nvml = match Nvml::init().and(
         Nvml::builder()
             .lib_path(OsStr::new("libnvidia-ml.so.1"))
@@ -119,6 +122,21 @@ unsafe fn entry_point() {
     if device_config_result.device_configs.is_empty() {
         tracing::info!("no device configs, skipping limiter");
         return;
+    }
+
+    // load tensor-fusion/ngpu.so
+    if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
+        match libloading::Library::new(ngpu_path.as_str()) {
+            Ok(lib) => {
+                GLOBAL_NGPU_LIBRARY
+                    .set(lib)
+                    .expect("set GLOBAL_NGPU_LIBRARY");
+            }
+            Err(e) => {
+                tracing::error!("failed to load ngpu.so: {e}, path: {ngpu_path}");
+                return;
+            }
+        }
     }
 
     let limiter = match Limiter::new(
@@ -162,6 +180,7 @@ unsafe fn entry_point() {
             }
         });
     }
+
     let cuda_hooked = LIBCUDA_HOOKED.with(|hooked| *hooked.borrow());
     let nvml_hooked = LIBNVML_HOOKED.with(|hooked| *hooked.borrow());
 
