@@ -39,11 +39,13 @@ use worker_manager::WorkerManager;
 #[derive(Parser)]
 #[command(about, long_about, version = &**version::VERSION)]
 struct Cli {
-    #[arg(long, 
+    #[arg(
+        long,
         env = "GPU_METRICS_FILE",
-        value_hint = clap::ValueHint::FilePath, 
+        value_hint = clap::ValueHint::FilePath,
         default_value = "/logs/metrics.log",
-        help = "Path for printing GPU and worker metrics, e.g. /logs/metrics.log")]
+        help = "Path for printing GPU and worker metrics, e.g. /logs/metrics.log"
+    )]
     gpu_metrics_file: Option<PathBuf>,
 
     #[arg(
@@ -281,12 +283,7 @@ async fn main() -> Result<()> {
                             node_name
                         );
                         if let Err(e) = worker_manager
-                            .handle_pod_created(
-                                pod_name,
-                                namespace,
-                                pod_info,
-                                gpu_observer.clone(),
-                            )
+                            .handle_pod_created(pod_name, namespace, pod_info, gpu_observer.clone())
                             .await
                         {
                             tracing::error!("Failed to handle pod creation: {e}");

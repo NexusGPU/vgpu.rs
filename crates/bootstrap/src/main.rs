@@ -92,7 +92,10 @@ fn copy_dynamic_lib_files() -> Result<()> {
         }
     }
 
-    log_info(&format!("Successfully copied {} dynamic lib files", copied_count));
+    log_info(&format!(
+        "Successfully copied {} dynamic lib files",
+        copied_count
+    ));
     Ok(())
 }
 

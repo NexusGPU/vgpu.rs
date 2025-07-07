@@ -50,7 +50,12 @@ impl HookManager {
     pub fn collect_module_names(&mut self) {
         let mut module_map = ModuleMap::new();
         module_map.update();
-        self.module_names = module_map.values().iter().map(|m| m.name()).collect();
+        self.module_names = module_map
+            .values()
+            .iter()
+            .filter(|m| !m.path().starts_with("/tensor-fusion"))
+            .map(|m| m.name())
+            .collect();
         // sort by length to avoid matching a longer module name as a substring of a shorter one
         self.module_names
             .sort_by_key(|b| std::cmp::Reverse(b.len()));

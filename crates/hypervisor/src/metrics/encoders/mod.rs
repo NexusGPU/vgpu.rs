@@ -139,8 +139,9 @@ pub fn create_encoder(format: &str) -> Box<dyn MetricsEncoder + Send + Sync> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashMap;
+
+    use super::*;
 
     #[test]
     fn test_field_value_from_string() {
@@ -257,7 +258,7 @@ mod tests {
             12.5,
             1234567890,
         );
-        
+
         // Should contain all the expected fields and tags
         assert!(result.contains("tf_gpu_usage"));
         assert!(result.contains("gpu-uuid-123"));
@@ -270,7 +271,7 @@ mod tests {
         let encoder = create_encoder("json");
         let mut extra_labels = HashMap::new();
         extra_labels.insert("custom_label".to_string(), "custom_value".to_string());
-        
+
         let result = encoder.encode_worker_metrics(
             "gpu-uuid-456",
             "node2",
@@ -285,7 +286,7 @@ mod tests {
             1234567890,
             &extra_labels,
         );
-        
+
         // Should contain all the expected fields and tags
         assert!(result.contains("tf_worker_usage"));
         assert!(result.contains("gpu-uuid-456"));
@@ -313,7 +314,7 @@ mod tests {
             20.0,
             1234567890,
         );
-        
+
         // InfluxDB line protocol format
         assert!(result.contains("tf_gpu_usage"));
         assert!(result.contains("node=node3"));
@@ -327,7 +328,7 @@ mod tests {
         let encoder = create_encoder("influx");
         let mut extra_labels = HashMap::new();
         extra_labels.insert("env".to_string(), "production".to_string());
-        
+
         let result = encoder.encode_worker_metrics(
             "gpu-uuid-abc",
             "node4",
@@ -342,7 +343,7 @@ mod tests {
             1234567890,
             &extra_labels,
         );
-        
+
         // InfluxDB line protocol format
         assert!(result.contains("tf_worker_usage"));
         assert!(result.contains("node=node4"));
@@ -380,14 +381,14 @@ mod tests {
         let encoder = create_encoder("json");
         let mut tags = HashMap::new();
         tags.insert("service".to_string(), "test".to_string());
-        
+
         let mut fields = HashMap::new();
         fields.insert("string_field".to_string(), "hello".into());
         fields.insert("int_field".to_string(), 42i64.into());
         fields.insert("uint_field".to_string(), 100u64.into());
         fields.insert("float_field".to_string(), 3.14f64.into());
         fields.insert("bool_field".to_string(), true.into());
-        
+
         let result = encoder.encode_metrics("mixed_types", &tags, &fields, 1234567890);
         assert!(result.contains("mixed_types"));
         assert!(result.contains("hello"));
