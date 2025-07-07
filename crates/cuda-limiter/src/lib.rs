@@ -95,8 +95,6 @@ pub fn global_trap() -> impl trap::Trap {
 #[ctor]
 unsafe fn entry_point() {
     logging::init();
-    let pid = std::process::id();
-
     let nvml = match Nvml::init().and(
         Nvml::builder()
             .lib_path(OsStr::new("libnvidia-ml.so.1"))
