@@ -40,7 +40,12 @@ fn write_ld_preload_config() -> Result<()> {
         PRELOAD_CONFIG_PATH,
         if is_ngpu_mode() {
             log_info("nGPU mode detected");
-            format!("{}{}", PRELOAD_LIBS, NGPU_PRELOAD_LIBS)
+            if std::env::var("DISABLE_GPU_LIMITER").unwrap_or_default() == "true" {
+                log_info("GPU limiter disabled");
+                PRELOAD_LIBS.to_string()
+            } else {
+                format!("{}{}", PRELOAD_LIBS, NGPU_PRELOAD_LIBS)
+            }
         } else {
             log_info("vGPU mode detected");
             PRELOAD_LIBS.to_string()
