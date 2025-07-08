@@ -110,9 +110,9 @@ where
         match timeout(
             discovery_timeout,
             worker_manager.discover_worker_pid(
-                pod_name.clone(),
-                namespace.clone(),
-                container_name.clone(),
+                pod_name,
+                namespace,
+                container_name,
                 container_pid,
                 gpu_observer.clone(),
             ),

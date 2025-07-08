@@ -143,7 +143,7 @@ where
         // Store worker info in registry
         {
             let mut registry = self.registry.write().await;
-            registry.insert(worker_key.clone(), WorkerEntry::new(pod_info.0.clone()));
+            registry.insert(worker_key.clone(), WorkerEntry::new(pod_info.0));
             info!("Added worker to registry: {worker_key}");
         }
         Ok(())
@@ -152,17 +152,17 @@ where
     /// Discover worker PID using HostPidProbe and automatically associate it.
     pub async fn discover_worker_pid(
         &self,
-        pod_name: String,
-        namespace: String,
-        container_name: String,
+        pod_name: &str,
+        namespace: &str,
+        container_name: &str,
         container_pid: u32,
         gpu_observer: Arc<GpuObserver>,
     ) -> Result<PodProcessInfo> {
         let subscription_request = SubscriptionRequest {
-            pod_name: pod_name.clone(),
-            namespace: namespace.clone(),
-            container_name: container_name.clone(),
-            container_pid: container_pid,
+            pod_name: pod_name.to_owned(),
+            namespace: namespace.to_owned(),
+            container_name: container_name.to_owned(),
+            container_pid,
         };
 
         info!(
@@ -191,9 +191,9 @@ where
 
         // Associate the worker with the discovered PID
         self.associate_discovered_worker(
-            pod_name.clone(),
-            namespace.clone(),
-            container_name.clone(),
+            pod_name,
+            namespace,
+            container_name,
             process_info.host_pid,
             process_info.container_pid,
             gpu_observer.clone(),
@@ -206,9 +206,9 @@ where
     /// Associate a worker with a discovered PID.
     async fn associate_discovered_worker(
         &self,
-        pod_name: String,
-        namespace: String,
-        container_name: String,
+        pod_name: &str,
+        namespace: &str,
+        container_name: &str,
         host_pid: u32,
         container_pid: u32,
         gpu_observer: Arc<GpuObserver>,
@@ -240,8 +240,8 @@ where
             // Find or create container entry
             let container_info = entry
                 .containers
-                .entry(container_name.clone())
-                .or_insert_with(|| ContainerInfo::new(container_name.clone()));
+                .entry(container_name.to_owned())
+                .or_insert_with(|| ContainerInfo::new(container_name.to_owned()));
 
             // Update container info
             container_info.worker = Some(worker.clone());

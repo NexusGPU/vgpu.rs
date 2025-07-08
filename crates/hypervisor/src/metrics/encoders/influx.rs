@@ -76,12 +76,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_influx_encoder_new() {
-        let encoder = InfluxEncoder::new();
-        // Just ensure it can be created
-        assert!(true);
-    }
 
     #[test]
     fn test_encode_metrics_basic() {
@@ -164,7 +158,7 @@ mod tests {
         fields.insert("string_val".to_string(), "hello world".into());
         fields.insert("int_val".to_string(), (-42i64).into());
         fields.insert("uint_val".to_string(), 42u64.into());
-        fields.insert("float_val".to_string(), 3.14159.into());
+        fields.insert("float_val".to_string(), std::f64::consts::PI.into());
         fields.insert("bool_val".to_string(), true.into());
 
         let result = encoder.encode_metrics("mixed_types", &tags, &fields, 1234567890000000000);
@@ -174,7 +168,7 @@ mod tests {
         assert!(result.contains("string_val=\"hello world\""));
         assert!(result.contains("int_val=-42i"));
         assert!(result.contains("uint_val=42u"));
-        assert!(result.contains("float_val=3.14159"));
+        assert!(result.contains(&format!("float_val={}", std::f64::consts::PI)));
         assert!(result.contains("bool_val=true"));
         assert!(result.contains("1234567890000000000"));
     }

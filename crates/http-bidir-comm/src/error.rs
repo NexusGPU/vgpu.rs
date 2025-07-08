@@ -1,5 +1,7 @@
 //! Error types for HTTP bidirectional communication.
 
+use std::borrow::Cow;
+
 use core::error::Error;
 
 use derive_more::Display;
@@ -13,19 +15,22 @@ pub type CommResult<T> = Result<T, Report<CommError>>;
 pub enum CommError {
     /// Network connectivity issues
     #[display("Network error: {message}")]
-    Network { message: String },
+    Network { message: Cow<'static, str> },
 
     /// HTTP request/response errors
     #[display("HTTP error: {status} - {message}")]
-    Http { status: u16, message: String },
+    Http {
+        status: u16,
+        message: Cow<'static, str>,
+    },
 
     /// Serialization/deserialization errors
     #[display("Serialization error: {message}")]
-    Serialization { message: String },
+    Serialization { message: Cow<'static, str> },
 
     /// Configuration errors
     #[display("Configuration error: {message}")]
-    Configuration { message: String },
+    Configuration { message: Cow<'static, str> },
 
     /// Timeout errors
     #[display("Operation timed out after {seconds}s")]
@@ -37,11 +42,11 @@ pub enum CommError {
 
     /// Task processing errors
     #[display("Task processing error: {message}")]
-    TaskProcessing { message: String },
+    TaskProcessing { message: Cow<'static, str> },
 
     /// Server state errors
     #[display("Server state error: {message}")]
-    ServerState { message: String },
+    ServerState { message: Cow<'static, str> },
 }
 
 impl Error for CommError {}

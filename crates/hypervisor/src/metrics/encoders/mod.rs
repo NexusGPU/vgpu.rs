@@ -192,7 +192,7 @@ mod tests {
     fn test_field_value_from_bool() {
         let value: FieldValue = true.into();
         match value {
-            FieldValue::Boolean(b) => assert_eq!(b, true),
+            FieldValue::Boolean(b) => assert!(b),
             _ => panic!("Expected Boolean variant"),
         }
     }

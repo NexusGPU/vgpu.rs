@@ -22,40 +22,40 @@ impl JwtAuthMiddleware {
     pub fn new(config: JwtAuthConfig) -> Self {
         Self { config }
     }
+}
 
-    /// Extract JWT payload from the token without signature verification
-    fn extract_jwt_payload(&self, token: &str) -> Result<JwtPayload, Report<ApiError>> {
-        let parts: Vec<&str> = token.split('.').collect();
+/// Extract JWT payload from the token without signature verification
+fn extract_jwt_payload(token: &str) -> Result<JwtPayload, Report<ApiError>> {
+    let parts: Vec<&str> = token.split('.').collect();
 
-        if parts.len() != 3 {
-            return Err(Report::new(ApiError::InvalidJwtToken {
-                reason: "Invalid JWT format".to_string(),
-            }));
-        }
+    if parts.len() != 3 {
+        return Err(Report::new(ApiError::InvalidJwtToken {
+            reason: "Invalid JWT format".to_string(),
+        }));
+    }
 
-        let payload_b64 = parts[1];
-        let payload_bytes = base64::engine::general_purpose::URL_SAFE
-            .decode(payload_b64)
-            .map_err(|e| {
-                Report::new(ApiError::InvalidJwtToken {
-                    reason: format!("Failed to decode payload: {e}"),
-                })
-            })?;
-
-        let payload: JwtPayload = serde_json::from_slice(&payload_bytes).map_err(|e| {
+    let payload_b64 = parts[1];
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE
+        .decode(payload_b64)
+        .map_err(|e| {
             Report::new(ApiError::InvalidJwtToken {
-                reason: format!("Failed to parse payload: {e}"),
+                reason: format!("Failed to decode payload: {e}"),
             })
         })?;
 
-        debug!(
-            pod_name = payload.kubernetes.pod.name,
-            namespace = payload.kubernetes.namespace,
-            "Extracted JWT payload"
-        );
+    let payload: JwtPayload = serde_json::from_slice(&payload_bytes).map_err(|e| {
+        Report::new(ApiError::InvalidJwtToken {
+            reason: format!("Failed to parse payload: {e}"),
+        })
+    })?;
 
-        Ok(payload)
-    }
+    debug!(
+        pod_name = payload.kubernetes.pod.name,
+        namespace = payload.kubernetes.namespace,
+        "Extracted JWT payload"
+    );
+
+    Ok(payload)
 }
 
 impl<E> Middleware<E> for JwtAuthMiddleware
@@ -66,7 +66,7 @@ where E: Endpoint
     fn transform(&self, ep: E) -> Self::Output {
         JwtAuthEndpoint {
             inner: ep,
-            config: Arc::clone(&Arc::new(self.config.clone())),
+            config: Arc::new(self.config.clone()),
         }
     }
 }
@@ -102,8 +102,7 @@ where E: Endpoint
             ));
         };
 
-        let middleware = JwtAuthMiddleware::new((*self.config).clone());
-        let payload = middleware.extract_jwt_payload(token).map_err(|e| {
+        let payload = extract_jwt_payload(token).map_err(|e| {
             error!("JWT authentication failed: {e}");
             poem::Error::from_string(
                 "Authentication failed",
@@ -199,7 +198,7 @@ mod tests {
         let token = create_test_jwt_token(&test_payload);
 
         // Act
-        let result = middleware.extract_jwt_payload(&token);
+        let result = extract_jwt_payload(&token);
 
         // Assert
         let extracted_payload = result.expect("should extract payload successfully");
@@ -220,14 +219,10 @@ mod tests {
     #[test]
     fn extract_jwt_payload_with_invalid_format() {
         // Arrange
-        let config = JwtAuthConfig {
-            public_key: "test-key".to_string(),
-        };
-        let middleware = JwtAuthMiddleware::new(config);
         let invalid_token = "invalid.token"; // Missing third part
 
         // Act
-        let result = middleware.extract_jwt_payload(invalid_token);
+        let result = extract_jwt_payload(invalid_token);
 
         // Assert
         let error = result.expect_err("should fail with invalid token format");
@@ -240,14 +235,10 @@ mod tests {
     #[test]
     fn extract_jwt_payload_with_invalid_base64() {
         // Arrange
-        let config = JwtAuthConfig {
-            public_key: "test-key".to_string(),
-        };
-        let middleware = JwtAuthMiddleware::new(config);
         let invalid_token = "header.invalid_base64!.signature";
 
         // Act
-        let result = middleware.extract_jwt_payload(invalid_token);
+        let result = extract_jwt_payload(invalid_token);
 
         // Assert
         let error = result.expect_err("should fail with invalid base64");
@@ -273,7 +264,7 @@ mod tests {
         let invalid_token = format!("{header_b64}.{invalid_json_b64}.signature");
 
         // Act
-        let result = middleware.extract_jwt_payload(&invalid_token);
+        let result = extract_jwt_payload(&invalid_token);
 
         // Assert
         let error = result.expect_err("should fail with invalid JSON");
@@ -304,7 +295,7 @@ mod tests {
         let invalid_token = format!("{header_b64}.{payload_b64}.signature");
 
         // Act
-        let result = middleware.extract_jwt_payload(&invalid_token);
+        let result = extract_jwt_payload(&invalid_token);
 
         // Assert
         let error = result.expect_err("should fail with missing required fields");
@@ -332,7 +323,7 @@ mod tests {
         let token = format!("{header_b64}.{payload_b64}.signature");
 
         // Act
-        let result = middleware.extract_jwt_payload(&token);
+        let result = extract_jwt_payload(&token);
 
         // Assert
         match result {

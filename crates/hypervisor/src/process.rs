@@ -41,7 +41,7 @@ pub(crate) trait GpuProcess: Send + Sync {
     fn pid(&self) -> u32;
 
     /// Get process name
-    fn name(&self) -> String;
+    fn name(&self) -> &str;
 
     /// Get current actual resource usage for each GPU
     fn current_resources(&self) -> HashMap<&str, GpuResources>;
@@ -64,7 +64,7 @@ impl<T: GpuProcess> GpuProcess for Arc<T> {
         self.as_ref().pid()
     }
 
-    fn name(&self) -> String {
+    fn name(&self) -> &str {
         self.as_ref().name()
     }
 
@@ -133,8 +133,8 @@ pub(crate) mod tests {
             self.id
         }
 
-        fn name(&self) -> String {
-            "mock-gpu-process".to_string()
+        fn name(&self) -> &str {
+            "mock-gpu-process"
         }
 
         fn current_resources(&self) -> HashMap<&str, GpuResources> {

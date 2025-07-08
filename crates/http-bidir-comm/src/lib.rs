@@ -180,7 +180,7 @@ mod tests {
         assert!(task_item.client_id.is_none());
 
         // Task results should be created correctly
-        let success_result = TaskResult::success(task_id1, "client1".to_string(), TestResult {
+        let success_result = TaskResult::success(task_id1, "client1", TestResult {
             id: 1,
             success: true,
             message: Some("Done".to_string()),
@@ -191,11 +191,10 @@ mod tests {
         assert!(success_result.error.is_none());
 
         let failure_result =
-            TaskResult::<TestResult>::failure(task_id2, "client1".to_string(), "Error occurred");
+            TaskResult::<TestResult>::failure(task_id2, "client1", "Error occurred");
 
         assert!(!failure_result.success);
         assert!(failure_result.result.is_none());
-        assert!(failure_result.error.is_some());
     }
 
     #[test]

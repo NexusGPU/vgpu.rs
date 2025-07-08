@@ -44,6 +44,8 @@ pub(crate) struct TensorFusionWorker {
     gpu_uuids: Vec<String>,
     gpu_observer: Arc<GpuObserver>,
     qos_level: api_types::QosLevel,
+    /// Worker name, formatted as "namespace/pod_name"
+    pub(crate) name: String,
     /// Kubernetes pod name
     pub(crate) pod_name: String,
     /// Kubernetes namespace
@@ -65,6 +67,7 @@ impl TensorFusionWorker {
             state: RwLock::new(ProcessState::Running),
             gpu_uuids,
             gpu_observer,
+            name: format!("{}/{}", namespace, pod_name),
             pod_name,
             namespace,
         }
@@ -80,8 +83,8 @@ impl GpuProcess for TensorFusionWorker {
         self.id
     }
 
-    fn name(&self) -> String {
-        format!("{}/{}", self.namespace, self.pod_name)
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn current_resources(&self) -> HashMap<&str, GpuResources> {
@@ -198,6 +201,7 @@ impl Clone for TensorFusionWorker {
             gpu_uuids: self.gpu_uuids.clone(),
             gpu_observer: Arc::clone(&self.gpu_observer),
             qos_level: self.qos_level,
+            name: self.name.clone(),
             pod_name: self.pod_name.clone(),
             namespace: self.namespace.clone(),
         }
@@ -212,6 +216,7 @@ impl std::fmt::Debug for TensorFusionWorker {
             .field("state", &*self.state.read().expect("poisoned"))
             .field("gpu_uuids", &self.gpu_uuids)
             .field("qos_level", &self.qos_level)
+            .field("name", &self.name)
             .field("pod_name", &self.pod_name)
             .field("namespace", &self.namespace)
             .finish()
