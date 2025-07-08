@@ -22,8 +22,8 @@ impl MetricsEncoder for JsonEncoder {
         fields: &HashMap<String, FieldValue>,
         timestamp: i64,
     ) -> String {
-        // Convert FieldValue enum to proper JSON values
-        let json_fields: HashMap<String, serde_json::Value> = fields
+        // Convert FieldValue enum to proper JSON values without intermediate collection
+        let json_fields: serde_json::Map<String, serde_json::Value> = fields
             .iter()
             .map(|(k, v)| {
                 let json_value = match v {

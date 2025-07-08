@@ -54,7 +54,7 @@ impl HookManager {
             .values()
             .iter()
             .filter(|m| !m.path().starts_with("/tensor-fusion"))
-            .map(|m| m.name())
+            .map(|m| m.name().to_string())
             .collect();
         // sort by length to avoid matching a longer module name as a substring of a shorter one
         self.module_names

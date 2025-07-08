@@ -159,9 +159,9 @@ where
         gpu_observer: Arc<GpuObserver>,
     ) -> Result<PodProcessInfo> {
         let subscription_request = SubscriptionRequest {
-            pod_name: pod_name.to_owned(),
-            namespace: namespace.to_owned(),
-            container_name: container_name.to_owned(),
+            pod_name: pod_name.to_string(),
+            namespace: namespace.to_string(),
+            container_name: container_name.to_string(),
             container_pid,
         };
 
@@ -240,8 +240,8 @@ where
             // Find or create container entry
             let container_info = entry
                 .containers
-                .entry(container_name.to_owned())
-                .or_insert_with(|| ContainerInfo::new(container_name.to_owned()));
+                .entry(container_name.to_string())
+                .or_insert_with(|| ContainerInfo::new(container_name.to_string()));
 
             // Update container info
             container_info.worker = Some(worker.clone());

@@ -114,7 +114,7 @@ pub trait MetricsEncoder: Send + Sync {
         tags.insert("namespace".to_string(), namespace.to_string());
         tags.insert("workload".to_string(), workload.to_string());
 
-        // Add extra labels as tags
+        // Add extra labels as tags - avoid unnecessary cloning
         for (key, value) in extra_labels {
             tags.insert(key.clone(), value.clone());
         }

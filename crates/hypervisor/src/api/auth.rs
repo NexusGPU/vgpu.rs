@@ -139,8 +139,8 @@ mod tests {
         let header_str = serde_json::to_string(&header).unwrap();
         let payload_str = serde_json::to_string(payload).unwrap();
 
-        let header_b64 = base64::engine::general_purpose::URL_SAFE.encode(header_str.as_bytes());
-        let payload_b64 = base64::engine::general_purpose::URL_SAFE.encode(payload_str.as_bytes());
+        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header_str.as_bytes());
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_str.as_bytes());
 
         // Use a fixed signature for testing
         let signature = "dummysignature";
@@ -190,10 +190,6 @@ mod tests {
     #[test]
     fn extract_jwt_payload_with_valid_token() {
         // Arrange
-        let config = JwtAuthConfig {
-            public_key: "test-key".to_string(),
-        };
-        let middleware = JwtAuthMiddleware::new(config);
         let test_payload = create_test_payload();
         let token = create_test_jwt_token(&test_payload);
 
