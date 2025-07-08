@@ -136,10 +136,7 @@ where
     }
 
     /// Handle a pod creation event.
-    pub async fn handle_pod_created(
-        &self,
-        pod_info: TensorFusionPodInfo,
-    ) -> Result<()> {
+    pub async fn handle_pod_created(&self, pod_info: TensorFusionPodInfo) -> Result<()> {
         let worker_key = format!("{}/{}", pod_info.0.namespace, pod_info.0.pod_name);
         info!("Processing pod creation: {worker_key}");
 

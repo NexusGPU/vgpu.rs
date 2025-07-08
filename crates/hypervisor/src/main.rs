@@ -62,7 +62,11 @@ struct Cli {
     )]
     gpu_info_path: Option<PathBuf>,
 
-    #[arg(long, help = "Enable Kubernetes pod monitoring", default_value = "true")]
+    #[arg(
+        long,
+        help = "Enable Kubernetes pod monitoring",
+        default_value = "true"
+    )]
     enable_k8s: bool,
 
     #[arg(
@@ -268,9 +272,7 @@ async fn main() -> Result<()> {
             tracing::info!("Starting Kubernetes update processor task");
             for update in k8s_update_receiver {
                 match update {
-                    WorkerUpdate::PodCreated {
-                        pod_info,
-                    } => {
+                    WorkerUpdate::PodCreated { pod_info } => {
                         tracing::info!(
                             "Pod created: {}/{} with annotations: {:?}, node: {:?}",
                             pod_info.0.namespace,
@@ -278,10 +280,7 @@ async fn main() -> Result<()> {
                             pod_info,
                             pod_info.0.node_name
                         );
-                        if let Err(e) = worker_manager
-                            .handle_pod_created(pod_info)
-                            .await
-                        {
+                        if let Err(e) = worker_manager.handle_pod_created(pod_info).await {
                             tracing::error!("Failed to handle pod creation: {e}");
                         }
                     }

@@ -7,9 +7,7 @@ use crate::k8s::TensorFusionPodInfo;
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum WorkerUpdate {
     /// A new pod was created with tensor-fusion annotations
-    PodCreated {
-        pod_info: TensorFusionPodInfo,
-    },
+    PodCreated { pod_info: TensorFusionPodInfo },
     /// An existing pod's annotations were updated
     #[allow(dead_code)]
     PodUpdated {
