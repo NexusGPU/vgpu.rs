@@ -13,7 +13,6 @@ mod worker_manager;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,7 +31,7 @@ use nvml_wrapper::Nvml;
 use process::GpuProcess;
 use process::GpuResources;
 use scheduler::weighted::WeightedScheduler;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use utils::version;
 use worker_manager::WorkerManager;
 
@@ -183,7 +182,7 @@ async fn main() -> Result<()> {
     // HTTP trap handling is now integrated into the API server
 
     // Setup Kubernetes pod watcher if enabled
-    let (k8s_update_sender, k8s_update_receiver) = mpsc::channel::<WorkerUpdate>();
+    let (k8s_update_sender, mut k8s_update_receiver) = mpsc::channel::<WorkerUpdate>(32);
     let (k8s_shutdown_sender, k8s_shutdown_receiver) = oneshot::channel::<()>();
 
     let host_pid_probe = Arc::new(HostPidProbe::new(Duration::from_secs(1)));
@@ -280,7 +279,7 @@ async fn main() -> Result<()> {
         let worker_manager = worker_manager.clone();
         tokio::spawn(async move {
             tracing::info!("Starting Kubernetes update processor task");
-            for update in k8s_update_receiver {
+            while let Some(update) = k8s_update_receiver.recv().await {
                 match update {
                     WorkerUpdate::PodCreated { pod_info } => {
                         tracing::info!(
