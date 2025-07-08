@@ -63,13 +63,13 @@ struct AccumulatedWorkerMetrics {
 pub(crate) async fn run_metrics<AddCB, RemoveCB>(
     gpu_observer: Arc<GpuObserver>,
     metrics_batch_size: usize,
-    node_name: String,
-    gpu_pool: Option<String>,
+    node_name: &str,
+    gpu_pool: Option<&str>,
     worker_mgr: Arc<WorkerManager<AddCB, RemoveCB>>,
     metrics_format: &str,
     metrics_extra_labels: Option<&str>,
 ) {
-    let gpu_pool = gpu_pool.unwrap_or("unknown".to_string());
+    let gpu_pool = gpu_pool.unwrap_or("unknown");
     let encoder = create_encoder(metrics_format);
 
     let mut gpu_acc: HashMap<String, AccumulatedGpuMetrics> = HashMap::new();
