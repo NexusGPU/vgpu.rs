@@ -7,6 +7,7 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::fs;
 
 const DEFAULT_TFLOPS: f64 = 10.0;
 
@@ -28,19 +29,22 @@ pub(crate) static GPU_CAPACITY_MAP: Lazy<RwLock<HashMap<String, f64>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Load GPU information from a YAML file and store it in a map
-pub(crate) fn load_gpu_info(
+pub(crate) async fn load_gpu_info(
     gpu_uuid_to_name_map: HashMap<String, String>,
     file_path: PathBuf,
 ) -> Result<()> {
-    // Load GPU info list from YAML
-    let file_content = std::fs::read_to_string(&file_path).unwrap_or_else(|err| {
-        tracing::warn!(
-            "Failed to read GPU info file {}: {}",
-            file_path.display(),
-            err
-        );
-        "[]".to_string()
-    });
+    // Async read GPU info file
+    let file_content = match fs::read_to_string(&file_path).await {
+        Ok(content) => content,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to read GPU info file {}: {}",
+                file_path.display(),
+                err
+            );
+            "[]".to_string()
+        }
+    };
 
     let gpu_info_list: Vec<GpuInfo> = serde_yaml::from_str(&file_content)
         .with_context(|| format!("Failed to parse GPU info file {}", file_path.display()))?;

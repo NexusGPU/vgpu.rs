@@ -170,7 +170,7 @@ async fn main() -> Result<()> {
     if let Err(e) = config::load_gpu_info(
         gpu_uuid_to_name_map,
         cli.gpu_info_path.unwrap_or("./gpu-info.yaml".into()),
-    ) {
+    ).await {
         tracing::warn!("Failed to load GPU information: {}", e);
     }
 
