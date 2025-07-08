@@ -140,74 +140,74 @@ unsafe fn entry_point() {
         }
     }
 
-    // let limiter = match Limiter::new(
-    //     device_config_result.host_pid,
-    //     nvml,
-    //     &device_config_result.device_configs,
-    // ) {
-    //     Ok(limiter) => limiter,
-    //     Err(err) => {
-    //         tracing::error!("failed to init limiter, err: {err}");
-    //         return;
-    //     }
-    // };
-    // GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
+    let limiter = match Limiter::new(
+        device_config_result.host_pid,
+        nvml,
+        &device_config_result.device_configs,
+    ) {
+        Ok(limiter) => limiter,
+        Err(err) => {
+            tracing::error!("failed to init limiter, err: {err}");
+            return;
+        }
+    };
+    GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
 
-    // let mut hook_manager = HookManager::default();
-    // hook_manager.collect_module_names();
-    // tracing::debug!("test1");
-    // if hook_manager
-    //     .module_names
-    //     .iter()
-    //     .any(|m| m.starts_with("libcuda."))
-    // {
-    //     tracing::debug!("test1.1");
-    //     LIBCUDA_HOOKED.with_borrow_mut(|hooked: &mut bool| {
-    //         if !*hooked {
-    //             detour::gpu::enable_hooks(&mut hook_manager);
-    //             detour::mem::enable_hooks(&mut hook_manager);
-    //             *hooked = true;
-    //         }
-    //     });
-    // }
-    // if hook_manager
-    //     .module_names
-    //     .iter()
-    //     .any(|m| m.starts_with("libnvidia-ml."))
-    // {
-    //     tracing::debug!("test1.2");
-    //     LIBNVML_HOOKED.with_borrow_mut(|hooked: &mut bool| {
-    //         if !*hooked {
-    //             detour::nvml::enable_hooks(&mut hook_manager);
-    //             *hooked = true;
-    //         }
-    //     });
-    // }
-    // tracing::debug!("test2");
+    let mut hook_manager = HookManager::default();
+    hook_manager.collect_module_names();
+    tracing::debug!("test1");
+    if hook_manager
+        .module_names
+        .iter()
+        .any(|m| m.starts_with("libcuda."))
+    {
+        tracing::debug!("test1.1");
+        LIBCUDA_HOOKED.with_borrow_mut(|hooked: &mut bool| {
+            if !*hooked {
+                detour::gpu::enable_hooks(&mut hook_manager);
+                detour::mem::enable_hooks(&mut hook_manager);
+                *hooked = true;
+            }
+        });
+    }
+    if hook_manager
+        .module_names
+        .iter()
+        .any(|m| m.starts_with("libnvidia-ml."))
+    {
+        tracing::debug!("test1.2");
+        LIBNVML_HOOKED.with_borrow_mut(|hooked: &mut bool| {
+            if !*hooked {
+                detour::nvml::enable_hooks(&mut hook_manager);
+                *hooked = true;
+            }
+        });
+    }
+    tracing::debug!("test2");
 
-    // let cuda_hooked = LIBCUDA_HOOKED.with(|hooked| *hooked.borrow());
-    // let nvml_hooked = LIBNVML_HOOKED.with(|hooked| *hooked.borrow());
+    let cuda_hooked = LIBCUDA_HOOKED.with(|hooked| *hooked.borrow());
+    let nvml_hooked = LIBNVML_HOOKED.with(|hooked| *hooked.borrow());
 
-    // if !cuda_hooked || !nvml_hooked {
-    //     replace_symbol!(
-    //         &mut hook_manager,
-    //         None,
-    //         "dlopen",
-    //         dlopen_detour,
-    //         FnDlopen,
-    //         FN_DLOPEN
-    //     );
-    // }
-    // tracing::debug!("test3");
-    // // start Hypervisor command handler background thread (requires HYPERVISOR_IP / PORT)
-    // if let (Ok(ip), Ok(port)) = (
-    //     std::env::var("HYPERVISOR_IP"),
-    //     std::env::var("HYPERVISOR_PORT"),
-    // ) {
-    //     command_handler::start_background_handler(&ip, &port, device_config_result.host_pid);
-    // } else {
-    //     tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
-    // }
+    if !cuda_hooked || !nvml_hooked {
+        replace_symbol!(
+            &mut hook_manager,
+            None,
+            "dlopen",
+            dlopen_detour,
+            FnDlopen,
+            FN_DLOPEN
+        );
+    }
+    tracing::debug!("test3");
+    // start Hypervisor command handler background thread (requires HYPERVISOR_IP / PORT)
+    if let (Ok(ip), Ok(port)) = (
+        std::env::var("HYPERVISOR_IP"),
+        std::env::var("HYPERVISOR_PORT"),
+    ) {
+        command_handler::start_background_handler(&ip, &port, device_config_result.host_pid);
+    } else {
+        tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
+    }
 }
 
 #[hook_fn]
