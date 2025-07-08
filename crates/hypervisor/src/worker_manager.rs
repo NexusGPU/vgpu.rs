@@ -271,8 +271,8 @@ where
     /// Handle a pod update event.
     pub async fn handle_pod_updated(
         &self,
-        pod_name: String,
-        namespace: String,
+        pod_name: &str,
+        namespace: &str,
         pod_info: TensorFusionPodInfo,
         node_name: Option<String>,
     ) -> Result<()> {
@@ -299,7 +299,7 @@ where
     }
 
     /// Handle a pod deletion event.
-    pub async fn handle_pod_deleted(&self, pod_name: String, namespace: String) -> Result<()> {
+    pub async fn handle_pod_deleted(&self, pod_name: &str, namespace: &str) -> Result<()> {
         let worker_key = format!("{namespace}/{pod_name}");
         info!("Processing pod deletion: {worker_key}");
 

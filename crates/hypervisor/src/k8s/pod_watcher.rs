@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use std::time::Duration;
 
 use error_stack::Report;
@@ -14,7 +14,6 @@ use kube::runtime::WatchStreamExt;
 use kube::Api;
 use kube::Client;
 use tokio::select;
-use tokio::sync::oneshot;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -211,7 +210,7 @@ impl PodWatcher {
             WorkerUpdate::PodCreated { pod_info: tf_info }
         };
 
-        if let Err(e) = self.update_sender.send(update) {
+        if let Err(e) = self.update_sender.send(update).await {
             warn!("Failed to send worker update: {e}");
         }
 
@@ -222,7 +221,7 @@ impl PodWatcher {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::mpsc;
+    use tokio::sync::mpsc;
 
     use k8s_openapi::api::core::v1::Pod;
     use k8s_openapi::api::core::v1::PodSpec;
@@ -245,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_pod_event_with_annotations() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, mut rx) = mpsc::channel(3);
         let watcher = PodWatcher {
             client: Client::try_default().await.unwrap_or_else(|_| {
                 // Skip test if no K8s cluster available
@@ -267,7 +266,7 @@ mod tests {
 
         watcher.handle_pod_event(pod).await.unwrap();
 
-        let update = rx.recv().unwrap();
+        let update = rx.recv().await.unwrap();
         match update {
             WorkerUpdate::PodCreated { pod_info } => {
                 assert_eq!(pod_info.0.pod_name, "test-pod");
@@ -278,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_pod_event_without_annotations() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, mut rx) = mpsc::channel(32);
         let watcher = PodWatcher {
             client: Client::try_default().await.unwrap_or_else(|_| {
                 Client::try_from(kube::Config::new("http://localhost:8080".parse().unwrap()))

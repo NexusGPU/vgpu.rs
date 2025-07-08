@@ -183,7 +183,7 @@ impl IntegrationTestSetup {
         self.next_port += 1;
 
         // Get GPU UUID (assume first GPU for now)
-        let gpu_uuid = get_gpu_uuid(0)?;
+        let gpu_uuid = &get_gpu_uuid(0)?;
 
         // Create memory and compute limit configurations
         let mem_limit_config = json!({
