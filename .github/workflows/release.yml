@@ -34,7 +34,7 @@ jobs:
       - name: Semantic Release
         if: github.event_name != 'workflow_dispatch'
         id: semantic
-        uses: cycjimmy/semantic-release-action@v4.2.1
+        uses: cycjimmy/semantic-release-action@v4.2.2
         with:
           semantic_version: 18
           extra_plugins: |
