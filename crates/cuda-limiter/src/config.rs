@@ -56,7 +56,12 @@ pub fn get_device_configs(nvml: &Nvml) -> Result<DeviceConfigResult, Report<Conf
             String::new()
         });
 
-        fetch_device_configs_from_hypervisor(&hypervisor_ip, &hypervisor_port, &container_name)
+        fetch_device_configs_from_hypervisor(
+            &hypervisor_ip,
+            &hypervisor_port,
+            &container_name,
+            nvml,
+        )
     } else {
         tracing::info!("No hypervisor configuration found, using local environment variables");
         let device_configs = parse_limits_and_create_device_configs(nvml);
@@ -73,6 +78,7 @@ fn fetch_device_configs_from_hypervisor(
     hypervisor_ip: &str,
     hypervisor_port: &str,
     container_name: &str,
+    nvml: &Nvml,
 ) -> Result<DeviceConfigResult, Report<ConfigError>> {
     // Get Kubernetes service account token
     let token = get_k8s_service_account_token().change_context(ConfigError::OidcAuth)?;
@@ -142,11 +148,42 @@ fn fetch_device_configs_from_hypervisor(
         device_configs.len()
     );
 
-    if let Some(gpu_uuids) = worker_info.gpu_uuids {
-        if gpu_uuids.len() > 0 {
-            let visible_devices = gpu_uuids.join(",").replace("gpu-", "GPU-");
-            env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
-            env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+    if let Some(gpu_uuids) = &worker_info.gpu_uuids {
+        if !gpu_uuids.is_empty() {
+            let device_indices: Vec<String> = gpu_uuids
+                .iter()
+                .filter_map(|uuid_str| {
+                    // NVML-wrapper expects UUIDs in the format "GPU-..."
+                    let nvml_uuid = uuid_str.replace("gpu-", "GPU-");
+                    match nvml.device_by_uuid(nvml_uuid) {
+                        Ok(device) => match device.index() {
+                            Ok(index) => Some(index.to_string()),
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to get index for device with UUID {}: {}",
+                                    uuid_str,
+                                    e
+                                );
+                                None
+                            }
+                        },
+                        Err(e) => {
+                            tracing::warn!("Failed to find device with UUID {}: {}", uuid_str, e);
+                            None
+                        }
+                    }
+                })
+                .collect();
+
+            if !device_indices.is_empty() {
+                let visible_devices = device_indices.join(",");
+                tracing::info!(
+                    "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
+                    &visible_devices
+                );
+                env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
+                env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+            }
         }
     }
 
@@ -208,6 +245,7 @@ fn parse_limits_and_create_device_configs(nvml: &Nvml) -> Vec<DeviceConfig> {
 pub trait NvmlInterface {
     fn device_count(&self) -> Result<u32, NvmlError>;
     fn device_by_index(&self, index: u32) -> Result<Box<dyn DeviceInterface + '_>, NvmlError>;
+    fn device_by_uuid(&self, uuid: &str) -> Result<Box<dyn DeviceInterface + '_>, NvmlError>;
 }
 
 impl NvmlInterface for Nvml {
@@ -221,16 +259,28 @@ impl NvmlInterface for Nvml {
             Err(e) => Err(e),
         }
     }
+
+    fn device_by_uuid(&self, uuid: &str) -> Result<Box<dyn DeviceInterface + '_>, NvmlError> {
+        match self.device_by_uuid(uuid) {
+            Ok(device) => Ok(Box::new(DeviceWrapper(device))),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 pub trait DeviceInterface {
     fn uuid(&self) -> Result<String, NvmlError>;
+    fn index(&self) -> Result<u32, NvmlError>;
 }
 struct DeviceWrapper<'nvml>(device::Device<'nvml>);
 
 impl<'nvml> DeviceInterface for DeviceWrapper<'nvml> {
     fn uuid(&self) -> Result<String, NvmlError> {
         self.0.uuid()
+    }
+
+    fn index(&self) -> Result<u32, NvmlError> {
+        self.0.index()
     }
 }
 
@@ -404,23 +454,45 @@ mod tests {
         fn device_by_index(&self, index: u32) -> Result<Box<dyn DeviceInterface + '_>, NvmlError> {
             let uuids = self.device_uuids.borrow();
             if let Some(uuid) = uuids.get(&index) {
-                Ok(Box::new(MockDevice { uuid: uuid.clone() }))
+                Ok(Box::new(MockDevice {
+                    uuid: uuid.clone(),
+                    index,
+                }))
             } else {
                 // If no UUID is set, use a default UUID
                 Ok(Box::new(MockDevice {
                     uuid: format!("default-uuid-{index}"),
+                    index,
                 }))
             }
+        }
+
+        fn device_by_uuid(&self, uuid: &str) -> Result<Box<dyn DeviceInterface + '_>, NvmlError> {
+            let uuids = self.device_uuids.borrow();
+            for (index, device_uuid) in uuids.iter() {
+                if device_uuid == uuid {
+                    return Ok(Box::new(MockDevice {
+                        uuid: device_uuid.clone(),
+                        index: *index,
+                    }));
+                }
+            }
+            Err(NvmlError::NotFound)
         }
     }
 
     struct MockDevice {
         uuid: String,
+        index: u32,
     }
 
     impl DeviceInterface for MockDevice {
         fn uuid(&self) -> Result<String, NvmlError> {
             Ok(self.uuid.clone())
+        }
+
+        fn index(&self) -> Result<u32, NvmlError> {
+            Ok(self.index)
         }
     }
 
@@ -464,8 +536,10 @@ mod tests {
             assert_eq!(configs[1].up_limit, 75);
             assert_eq!(configs[1].mem_limit, 2048);
         }
-        // visible_devices can be "0,1" or "1,0"
-        assert!(visible_devices == "0,1" || visible_devices == "1,0");
+        // visible_devices can be "0,1" or "1,0", so we sort to check
+        let mut sorted_indices: Vec<_> = visible_devices.split(',').collect();
+        sorted_indices.sort();
+        assert_eq!(sorted_indices.join(","), "0,1");
     }
 
     #[test]
@@ -500,7 +574,10 @@ mod tests {
         }
         assert!(found_device0, "Device 0 config not found");
         assert!(found_device1, "Device 1 config not found");
-        assert!(visible_devices == "0,1" || visible_devices == "1,0");
+        // visible_devices can be "0,1" or "1,0", so we sort to check
+        let mut sorted_indices: Vec<_> = visible_devices.split(',').collect();
+        sorted_indices.sort();
+        assert_eq!(sorted_indices.join(","), "0,1");
     }
 
     #[test]
