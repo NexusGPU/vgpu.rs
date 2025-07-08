@@ -13,11 +13,11 @@
 
 use core::error::Error;
 use std::collections::HashMap;
-use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
 use derive_more::Display;
+use tokio::fs;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -266,7 +266,7 @@ impl HostPidProbe {
     async fn scan_proc_filesystem() -> Result<Vec<PodProcessInfo>, HostPidProbeError> {
         let mut processes = Vec::new();
 
-        let proc_dir = match fs::read_dir("/proc") {
+        let mut proc_dir = match fs::read_dir("/proc").await {
             Ok(dir) => dir,
             Err(e) => {
                 return Err(HostPidProbeError::ProcReadError {
@@ -275,25 +275,34 @@ impl HostPidProbe {
             }
         };
 
-        for entry in proc_dir {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => continue,
+        loop {
+            let entry_opt = match proc_dir.next_entry().await {
+                Ok(opt) => opt,
+                Err(e) => {
+                    return Err(HostPidProbeError::ProcReadError {
+                        message: format!("Cannot read /proc entry: {e}"),
+                    });
+                }
+            };
+
+            // Break when no more entries
+            let entry = match entry_opt {
+                Some(ent) => ent,
+                None => break,
             };
 
             let file_name = entry.file_name();
             let pid_str = match file_name.to_str() {
-                Some(name) => name,
+                Some(pid_str) => pid_str,
                 None => continue,
             };
 
-            // Check if this is a PID directory
-            let pid: u32 = match pid_str.parse() {
+            let pid = match pid_str.parse::<u32>() {
                 Ok(pid) => pid,
                 Err(_) => continue,
             };
 
-            if let Ok(process_info) = Self::extract_process_info(pid).await {
+            if let Ok(process_info) = HostPidProbe::extract_process_info(pid).await {
                 processes.push(process_info);
             }
         }
@@ -318,7 +327,7 @@ impl HostPidProbe {
 
         // Read environment variables
         let environ_data =
-            fs::read_to_string(&environ_path).map_err(|e| HostPidProbeError::ProcReadError {
+            fs::read_to_string(&environ_path).await.map_err(|e| HostPidProbeError::ProcReadError {
                 message: format!("Cannot read {environ_path}: {e}"),
             })?;
 
@@ -328,9 +337,11 @@ impl HostPidProbe {
 
         // Read status file to get namespace PID
         let status_data =
-            fs::read_to_string(&status_path).map_err(|e| HostPidProbeError::ProcReadError {
-                message: format!("Cannot read {status_path}: {e}"),
-            })?;
+            fs::read_to_string(&status_path)
+                .await
+                .map_err(|e| HostPidProbeError::ProcReadError {
+                    message: format!("Cannot read {status_path}: {e}"),
+                })?;
 
         let container_pid = Self::parse_container_pid(&status_data)?;
 
