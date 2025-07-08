@@ -61,13 +61,14 @@ impl TensorFusionWorker {
         namespace: String,
         pod_name: String,
     ) -> TensorFusionWorker {
+        let name = format!("{}/{}", namespace, pod_name);
         Self {
             id,
             qos_level,
             state: RwLock::new(ProcessState::Running),
             gpu_uuids,
             gpu_observer,
-            name: format!("{}/{}", namespace, pod_name),
+            name,
             pod_name,
             namespace,
         }
