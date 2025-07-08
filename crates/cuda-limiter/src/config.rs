@@ -29,6 +29,8 @@ pub enum ConfigError {
     OidcAuth,
     #[error("JSON parsing failed")]
     JsonParsing,
+    #[error("NVML error")]
+    Nvml(NvmlError),
 }
 
 /// Main entry point for getting device configurations
@@ -56,7 +58,7 @@ pub fn get_device_configs(nvml: &Nvml) -> Result<DeviceConfigResult, Report<Conf
             String::new()
         });
 
-        fetch_device_configs_from_hypervisor(&hypervisor_ip, &hypervisor_port, &container_name)
+        fetch_device_configs_from_hypervisor(nvml, &hypervisor_ip, &hypervisor_port, &container_name)
     } else {
         tracing::info!("No hypervisor configuration found, using local environment variables");
         let device_configs = parse_limits_and_create_device_configs(nvml);
@@ -70,6 +72,7 @@ pub fn get_device_configs(nvml: &Nvml) -> Result<DeviceConfigResult, Report<Conf
 
 /// Fetch device configurations from hypervisor API using Kubernetes service account token
 fn fetch_device_configs_from_hypervisor(
+    nvml: &Nvml,
     hypervisor_ip: &str,
     hypervisor_port: &str,
     container_name: &str,
@@ -142,11 +145,36 @@ fn fetch_device_configs_from_hypervisor(
         device_configs.len()
     );
 
-    if let Some(gpu_uuids) = worker_info.gpu_uuids {
+    if let Some(gpu_uuids) = &worker_info.gpu_uuids {
         if !gpu_uuids.is_empty() {
-            let visible_devices = gpu_uuids.join(",").replace("gpu-", "GPU-");
-            env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
-            env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+            let lower_case_uuids: HashSet<_> =
+                gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
+            let device_count = nvml
+                .device_count()
+                .map_err(|e| Report::new(ConfigError::Nvml(e)))?;
+
+            let mut device_indices = Vec::new();
+            for i in 0..device_count {
+                let device = nvml
+                    .device_by_index(i)
+                    .map_err(|e| Report::new(ConfigError::Nvml(e)))?;
+                let uuid = device
+                    .uuid()
+                    .map_err(|e| Report::new(ConfigError::Nvml(e)))?;
+                if lower_case_uuids.contains(&uuid.to_lowercase()) {
+                    device_indices.push(i.to_string());
+                }
+            }
+
+            if !device_indices.is_empty() {
+                let visible_devices = device_indices.join(",");
+                tracing::info!(
+                    "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
+                    &visible_devices
+                );
+                env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
+                env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+            }
         }
     }
 
