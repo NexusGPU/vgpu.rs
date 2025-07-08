@@ -101,7 +101,11 @@ impl<R> TaskResult<R> {
     }
 
     /// Create a failed task result.
-    pub fn failure(task_id: TaskId, client_id: impl Into<String>, error: impl Into<String>) -> Self {
+    pub fn failure(
+        task_id: TaskId,
+        client_id: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Self {
         Self {
             task_id,
             client_id: client_id.into(),

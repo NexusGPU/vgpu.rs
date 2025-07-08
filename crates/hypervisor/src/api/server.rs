@@ -27,7 +27,6 @@ use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
 use crate::worker_manager::WorkerManager;
 
-
 /// HTTP API server for querying pod resource information
 pub struct ApiServer<AddCB, RemoveCB> {
     worker_manager: Arc<WorkerManager<AddCB, RemoveCB>>,

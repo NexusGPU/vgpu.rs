@@ -1,8 +1,7 @@
 //! Error types for HTTP bidirectional communication.
 
-use std::borrow::Cow;
-
 use core::error::Error;
+use std::borrow::Cow;
 
 use derive_more::Display;
 use error_stack::Report;

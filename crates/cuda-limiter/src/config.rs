@@ -58,7 +58,12 @@ pub fn get_device_configs(nvml: &Nvml) -> Result<DeviceConfigResult, Report<Conf
             String::new()
         });
 
-        fetch_device_configs_from_hypervisor(nvml, &hypervisor_ip, &hypervisor_port, &container_name)
+        fetch_device_configs_from_hypervisor(
+            nvml,
+            &hypervisor_ip,
+            &hypervisor_port,
+            &container_name,
+        )
     } else {
         tracing::info!("No hypervisor configuration found, using local environment variables");
         let device_configs = parse_limits_and_create_device_configs(nvml);
@@ -147,8 +152,7 @@ fn fetch_device_configs_from_hypervisor(
 
     if let Some(gpu_uuids) = &worker_info.gpu_uuids {
         if !gpu_uuids.is_empty() {
-            let lower_case_uuids: HashSet<_> =
-                gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
+            let lower_case_uuids: HashSet<_> = gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
             let device_count = nvml
                 .device_count()
                 .map_err(|e| Report::new(ConfigError::Nvml(e)))?;

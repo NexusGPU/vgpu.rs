@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use tokio::sync::{mpsc, oneshot};
 use std::time::Duration;
 
 use error_stack::Report;
@@ -14,6 +13,8 @@ use kube::runtime::WatchStreamExt;
 use kube::Api;
 use kube::Client;
 use tokio::select;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -221,11 +222,11 @@ impl PodWatcher {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use tokio::sync::mpsc;
 
     use k8s_openapi::api::core::v1::Pod;
     use k8s_openapi::api::core::v1::PodSpec;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use tokio::sync::mpsc;
 
     use super::*;
 
