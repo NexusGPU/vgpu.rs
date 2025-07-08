@@ -34,7 +34,7 @@ impl JwtAuthMiddleware {
         }
 
         let payload_b64 = parts[1];
-        let payload_bytes = base64::engine::general_purpose::URL_SAFE
+        let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(payload_b64)
             .map_err(|e| {
                 Report::new(ApiError::InvalidJwtToken {
