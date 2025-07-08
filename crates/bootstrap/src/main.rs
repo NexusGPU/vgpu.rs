@@ -52,11 +52,7 @@ fn write_ld_preload_config() -> Result<()> {
             format!("{PRELOAD_ADD_PATH_LIBS}{PRELOAD_CUDA_STUB_LIBS}")
         },
     )
-    .map_err(|e| {
-        format!(
-            "Failed to write preload config to {PRELOAD_CONFIG_PATH}: {e}",
-        )
-    })?;
+    .map_err(|e| format!("Failed to write preload config to {PRELOAD_CONFIG_PATH}: {e}",))?;
     log_debug(&format!(
         "Successfully wrote preload config to {PRELOAD_CONFIG_PATH}",
     ));
@@ -84,11 +80,7 @@ fn copy_dynamic_lib_files() -> Result<()> {
             log_debug(&format!("Copying {} to {}", path.display(), target_path));
 
             fs::copy(&path, &target_path).map_err(|e| {
-                format!(
-                    "Failed to copy {} to {}: {e}",
-                    path.display(),
-                    target_path,
-                )
+                format!("Failed to copy {} to {}: {e}", path.display(), target_path,)
             })?;
 
             copied_count += 1;
@@ -103,11 +95,8 @@ fn copy_dynamic_lib_files() -> Result<()> {
 
 fn copy_nvidia_smi_to_path() -> Result<()> {
     log_info("Copying nvidia-smi binary");
-    fs::copy(NVIDIA_SMI_SOURCE, NVIDIA_SMI_TARGET).map_err(|e| {
-        format!(
-            "Failed to copy {NVIDIA_SMI_SOURCE} to {NVIDIA_SMI_TARGET}: {e}",
-        )
-    })?;
+    fs::copy(NVIDIA_SMI_SOURCE, NVIDIA_SMI_TARGET)
+        .map_err(|e| format!("Failed to copy {NVIDIA_SMI_SOURCE} to {NVIDIA_SMI_TARGET}: {e}",))?;
     log_debug(&format!(
         "Successfully copied {NVIDIA_SMI_SOURCE} to {NVIDIA_SMI_TARGET}",
     ));
@@ -119,18 +108,13 @@ fn create_symlink_for_nvml() -> Result<()> {
 
     // Remove existing symlink if it exists
     if fs::metadata(NVIDIA_ML_SYMLINK).is_ok() {
-        fs::remove_file(NVIDIA_ML_SYMLINK).map_err(|e| {
-            format!(
-                "Failed to remove existing symlink {NVIDIA_ML_SYMLINK}: {e}",
-            )
-        })?;
+        fs::remove_file(NVIDIA_ML_SYMLINK)
+            .map_err(|e| format!("Failed to remove existing symlink {NVIDIA_ML_SYMLINK}: {e}",))?;
         log_debug(&format!("Removed existing symlink {NVIDIA_ML_SYMLINK}"));
     }
 
     symlink(NVIDIA_ML_LIB, NVIDIA_ML_SYMLINK).map_err(|e| {
-        format!(
-            "Failed to create symlink from {NVIDIA_ML_LIB} to {NVIDIA_ML_SYMLINK}: {e}",
-        )
+        format!("Failed to create symlink from {NVIDIA_ML_LIB} to {NVIDIA_ML_SYMLINK}: {e}",)
     })?;
     log_debug(&format!(
         "Successfully created symlink from {NVIDIA_ML_LIB} to {NVIDIA_ML_SYMLINK}",

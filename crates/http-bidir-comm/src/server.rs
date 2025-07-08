@@ -1,5 +1,6 @@
 //! HTTP server for bidirectional communication.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
@@ -15,7 +16,6 @@ use tracing::info;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
-use std::borrow::Cow;
 
 use crate::error::CommError;
 use crate::error::CommResult;
@@ -118,7 +118,10 @@ where T: Clone
             Ok(())
         } else {
             bail!(CommError::ServerState {
-                message: Cow::Owned(format!("Task {} not found in processing queue", result.task_id)),
+                message: Cow::Owned(format!(
+                    "Task {} not found in processing queue",
+                    result.task_id
+                )),
             });
         }
     }

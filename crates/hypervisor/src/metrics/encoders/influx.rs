@@ -76,7 +76,6 @@ mod tests {
 
     use super::*;
 
-
     #[test]
     fn test_encode_metrics_basic() {
         let encoder = InfluxEncoder::new();

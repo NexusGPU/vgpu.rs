@@ -31,7 +31,8 @@ use nvml_wrapper::Nvml;
 use process::GpuProcess;
 use process::GpuResources;
 use scheduler::weighted::WeightedScheduler;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use utils::version;
 use worker_manager::WorkerManager;
 
@@ -78,7 +79,7 @@ struct Cli {
     #[arg(
         long,
         env = "GPU_NODE_NAME",
-        help = "Node name for filtering pods to this node only",
+        help = "Node name for filtering pods to this node only"
     )]
     node_name: String,
 
@@ -316,7 +317,9 @@ async fn main() -> Result<()> {
                         namespace,
                     } => {
                         tracing::info!("Pod deleted: {}/{}", namespace, pod_name);
-                        if let Err(e) = worker_manager.handle_pod_deleted(&pod_name, &namespace).await
+                        if let Err(e) = worker_manager
+                            .handle_pod_deleted(&pod_name, &namespace)
+                            .await
                         {
                             tracing::error!("Failed to handle pod deletion: {e}");
                         }
