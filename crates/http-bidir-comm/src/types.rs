@@ -89,10 +89,10 @@ pub struct TaskResult<R> {
 
 impl<R> TaskResult<R> {
     /// Create a successful task result.
-    pub fn success(task_id: TaskId, client_id: String, result: R) -> Self {
+    pub fn success(task_id: TaskId, client_id: impl Into<String>, result: R) -> Self {
         Self {
             task_id,
-            client_id,
+            client_id: client_id.into(),
             success: true,
             result: Some(result),
             error: None,
@@ -101,10 +101,10 @@ impl<R> TaskResult<R> {
     }
 
     /// Create a failed task result.
-    pub fn failure(task_id: TaskId, client_id: String, error: impl Into<String>) -> Self {
+    pub fn failure(task_id: TaskId, client_id: impl Into<String>, error: impl Into<String>) -> Self {
         Self {
             task_id,
-            client_id,
+            client_id: client_id.into(),
             success: false,
             result: None,
             error: Some(error.into()),

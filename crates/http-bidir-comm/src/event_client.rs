@@ -92,10 +92,10 @@ where
 
                         debug!(task_id = %task.id, "Processing task");
                         let result = match processor.process_task(&task.data) {
-                            Ok(r) => TaskResult::success(task.id, self.config.client_id.clone(), r),
+                            Ok(r) => TaskResult::success(task.id, &self.config.client_id, r),
                             Err(e) => TaskResult::failure(
                                 task.id,
-                                self.config.client_id.clone(),
+                                &self.config.client_id,
                                 e.to_string(),
                             ),
                         };

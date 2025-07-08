@@ -15,6 +15,7 @@ use tracing::info;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
+use std::borrow::Cow;
 
 use crate::error::CommError;
 use crate::error::CommResult;
@@ -74,7 +75,7 @@ where T: Clone
     fn enqueue_task(&mut self, task: TaskItem<T>, max_queue_size: usize) -> CommResult<()> {
         if self.pending.len() >= max_queue_size {
             bail!(CommError::ServerState {
-                message: "Task queue is full".to_string(),
+                message: Cow::Borrowed("Task queue is full"),
             });
         }
 
@@ -117,7 +118,7 @@ where T: Clone
             Ok(())
         } else {
             bail!(CommError::ServerState {
-                message: format!("Task {} not found in processing queue", result.task_id),
+                message: Cow::Owned(format!("Task {} not found in processing queue", result.task_id)),
             });
         }
     }
@@ -242,10 +243,10 @@ where
 
         warn!(task_id = %result.task_id, "Task result received for unknown task");
         bail!(CommError::ServerState {
-            message: format!(
+            message: Cow::Owned(format!(
                 "Task result for task {} from client {} could not be processed because task or client not found",
                 result.task_id, result.client_id
-            ),
+            )),
         });
     }
 }

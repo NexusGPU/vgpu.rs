@@ -65,7 +65,8 @@ struct Cli {
     #[arg(
         long,
         help = "Enable Kubernetes pod monitoring",
-        default_value = "true"
+        default_value_t = true,
+        action = clap::ArgAction::Set
     )]
     enable_k8s: bool,
 
@@ -78,7 +79,7 @@ struct Cli {
     #[arg(
         long,
         env = "GPU_NODE_NAME",
-        help = "Node name for filtering pods to this node only"
+        help = "Node name for filtering pods to this node only",
     )]
     node_name: String,
 
@@ -104,6 +105,14 @@ struct Cli {
         help = "HTTP API server listen address"
     )]
     api_listen_addr: String,
+
+    #[arg(
+        long,
+        help = "Enable metrics collection",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
+    enable_metrics: bool,
 
     #[arg(
         long,
@@ -175,7 +184,7 @@ async fn main() -> Result<()> {
 
     // Setup Kubernetes pod watcher if enabled
     let (k8s_update_sender, k8s_update_receiver) = mpsc::channel::<WorkerUpdate>();
-    let (_k8s_shutdown_sender, k8s_shutdown_receiver) = oneshot::channel::<()>();
+    let (k8s_shutdown_sender, k8s_shutdown_receiver) = oneshot::channel::<()>();
 
     let host_pid_probe = Arc::new(HostPidProbe::new(Duration::from_secs(1)));
     // Setup worker manager
@@ -200,7 +209,7 @@ async fn main() -> Result<()> {
     ));
 
     // Setup API server shutdown channel
-    let (_api_shutdown_sender, api_shutdown_receiver) = oneshot::channel::<()>();
+    let (api_shutdown_sender, api_shutdown_receiver) = oneshot::channel::<()>();
 
     // create command dispatcher
     let command_dispatcher = Arc::new(CommandDispatcher::new());
@@ -215,7 +224,7 @@ async fn main() -> Result<()> {
     };
 
     // Start metrics collection task
-    let metrics_task = {
+    let metrics_task = if cli.enable_metrics {
         let gpu_observer = gpu_observer.clone();
         let metrics_batch_size = cli.metrics_batch_size;
         let node_name = cli.node_name.clone();
@@ -229,11 +238,13 @@ async fn main() -> Result<()> {
                 node_name,
                 gpu_pool,
                 worker_manager,
-                cli.metrics_format,
-                cli.metrics_extra_labels,
+                &cli.metrics_format,
+                cli.metrics_extra_labels.as_deref(),
             )
             .await;
         })
+    } else {
+        tokio::spawn(std::future::pending::<()>())
     };
 
     // Trap handling is now integrated into the HTTP API server
@@ -259,10 +270,7 @@ async fn main() -> Result<()> {
     } else {
         // Drop the receiver to avoid blocking
         drop(k8s_shutdown_receiver);
-        tokio::spawn(async {
-            // Empty task that never completes
-            std::future::pending::<()>().await;
-        })
+        tokio::spawn(std::future::pending::<()>())
     };
 
     // Start worker update processor for Kubernetes events
@@ -384,6 +392,9 @@ async fn main() -> Result<()> {
             tracing::info!("Received Ctrl+C, shutting down...");
         }
     }
+
+    let _ = k8s_shutdown_sender.send(());
+    let _ = api_shutdown_sender.send(());
 
     // Gracefully shutdown background host PID probe task
     host_pid_probe.shutdown().await;

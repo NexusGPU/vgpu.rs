@@ -132,7 +132,7 @@ async fn processor_functionality() {
 async fn error_handling() {
     // Test error creation
     let error = CommError::Configuration {
-        message: "test error".to_string(),
+        message: "test error".into(),
     };
     assert!(
         error.to_string().contains("test error"),
@@ -141,7 +141,7 @@ async fn error_handling() {
 
     // Test network error
     let network_error = CommError::Network {
-        message: "network failure".to_string(),
+        message: "network failure".into(),
     };
     assert!(
         network_error.to_string().contains("network failure"),
@@ -151,7 +151,7 @@ async fn error_handling() {
     // Test HTTP error
     let http_error = CommError::Http {
         status: 404,
-        message: "Not Found".to_string(),
+        message: "Not Found".into(),
     };
     assert!(
         http_error.to_string().contains("404"),

@@ -66,11 +66,11 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
     node_name: String,
     gpu_pool: Option<String>,
     worker_mgr: Arc<WorkerManager<AddCB, RemoveCB>>,
-    metrics_format: String,
-    metrics_extra_labels: Option<String>,
+    metrics_format: &str,
+    metrics_extra_labels: Option<&str>,
 ) {
     let gpu_pool = gpu_pool.unwrap_or("unknown".to_string());
-    let encoder = create_encoder(&metrics_format);
+    let encoder = create_encoder(metrics_format);
 
     let mut gpu_acc: HashMap<String, AccumulatedGpuMetrics> = HashMap::new();
 
@@ -78,9 +78,13 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
     let mut worker_acc: HashMap<String, HashMap<String, AccumulatedWorkerMetrics>> = HashMap::new();
     let mut counter = 0;
 
-    let metrics_extra_labels = metrics_extra_labels.unwrap_or_default();
-    let metrics_extra_labels = metrics_extra_labels.split(',').collect::<Vec<&str>>();
-    let has_dynamic_metrics_labels = metrics_extra_labels.len() > 0;
+    let metrics_extra_labels: Vec<_> = metrics_extra_labels
+        .unwrap_or_default()
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    let has_dynamic_metrics_labels = !metrics_extra_labels.is_empty();
 
     let mut receiver = gpu_observer.subscribe();
     while receiver.recv().await.is_some() {
@@ -187,18 +191,18 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
             for (gpu_uuid, pod_metrics) in &worker_acc {
                 for (pod_identifier, acc) in pod_metrics {
                     let worker_entry = worker_registry.get(pod_identifier).unwrap();
-                    let labels = worker_entry.info.labels.clone();
+                    let labels = &worker_entry.info.labels;
 
                     if acc.count > 0 {
                         let mut extra_labels = HashMap::new();
                         if has_dynamic_metrics_labels {
                             for label in &metrics_extra_labels {
                                 extra_labels.insert(
-                                    label.to_string(),
+                                    label.clone(),
                                     labels
-                                        .get(*label)
-                                        .unwrap_or(&String::from("unknown"))
-                                        .clone(),
+                                        .get(label)
+                                        .cloned()
+                                        .unwrap_or_else(|| "unknown".to_string()),
                                 );
                             }
                         }

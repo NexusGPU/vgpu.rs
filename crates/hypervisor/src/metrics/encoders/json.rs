@@ -62,13 +62,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_json_encoder_new() {
-        let encoder = JsonEncoder::new();
-        // Just ensure it can be created
-        assert!(true);
-    }
-
-    #[test]
     fn test_encode_metrics_basic() {
         let encoder = JsonEncoder::new();
         let mut tags = HashMap::new();
@@ -134,7 +127,7 @@ mod tests {
         fields.insert("string_val".to_string(), "hello world".into());
         fields.insert("int_val".to_string(), (-42i64).into());
         fields.insert("uint_val".to_string(), 42u64.into());
-        fields.insert("float_val".to_string(), 3.14159.into());
+        fields.insert("float_val".to_string(), std::f64::consts::PI.into());
         fields.insert("bool_val".to_string(), true.into());
 
         let result = encoder.encode_metrics("mixed_types", &tags, &fields, 1234567890);
@@ -146,7 +139,7 @@ mod tests {
         assert_eq!(parsed["field"]["string_val"], "hello world");
         assert_eq!(parsed["field"]["int_val"], -42);
         assert_eq!(parsed["field"]["uint_val"], 42);
-        assert_eq!(parsed["field"]["float_val"], 3.14159);
+        assert_eq!(parsed["field"]["float_val"], std::f64::consts::PI);
         assert_eq!(parsed["field"]["bool_val"], true);
     }
 
