@@ -42,6 +42,17 @@ When working on any project task:
 4. **Context7 (Up-to-Date Documentation Integration)**:
     - Utilize [Context7](mdc:https:/github.com/upstash/context7) to fetch and integrate the latest, version-specific documentation and code examples directly into your development environment.
 
+5. **🔧 Problem location and structured thinking**
+
+    - If the problem is complex, we should follow the general direction of locating the problem first and then solving it.
+
+6. **Structured thinking tool**
+    For complex or multi-step debugging tasks, use the `mcp_sequential-thinking_sequentialthinking` tool to structure the thinking process. This helps:
+    - **Break down the problem**: Break down the big problem into manageable small steps.
+
+    - **Clear tracking**: Record the findings and decisions at each step to avoid omissions.
+
+    - **Self-correction**: Evaluate and adjust the debugging path during the process.
 ## Effective Rule Application
 
 For any development task:
