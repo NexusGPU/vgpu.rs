@@ -105,6 +105,9 @@ where
             "Container PID not found in cache, attempting to discover..."
         );
 
+        // release the registry lock
+        drop(registry);
+
         // Discover worker PID with a timeout
         let discovery_timeout = Duration::from_secs(5);
         match timeout(
@@ -172,6 +175,10 @@ where
         host_pid = host_pid,
         "Found worker by JWT pod info and container details"
     );
+
+    // re-acquire the registry lock
+    let registry = worker_registry.read().await;
+    let worker_entry = registry.get(&worker_key).expect("Worker should exist after PID discovery");
 
     // Update the WorkerInfo with host_pid
     let mut worker_info = worker_entry.info.clone();
