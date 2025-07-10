@@ -95,7 +95,9 @@ pub(crate) mod tests {
 
     pub(crate) struct MockGpuProcess {
         id: u32,
+        #[allow(dead_code)]
         memory_bytes: u64,
+        #[allow(dead_code)]
         compute_percentage: u32,
         // state: ProcessState,
         qos_level: QosLevel,

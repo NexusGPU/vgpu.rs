@@ -8,35 +8,9 @@ use api_types::QosLevel;
 use super::GpuProcess;
 use super::GpuResources;
 use super::ProcessState;
+use crate::api::types::LimiterCommandType;
 use crate::gpu_observer::GpuObserver;
-
-#[allow(dead_code)]
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum ControlMessageType {
-    Suspend = 0,
-    Resume = 1,
-    SuspendAndVramReclaim = 2,
-    SuspendAndSave = 3,
-    ResponseSuccess = 4,
-    ResponseFail = 5,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-struct ControlMessage {
-    control: ControlMessageType,
-    payload: [u8; 128],
-}
-
-impl ControlMessage {
-    fn new(control: ControlMessageType) -> Self {
-        Self {
-            control,
-            payload: [0; 128],
-        }
-    }
-}
+use crate::limiter_comm::CommandDispatcher;
 
 pub(crate) struct TensorFusionWorker {
     id: u32,
@@ -50,6 +24,8 @@ pub(crate) struct TensorFusionWorker {
     pub(crate) pod_name: String,
     /// Kubernetes namespace
     pub(crate) namespace: String,
+    /// Command dispatcher for sending commands to limiters
+    command_dispatcher: Arc<CommandDispatcher>,
 }
 
 impl TensorFusionWorker {
@@ -60,8 +36,9 @@ impl TensorFusionWorker {
         gpu_observer: Arc<GpuObserver>,
         namespace: String,
         pod_name: String,
+        command_dispatcher: Arc<CommandDispatcher>,
     ) -> TensorFusionWorker {
-        let name = format!("{}/{}", namespace, pod_name);
+        let name = format!("{namespace}/{pod_name}");
         Self {
             id,
             qos_level,
@@ -71,11 +48,47 @@ impl TensorFusionWorker {
             name,
             pod_name,
             namespace,
+            command_dispatcher,
         }
     }
 
-    fn send_message(&self, _message: ControlMessage) -> Result<bool> {
-        todo!()
+    /// Generate limiter ID based on worker information
+    fn get_limiter_id(&self) -> String {
+        format!("limiter_{}", self.id)
+    }
+
+    /// Send command to limiter using CommandDispatcher
+    fn send_command(&self, command_type: LimiterCommandType) -> Result<()> {
+        let limiter_id = self.get_limiter_id();
+
+        // 使用 tokio::runtime::Handle 来运行异步代码
+        let rt = tokio::runtime::Handle::try_current()
+            .map_err(|_| anyhow::anyhow!("No tokio runtime available"))?;
+
+        match rt.block_on(
+            self.command_dispatcher
+                .enqueue_command(&limiter_id, command_type.clone()),
+        ) {
+            Ok(_command_id) => {
+                tracing::info!(
+                    "Command {:?} sent successfully to limiter {} for process {}",
+                    command_type,
+                    limiter_id,
+                    self.id
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to send command {:?} to limiter {} for process {}: {}",
+                    command_type,
+                    limiter_id,
+                    self.id,
+                    e
+                );
+                Err(anyhow::anyhow!("Failed to send command to limiter: {}", e))
+            }
+        }
     }
 }
 
@@ -102,86 +115,43 @@ impl GpuProcess for TensorFusionWorker {
     }
 
     fn pause(&self) -> Result<()> {
-        match self.send_message(ControlMessage::new(ControlMessageType::Suspend)) {
-            Ok(true) => {
-                // Successfully sent and got positive response
+        match self.send_command(LimiterCommandType::TfSuspend) {
+            Ok(()) => {
                 *self.state.write().expect("poisoned") = ProcessState::Paused;
+                tracing::info!("Process {} paused successfully", self.id);
                 Ok(())
             }
-            Ok(false) => {
-                // Successfully sent but got negative response
-                tracing::warn!(
-                    "Process ID {} pause request was rejected by the worker",
-                    self.id
-                );
-                Err(anyhow::anyhow!("Pause request was rejected by the worker"))
-            }
             Err(e) => {
-                // Communication error
-                tracing::error!(
-                    "Failed to send pause message to process ID {}: {}",
-                    self.id,
-                    e
-                );
-                Err(anyhow::anyhow!("Failed to communicate with worker: {}", e))
+                tracing::error!("Failed to pause process {}: {}", self.id, e);
+                Err(e)
             }
         }
     }
 
     fn release(&self) -> Result<()> {
-        match self.send_message(ControlMessage::new(
-            ControlMessageType::SuspendAndVramReclaim,
-        )) {
-            Ok(true) => {
-                // Successfully sent and got positive response
+        match self.send_command(LimiterCommandType::TfVramReclaim) {
+            Ok(()) => {
                 *self.state.write().expect("poisoned") = ProcessState::Released;
+                tracing::info!("Process {} released successfully", self.id);
                 Ok(())
             }
-            Ok(false) => {
-                // Successfully sent but got negative response
-                tracing::warn!(
-                    "Process ID {} release request was rejected by the worker",
-                    self.id
-                );
-                Err(anyhow::anyhow!(
-                    "Release request was rejected by the worker"
-                ))
-            }
             Err(e) => {
-                // Communication error
-                tracing::error!(
-                    "Failed to send release message to process ID {}: {}",
-                    self.id,
-                    e
-                );
-                Err(anyhow::anyhow!("Failed to communicate with worker: {}", e))
+                tracing::error!("Failed to release process {}: {}", self.id, e);
+                Err(e)
             }
         }
     }
 
     fn resume(&self) -> Result<()> {
-        match self.send_message(ControlMessage::new(ControlMessageType::Resume)) {
-            Ok(true) => {
-                // Successfully sent and got positive response
+        match self.send_command(LimiterCommandType::TfResume) {
+            Ok(()) => {
                 *self.state.write().expect("poisoned") = ProcessState::Running;
+                tracing::info!("Process {} resumed successfully", self.id);
                 Ok(())
             }
-            Ok(false) => {
-                // Successfully sent but got negative response
-                tracing::warn!(
-                    "Process ID {} resume request was rejected by the worker",
-                    self.id
-                );
-                Err(anyhow::anyhow!("Resume request was rejected by the worker"))
-            }
             Err(e) => {
-                // Communication error
-                tracing::error!(
-                    "Failed to send resume message to process ID {}: {}",
-                    self.id,
-                    e
-                );
-                Err(anyhow::anyhow!("Failed to communicate with worker: {}", e))
+                tracing::error!("Failed to resume process {}: {}", self.id, e);
+                Err(e)
             }
         }
     }
@@ -205,6 +175,7 @@ impl Clone for TensorFusionWorker {
             name: self.name.clone(),
             pod_name: self.pod_name.clone(),
             namespace: self.namespace.clone(),
+            command_dispatcher: Arc::clone(&self.command_dispatcher),
         }
     }
 }

@@ -169,8 +169,8 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
                 if acc.count > 0 {
                     let metrics_str = encoder.encode_gpu_metrics(
                         gpu_uuid,
-                        &node_name,
-                        &gpu_pool,
+                        node_name,
+                        gpu_pool,
                         acc.rx / acc.count as f64,
                         acc.tx / acc.count as f64,
                         acc.temperature / acc.count as f64,
@@ -209,8 +209,8 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
 
                         let metrics_str = encoder.encode_worker_metrics(
                             gpu_uuid,
-                            &node_name,
-                            &gpu_pool,
+                            node_name,
+                            gpu_pool,
                             pod_identifier,
                             &worker_entry.info.namespace,
                             worker_entry

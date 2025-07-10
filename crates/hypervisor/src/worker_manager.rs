@@ -21,6 +21,7 @@ use crate::host_pid_probe::HostPidProbe;
 use crate::host_pid_probe::PodProcessInfo;
 use crate::host_pid_probe::SubscriptionRequest;
 use crate::k8s::TensorFusionPodInfo;
+use crate::limiter_comm::CommandDispatcher;
 use crate::process::worker::TensorFusionWorker;
 
 /// Container-level information within a pod
@@ -44,7 +45,7 @@ impl ContainerInfo {
 }
 
 /// Entry that combines Kubernetes annotation info and container-level information
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct WorkerEntry {
     pub info: WorkerInfo,
     /// Container information keyed by container name
@@ -79,14 +80,7 @@ impl WorkerEntry {
     }
 }
 
-impl Default for WorkerEntry {
-    fn default() -> Self {
-        Self {
-            info: WorkerInfo::default(),
-            containers: HashMap::new(),
-        }
-    }
-}
+
 
 /// Worker registry for storing and managing worker information.
 pub type WorkerRegistry = Arc<RwLock<HashMap<String, WorkerEntry>>>;
@@ -101,6 +95,7 @@ pub struct WorkerManager<AddCB, RemoveCB> {
     add_callback: AddCB,
     remove_callback: RemoveCB,
     host_pid_probe: Arc<HostPidProbe>,
+    command_dispatcher: Arc<CommandDispatcher>,
 }
 
 impl<AddCB, RemoveCB> WorkerManager<AddCB, RemoveCB> {
@@ -126,6 +121,7 @@ where
         host_pid_probe: Arc<HostPidProbe>,
         add_callback: AddCB,
         remove_callback: RemoveCB,
+        command_dispatcher: Arc<CommandDispatcher>,
     ) -> Self {
         Self {
             registry: Arc::new(RwLock::new(HashMap::new())),
@@ -133,6 +129,7 @@ where
             add_callback,
             remove_callback,
             host_pid_probe,
+            command_dispatcher,
         }
     }
 
@@ -238,6 +235,7 @@ where
                 gpu_observer,
                 info_namespace.clone(),
                 info_pod_name.clone(),
+                self.command_dispatcher.clone(),
             ));
 
             // Find or create container entry
@@ -451,6 +449,7 @@ mod tests {
     #[tokio::test]
     async fn worker_manager_new() {
         let host_pid_probe = Arc::new(HostPidProbe::new(Duration::from_millis(100)));
+        let command_dispatcher = Arc::new(CommandDispatcher::new());
 
         let add_count = Arc::new(AtomicU32::new(0));
         let remove_count = Arc::new(AtomicU32::new(0));
@@ -466,7 +465,12 @@ mod tests {
             remove_count_clone.fetch_add(1, Ordering::SeqCst);
         };
 
-        let worker_manager = WorkerManager::new(host_pid_probe, add_callback, remove_callback);
+        let worker_manager = WorkerManager::new(
+            host_pid_probe,
+            add_callback,
+            remove_callback,
+            command_dispatcher,
+        );
 
         assert!(worker_manager.registry().read().await.is_empty());
     }

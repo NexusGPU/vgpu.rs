@@ -9,8 +9,6 @@ use error_stack::Report;
 use http_bidir_comm::poem;
 use http_bidir_comm::HttpServer;
 use http_bidir_comm::ServerConfig;
-use serde::Deserialize;
-use serde::Serialize;
 use tracing::info;
 use tracing::instrument;
 
@@ -68,6 +66,7 @@ impl CommandDispatcher {
     }
 
     /// Get statistics for all limiter clients.
+    #[allow(dead_code)]
     pub async fn get_all_stats(
         &self,
     ) -> std::collections::HashMap<String, http_bidir_comm::ClientStats> {
@@ -75,6 +74,7 @@ impl CommandDispatcher {
     }
 
     /// Get statistics for a specific limiter client.
+    #[allow(dead_code)]
     pub async fn get_client_stats(&self, limiter_id: &str) -> Option<http_bidir_comm::ClientStats> {
         self.server.get_client_stats(limiter_id).await
     }
@@ -104,20 +104,6 @@ fn generate_command_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Utility function to create a complete HTTP server setup for limiter communication.
-///
-/// This function creates both the command dispatcher and the necessary routes,
-/// making it easy to integrate into existing applications.
-pub fn create_limiter_communication_setup() -> (CommandDispatcher, poem::Route)
-where
-    LimiterCommand: for<'de> Deserialize<'de> + Serialize + Send + Sync + 'static,
-    LimiterCommandResponse: for<'de> Deserialize<'de> + Serialize + Send + Sync + 'static,
-{
-    let dispatcher = CommandDispatcher::new();
-    let routes = dispatcher.create_routes();
-
-    (dispatcher, routes)
-}
 
 #[cfg(test)]
 mod tests {
@@ -163,15 +149,6 @@ mod tests {
         let routes = dispatcher.create_routes();
 
         // Routes should be created successfully
-        let _ = routes;
-    }
-
-    #[test(tokio::test)]
-    async fn create_setup() {
-        let (dispatcher, routes) = create_limiter_communication_setup();
-
-        // Should be able to use both dispatcher and routes
-        let _ = dispatcher.get_all_stats().await;
         let _ = routes;
     }
 
