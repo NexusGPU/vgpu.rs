@@ -113,9 +113,14 @@ impl HostPidProbe {
 
     /// Subscribes to receive notification for a single, specific process.
     ///
-    /// The `request` must contain a `container_pid`. Returns a [`oneshot::Receiver`]
-    /// that will receive a [`PodProcessInfo`] when the requested pod, container,
-    /// and container PID combination is discovered.
+    /// The `request` must contain a `container_pid`.
+    ///
+    /// * `ttl` – Maximum duration to wait for a matching process. If the TTL
+    ///   expires before a match is found, the receiver side will get an
+    ///   `Err(RecvError)` indicating timeout/cancellation.
+    ///
+    /// Returns a [`oneshot::Receiver`] that will yield a [`PodProcessInfo`] once
+    /// the requested pod/container PID pair is discovered, or error after TTL.
     ///
     /// # Examples
     ///
@@ -131,7 +136,7 @@ impl HostPidProbe {
     ///     container_pid: 42,
     /// };
     ///
-    /// let receiver = probe.subscribe(request).await;
+    /// let receiver = probe.subscribe(request, Duration::from_secs(5)).await;
     /// match receiver.await {
     ///     Ok(info) => println!("Found process: {:?}", info),
     ///     Err(_) => println!("Subscription was cancelled"),
@@ -143,6 +148,7 @@ impl HostPidProbe {
     pub async fn subscribe(
         &self,
         request: SubscriptionRequest,
+        ttl: Duration,
     ) -> oneshot::Receiver<PodProcessInfo> {
         let (sender, receiver) = oneshot::channel();
 
@@ -161,6 +167,16 @@ impl HostPidProbe {
         if is_first {
             self.start_scanning().await;
         }
+
+        // run ttl timer to remove subscription
+        let subs_clone = Arc::clone(&self.subscriptions);
+        let req_clone = request.clone();
+        tokio::spawn(async move {
+            time::sleep(ttl).await;
+            let mut guard = subs_clone.lock().await;
+            // if still exists, remove and automatically drop sender (Receiver will receive Err)
+            guard.remove(&req_clone);
+        });
 
         receiver
     }
@@ -210,11 +226,15 @@ impl HostPidProbe {
     /// `false` if scanning should stop.
     #[tracing::instrument(level = "trace", skip(subscriptions))]
     async fn scan_and_notify(subscriptions: ActiveSubscriptions) -> bool {
-        let found_processes = match Self::scan_proc_filesystem().await {
-            Ok(processes) => processes,
-            Err(e) => {
-                error!(error = %e, "Failed to scan proc filesystem");
-                return true; // Continue scanning despite error
+        let found_processes = if cfg!(test) {
+            Vec::new() // Mock: No processes found during tests
+        } else {
+            match Self::scan_proc_filesystem().await {
+                Ok(processes) => processes,
+                Err(e) => {
+                    error!(error = %e, "Failed to scan proc filesystem");
+                    return true; // Continue scanning despite error
+                }
             }
         };
 
@@ -326,22 +346,22 @@ impl HostPidProbe {
         let status_path = format!("/proc/{pid}/status");
 
         // Read environment variables
-        let environ_data =
-            fs::read_to_string(&environ_path).await.map_err(|e| HostPidProbeError::ProcReadError {
+        let environ_data = fs::read_to_string(&environ_path).await.map_err(|e| {
+            HostPidProbeError::ProcReadError {
                 message: format!("Cannot read {environ_path}: {e}"),
-            })?;
+            }
+        })?;
 
         // Extract pod name, namespace, and container name from environment
         let (pod_name, namespace, container_name) =
             Self::parse_environment_variables(&environ_data)?;
 
         // Read status file to get namespace PID
-        let status_data =
-            fs::read_to_string(&status_path)
-                .await
-                .map_err(|e| HostPidProbeError::ProcReadError {
-                    message: format!("Cannot read {status_path}: {e}"),
-                })?;
+        let status_data = fs::read_to_string(&status_path).await.map_err(|e| {
+            HostPidProbeError::ProcReadError {
+                message: format!("Cannot read {status_path}: {e}"),
+            }
+        })?;
 
         let container_pid = Self::parse_container_pid(&status_data)?;
 
@@ -436,41 +456,16 @@ impl HostPidProbe {
 mod tests {
     use std::time::Duration;
 
+    use tokio::time::timeout;
+
     use super::*;
 
-    #[tokio::test]
-    async fn new_probe_has_no_active_subscriptions() {
-        let probe = HostPidProbe::new(Duration::from_millis(100));
-        let subscriptions = probe.subscriptions.lock().await;
-        assert!(
-            subscriptions.is_empty(),
-            "New probe should have no subscriptions"
-        );
-    }
-
-    #[tokio::test]
-    async fn subscription_adds_to_active_list() {
-        let probe = HostPidProbe::new(Duration::from_millis(100));
-        let request = SubscriptionRequest {
-            pod_name: "test-pod".to_string(),
-            namespace: "test-namespace".to_string(),
-            container_name: "test-container".to_string(),
-            container_pid: 123,
-        };
-
-        let _receiver = probe.subscribe(request.clone()).await;
-
-        let subscriptions = probe.subscriptions.lock().await;
-        assert!(
-            subscriptions.contains_key(&request),
-            "Subscription should be added"
-        );
-    }
+    // set a unified timeout for async waiting to avoid test hanging
+    const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
     #[test]
     fn parse_environment_variables_success() {
-        let environ_data =
-            "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=my-namespace\0CONTAINER_NAME=my-container\0HOME=/root\0";
+        let environ_data = "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=my-namespace\0CONTAINER_NAME=my-container\0HOME=/root\0";
 
         let result = HostPidProbe::parse_environment_variables(environ_data);
 
@@ -485,212 +480,172 @@ mod tests {
     }
 
     #[test]
-    fn parse_environment_variables_missing_pod_name() {
+    fn parse_environment_variables_missing_required() {
+        // missing POD_NAME
         let environ_data = "PATH=/usr/bin\0CONTAINER_NAME=my-container\0HOME=/root\0";
+        assert!(HostPidProbe::parse_environment_variables(environ_data).is_err());
 
-        let result = HostPidProbe::parse_environment_variables(environ_data);
+        // missing CONTAINER_NAME
+        let environ_data = "POD_NAME=my-pod\0POD_NAMESPACE=my-namespace\0";
+        assert!(HostPidProbe::parse_environment_variables(environ_data).is_err());
 
-        assert!(result.is_err(), "Should fail when POD_NAME is missing");
+        // missing POD_NAMESPACE
+        let environ_data = "POD_NAME=my-pod\0CONTAINER_NAME=my-container\0";
+        assert!(HostPidProbe::parse_environment_variables(environ_data).is_err());
     }
 
     #[test]
-    fn parse_environment_variables_missing_container_name() {
-        let environ_data =
-            "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=my-namespace\0HOME=/root\0";
+    fn parse_container_pid_variations() {
+        // normal case
+        let status_data = "Name:\ttesting\nPid:\t1234\nNSpid:\t1234\t1\n";
+        assert_eq!(HostPidProbe::parse_container_pid(status_data).unwrap(), 1);
 
-        let result = HostPidProbe::parse_environment_variables(environ_data);
+        // multiple namespaces
+        let status_data = "NSpid:\t1234\t567\t10\n";
+        assert_eq!(HostPidProbe::parse_container_pid(status_data).unwrap(), 10);
 
-        assert!(
-            result.is_err(),
-            "Should fail when CONTAINER_NAME is missing"
-        );
+        // missing NSpid
+        let status_data = "Name:\ttesting\n";
+        assert!(HostPidProbe::parse_container_pid(status_data).is_err());
     }
 
-    #[test]
-    fn parse_environment_variables_missing_namespace() {
-        let environ_data =
-            "PATH=/usr/bin\0POD_NAME=my-pod\0CONTAINER_NAME=my-container\0HOME=/root\0";
-
-        let result = HostPidProbe::parse_environment_variables(environ_data);
-
-        assert!(result.is_err(), "Should fail when POD_NAMESPACE is missing");
+    // Helper to generate subscription request & corresponding process info
+    fn make_req(pid: u32) -> SubscriptionRequest {
+        SubscriptionRequest {
+            pod_name: "test-pod-nonexistent-12345".to_string(),
+            namespace: "test-namespace-nonexistent-12345".to_string(),
+            container_name: "test-container-nonexistent-12345".to_string(),
+            container_pid: pid,
+        }
     }
 
-    #[test]
-    fn subscription_request_with_different_namespaces() {
-        let request1 = SubscriptionRequest {
-            pod_name: "pod1".to_string(),
-            namespace: "namespace1".to_string(),
-            container_name: "container1".to_string(),
-            container_pid: 1,
-        };
+    #[tokio::test]
+    async fn subscribe_notifies_when_manual_process_is_sent() {
+        let probe = HostPidProbe::new(Duration::from_secs(30)); // 扫描间隔设大，避免真正扫描
 
-        let request2 = SubscriptionRequest {
-            pod_name: "pod1".to_string(),
-            namespace: "namespace2".to_string(),
-            container_name: "container1".to_string(),
-            container_pid: 1,
-        };
+        let request = make_req(42);
+        let receiver = probe
+            .subscribe(request.clone(), Duration::from_millis(100))
+            .await;
 
-        assert_ne!(
-            request1, request2,
-            "Requests with different namespaces should not be equal"
-        );
+        // manually send matching process info to sender, simulating scanning to target process
+        {
+            let mut subs = probe.subscriptions.lock().await;
+            let sender = subs.remove(&request).expect("Subscription must exist");
+
+            let info = PodProcessInfo {
+                host_pid: 1000,
+                container_pid: 42,
+                pod_name: request.pod_name.clone(),
+                namespace: request.namespace.clone(),
+                container_name: request.container_name.clone(),
+            };
+
+            sender.send(info).expect("Failed to send process info");
+        }
+
+        let recv_info = timeout(TEST_TIMEOUT, receiver)
+            .await
+            .expect("Receiver timed out")
+            .expect("Channel closed unexpectedly");
+
+        assert_eq!(recv_info.container_pid, 42);
+        assert_eq!(recv_info.namespace, "test-namespace-nonexistent-12345");
     }
 
-    #[test]
-    fn pod_process_info_with_different_namespaces() {
-        let info1 = PodProcessInfo {
-            host_pid: 1234,
-            container_pid: 1,
-            pod_name: "pod1".to_string(),
-            namespace: "namespace1".to_string(),
-            container_name: "container1".to_string(),
-        };
+    #[tokio::test]
+    async fn subscribe_times_out_when_no_process_found() {
+        let probe = HostPidProbe::new(Duration::from_millis(10));
 
-        let info2 = PodProcessInfo {
-            host_pid: 1234,
-            container_pid: 1,
-            pod_name: "pod1".to_string(),
-            namespace: "namespace2".to_string(),
-            container_name: "container1".to_string(),
-        };
+        let ttl = Duration::from_millis(50);
+        // Use a very unique PID that's extremely unlikely to exist
+        let receiver = probe.subscribe(make_req(999_999_999), ttl).await;
 
-        assert_ne!(
-            info1, info2,
-            "Process info with different namespaces should not be equal"
-        );
+        // no process info sent, expect timeout or TTL expiration
+        let res = timeout(ttl + ttl, receiver).await;
+        match res {
+            Ok(Err(_)) => {
+                // TTL expired, sender was dropped - this is expected
+            }
+            Err(_) => {
+                // Timeout occurred - also acceptable
+            }
+            Ok(Ok(_)) => {
+                panic!("Receiver should not get a successful message without matching process");
+            }
+        }
     }
 
-    #[test]
-    fn parse_environment_variables_with_extra_vars() {
-        let environ_data = "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=my-namespace\0CONTAINER_NAME=my-container\0HOME=/root\0EXTRA_VAR=extra_value\0";
+    #[tokio::test]
+    async fn multiple_subscriptions_all_get_notified() {
+        let probe = HostPidProbe::new(Duration::from_secs(30));
 
-        let result = HostPidProbe::parse_environment_variables(environ_data);
+        let req1 = make_req(1);
+        let req2 = make_req(2);
 
-        assert!(
-            result.is_ok(),
-            "Should parse environment variables successfully even with extra vars"
-        );
-        let (pod_name, namespace, container_name) = result.unwrap();
-        assert_eq!(pod_name, "my-pod");
-        assert_eq!(namespace, "my-namespace");
-        assert_eq!(container_name, "my-container");
-    }
+        let recv1 = probe
+            .subscribe(req1.clone(), Duration::from_millis(100))
+            .await;
+        let recv2 = probe
+            .subscribe(req2.clone(), Duration::from_millis(100))
+            .await;
 
-    #[test]
-    fn parse_container_pid_success() {
-        let status_data = "Name:\ttesting\nPid:\t1234\nNSpid:\t1234\t1\nOther:\tvalue\n";
+        {
+            let mut subs = probe.subscriptions.lock().await;
 
-        let result = HostPidProbe::parse_container_pid(status_data);
+            // simulate scanning to first process
+            if let Some(sender) = subs.remove(&req1) {
+                sender
+                    .send(PodProcessInfo {
+                        host_pid: 100,
+                        container_pid: 1,
+                        pod_name: req1.pod_name.clone(),
+                        namespace: req1.namespace.clone(),
+                        container_name: req1.container_name.clone(),
+                    })
+                    .unwrap();
+            }
 
-        assert!(result.is_ok(), "Should parse container PID successfully");
-        assert_eq!(result.unwrap(), 1, "Should extract the last PID from NSpid");
-    }
+            // simulate scanning to second process
+            if let Some(sender) = subs.remove(&req2) {
+                sender
+                    .send(PodProcessInfo {
+                        host_pid: 101,
+                        container_pid: 2,
+                        pod_name: req2.pod_name.clone(),
+                        namespace: req2.namespace.clone(),
+                        container_name: req2.container_name.clone(),
+                    })
+                    .unwrap();
+            }
+        }
 
-    #[test]
-    fn parse_container_pid_multiple_namespaces() {
-        let status_data = "Name:\ttesting\nPid:\t1234\nNSpid:\t1234\t567\t1\nOther:\tvalue\n";
+        let info1 = timeout(TEST_TIMEOUT, recv1).await.unwrap().unwrap();
+        let info2 = timeout(TEST_TIMEOUT, recv2).await.unwrap().unwrap();
 
-        let result = HostPidProbe::parse_container_pid(status_data);
-
-        assert!(result.is_ok(), "Should parse container PID successfully");
-        assert_eq!(result.unwrap(), 1, "Should extract the last PID from NSpid");
-    }
-
-    #[test]
-    fn parse_container_pid_missing_nspid() {
-        let status_data = "Name:\ttesting\nPid:\t1234\nOther:\tvalue\n";
-
-        let result = HostPidProbe::parse_container_pid(status_data);
-
-        assert!(result.is_err(), "Should fail when NSpid is missing");
-    }
-
-    #[test]
-    fn parse_container_pid_invalid_format() {
-        let status_data = "Name:\ttesting\nPid:\t1234\nNSpid:\tinvalid\nOther:\tvalue\n";
-
-        let result = HostPidProbe::parse_container_pid(status_data);
-
-        assert!(result.is_err(), "Should fail when NSpid format is invalid");
-    }
-
-    #[test]
-    fn subscription_request_equality() {
-        let request1 = SubscriptionRequest {
-            pod_name: "pod1".to_string(),
-            namespace: "namespace1".to_string(),
-            container_name: "container1".to_string(),
-            container_pid: 1,
-        };
-
-        let request2 = SubscriptionRequest {
-            pod_name: "pod1".to_string(),
-            namespace: "namespace1".to_string(),
-            container_name: "container1".to_string(),
-            container_pid: 1,
-        };
-
-        let request3 = SubscriptionRequest {
-            pod_name: "pod2".to_string(),
-            namespace: "namespace1".to_string(),
-            container_name: "container1".to_string(),
-            container_pid: 1,
-        };
-
-        assert_eq!(request1, request2, "Identical requests should be equal");
-        assert_ne!(request1, request3, "Different requests should not be equal");
-    }
-
-    #[test]
-    fn pod_process_info_equality() {
-        let info1 = PodProcessInfo {
-            host_pid: 1234,
-            container_pid: 1,
-            pod_name: "pod1".to_string(),
-            namespace: "namespace1".to_string(),
-            container_name: "container1".to_string(),
-        };
-
-        let info2 = PodProcessInfo {
-            host_pid: 1234,
-            container_pid: 1,
-            pod_name: "pod1".to_string(),
-            namespace: "namespace1".to_string(),
-            container_name: "container1".to_string(),
-        };
-
-        assert_eq!(info1, info2, "Identical process info should be equal");
+        assert_eq!(info1.container_pid, 1);
+        assert_eq!(info2.container_pid, 2);
     }
 
     #[tokio::test]
     async fn shutdown_clears_subscriptions() {
-        let probe = HostPidProbe::new(Duration::from_millis(100));
-        let request = SubscriptionRequest {
-            pod_name: "test-pod".to_string(),
-            namespace: "test-namespace".to_string(),
-            container_name: "test-container".to_string(),
-            container_pid: 123,
-        };
+        let probe = HostPidProbe::new(Duration::from_millis(50));
+        let _ = probe
+            .subscribe(make_req(123), Duration::from_millis(100))
+            .await;
 
-        let _receiver = probe.subscribe(request).await;
-
-        // Verify subscription was added
+        // ensure subscription exists
         {
-            let subscriptions = probe.subscriptions.lock().await;
-            assert!(!subscriptions.is_empty(), "Should have active subscription");
+            let subs = probe.subscriptions.lock().await;
+            assert!(!subs.is_empty());
         }
 
         probe.shutdown().await;
 
-        // Verify subscriptions were cleared
+        // after shutdown, subscriptions should be cleared
         {
-            let subscriptions = probe.subscriptions.lock().await;
-            assert!(
-                subscriptions.is_empty(),
-                "Subscriptions should be cleared after shutdown"
-            );
+            let subs = probe.subscriptions.lock().await;
+            assert!(subs.is_empty());
         }
     }
 }

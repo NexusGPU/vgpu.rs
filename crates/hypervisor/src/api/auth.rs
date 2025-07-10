@@ -139,8 +139,10 @@ mod tests {
         let header_str = serde_json::to_string(&header).unwrap();
         let payload_str = serde_json::to_string(payload).unwrap();
 
-        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header_str.as_bytes());
-        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_str.as_bytes());
+        let header_b64 =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header_str.as_bytes());
+        let payload_b64 =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_str.as_bytes());
 
         // Use a fixed signature for testing
         let signature = "dummysignature";
