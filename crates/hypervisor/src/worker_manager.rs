@@ -215,56 +215,65 @@ where
     ) -> Result<()> {
         let worker_key = format!("{namespace}/{pod_name}");
 
-        let mut registry = self.registry.write().await;
-        if let Some(entry) = registry.get_mut(&worker_key) {
-            let WorkerInfo {
-                namespace: info_namespace,
-                pod_name: info_pod_name,
-                gpu_uuids,
-                qos_level,
-                ..
-            } = &entry.info;
+        // Create worker and update registry in a limited scope to reduce lock hold time
+        let (worker, entry_for_pid_registry) = {
+            let mut registry = self.registry.write().await;
+            if let Some(entry) = registry.get_mut(&worker_key) {
+                let WorkerInfo {
+                    namespace: info_namespace,
+                    pod_name: info_pod_name,
+                    gpu_uuids,
+                    qos_level,
+                    ..
+                } = &entry.info;
 
-            let gpu_uuids_vec = gpu_uuids.clone().unwrap_or_default();
-            let qos = qos_level.unwrap_or(QosLevel::Medium);
+                let gpu_uuids_vec = gpu_uuids.clone().unwrap_or_default();
+                let qos = qos_level.unwrap_or(QosLevel::Medium);
 
-            let worker = Arc::new(TensorFusionWorker::new(
-                host_pid,
-                qos,
-                gpu_uuids_vec,
-                gpu_observer,
-                info_namespace.clone(),
-                info_pod_name.clone(),
-                self.command_dispatcher.clone(),
-            ));
+                let worker = Arc::new(TensorFusionWorker::new(
+                    host_pid,
+                    qos,
+                    gpu_uuids_vec,
+                    gpu_observer,
+                    info_namespace.clone(),
+                    info_pod_name.clone(),
+                    self.command_dispatcher.clone(),
+                ));
 
-            // Find or create container entry
-            let container_info = entry
-                .containers
-                .entry(container_name.to_string())
-                .or_insert_with(|| ContainerInfo::new(container_name.to_string()));
+                // Find or create container entry
+                let container_info = entry
+                    .containers
+                    .entry(container_name.to_string())
+                    .or_insert_with(|| ContainerInfo::new(container_name.to_string()));
 
-            // Update container info
-            container_info.worker = Some(worker.clone());
-            container_info
-                .container_pid_to_host_pid
-                .insert(container_pid, host_pid);
+                // Update container info
+                container_info.worker = Some(worker.clone());
+                container_info
+                    .container_pid_to_host_pid
+                    .insert(container_pid, host_pid);
 
-            (self.add_callback)(host_pid, worker);
+                // Clone entry for PID registry update (done after releasing main registry lock)
+                let entry_clone = entry.clone();
 
-            // Add to PID registry
-            {
-                let mut pid_registry = self.pid_registry.write().await;
-                pid_registry.insert(host_pid, entry.clone());
+                (worker, entry_clone)
+            } else {
+                warn!("Attempted to associate PID with non-existent worker: {worker_key}");
+                return Err(anyhow::anyhow!("Worker not found in registry"));
             }
+        }; // 🔓 Registry lock is released here
 
-            info!(
-                "Associated worker {worker_key} container {container_name} with host PID {host_pid} and container PID {container_pid}"
-            );
-        } else {
-            warn!("Attempted to associate PID with non-existent worker: {worker_key}");
-            return Err(anyhow::anyhow!("Worker not found in registry"));
+        // 🚀 Execute add_callback outside of registry lock to avoid blocking
+        (self.add_callback)(host_pid, worker);
+
+        // 🔒 Separately update PID registry to minimize lock contention
+        {
+            let mut pid_registry = self.pid_registry.write().await;
+            pid_registry.insert(host_pid, entry_for_pid_registry);
         }
+
+        info!(
+            "Associated worker {worker_key} container {container_name} with host PID {host_pid} and container PID {container_pid}"
+        );
 
         Ok(())
     }
