@@ -37,11 +37,7 @@ impl TensorFusionPodInfo {
 
         // Parse TFLOPS request
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/tflops-request")) {
-            worker_info.tflops_request = Some(value.parse::<f64>().change_context(
-                KubernetesError::AnnotationParseError {
-                    message: format!("Invalid tflops-request value: {value}"),
-                },
-            )?);
+            worker_info.tflops_request = Some(parse_tflops_value(value)?);
         }
 
         // Parse VRAM request
@@ -51,11 +47,7 @@ impl TensorFusionPodInfo {
 
         // Parse TFLOPS limit
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/tflops-limit")) {
-            worker_info.tflops_limit = Some(value.parse::<f64>().change_context(
-                KubernetesError::AnnotationParseError {
-                    message: format!("Invalid tflops-limit value: {value}"),
-                },
-            )?);
+            worker_info.tflops_limit = Some(parse_tflops_value(value)?);
         }
 
         // Parse VRAM limit
@@ -100,6 +92,57 @@ impl TensorFusionPodInfo {
             || self.0.qos_level.is_some()
             || self.0.containers.is_some()
     }
+}
+
+/// Parse TFLOPS value from string, supporting units like "71200m", "5k", etc.
+///
+/// Supports the following units:
+/// - No suffix: raw TFLOPS value
+/// - "m": milli-TFLOPS (0.001)
+/// - "k" or "K": kilo-TFLOPS (1000)
+/// - "M": mega-TFLOPS (1,000,000)
+/// - "G": giga-TFLOPS (1,000,000,000)
+///
+/// # Errors
+///
+/// - [`KubernetesError::AnnotationParseError`] if the TFLOPS value format is invalid
+fn parse_tflops_value(value: &str) -> Result<f64, Report<KubernetesError>> {
+    let value = value.trim();
+
+    // Handle plain numbers (raw TFLOPS)
+    if let Ok(tflops) = value.parse::<f64>() {
+        return Ok(tflops);
+    }
+
+    // Find the numeric part and unit part
+    let (numeric_part, unit) = if let Some(pos) = value.find(|c: char| c.is_alphabetic()) {
+        (&value[..pos], &value[pos..])
+    } else {
+        return Err(Report::new(KubernetesError::AnnotationParseError {
+            message: format!("Invalid TFLOPS value format: {value}"),
+        }));
+    };
+
+    let numeric_value: f64 =
+        numeric_part
+            .parse::<f64>()
+            .change_context(KubernetesError::AnnotationParseError {
+                message: format!("Invalid numeric part in TFLOPS value: {numeric_part}"),
+            })?;
+
+    let multiplier = match unit {
+        "m" => 0.001,
+        "k" | "K" => 1000.0,
+        "M" => 1_000_000.0,
+        "G" => 1_000_000_000.0,
+        _ => {
+            return Err(Report::new(KubernetesError::AnnotationParseError {
+                message: format!("Unsupported TFLOPS unit: {unit}"),
+            }));
+        }
+    };
+
+    Ok(numeric_value * multiplier)
 }
 
 /// Parse memory value from string, supporting units like "1Gi", "500Mi", etc.
@@ -178,6 +221,57 @@ mod tests {
     fn parse_memory_value_case_insensitive() {
         assert_eq!(parse_memory_value("1gi").unwrap(), 1024 * 1024 * 1024);
         assert_eq!(parse_memory_value("1GI").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_tflops_value_raw() {
+        assert_eq!(parse_tflops_value("1000").unwrap(), 1000.0);
+        assert_eq!(parse_tflops_value("1000.5").unwrap(), 1000.5);
+    }
+
+    #[test]
+    fn parse_tflops_value_with_units() {
+        assert_eq!(parse_tflops_value("1k").unwrap(), 1000.0);
+        assert_eq!(parse_tflops_value("1K").unwrap(), 1000.0);
+        assert_eq!(parse_tflops_value("1m").unwrap(), 0.001);
+        assert_eq!(parse_tflops_value("1M").unwrap(), 1_000_000.0);
+        assert_eq!(parse_tflops_value("1G").unwrap(), 1_000_000_000.0);
+    }
+
+    #[test]
+    fn parse_tflops_value_case_insensitive() {
+        assert_eq!(parse_tflops_value("1k").unwrap(), 1000.0);
+        assert_eq!(parse_tflops_value("1K").unwrap(), 1000.0);
+        assert_eq!(parse_tflops_value("1m").unwrap(), 0.001);
+        assert_eq!(parse_tflops_value("1M").unwrap(), 1_000_000.0);
+        assert_eq!(parse_tflops_value("1G").unwrap(), 1_000_000_000.0);
+    }
+
+    #[test]
+    fn parse_tflops_value_error_case_71200m() {
+        // Test the specific case that was failing in the error report
+        assert_eq!(parse_tflops_value("71200m").unwrap(), 71.2);
+    }
+
+    #[test]
+    fn from_pod_annotations_with_tflops_units() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/tflops-request".to_string(),
+            "71200m".to_string(), // This was causing the original error
+        );
+        annotations.insert(
+            "tensor-fusion.ai/tflops-limit".to_string(),
+            "5k".to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(result.has_annotations());
+        assert_eq!(result.0.tflops_request, Some(71.2));
+        assert_eq!(result.0.tflops_limit, Some(5000.0));
     }
 
     #[test]
