@@ -214,10 +214,14 @@ where
         gpu_observer: Arc<GpuObserver>,
     ) -> Result<()> {
         let worker_key = format!("{namespace}/{pod_name}");
+        
+        info!("associate_discovered_worker started for {worker_key} host_pid={host_pid}");
 
         // Create worker and update registry in a limited scope to reduce lock hold time
+        info!("About to acquire registry write lock for {worker_key}");
         let (worker, entry_for_pid_registry) = {
             let mut registry = self.registry.write().await;
+            info!("Registry write lock acquired for {worker_key}");
             if let Some(entry) = registry.get_mut(&worker_key) {
                 let WorkerInfo {
                     namespace: info_namespace,
@@ -262,13 +266,16 @@ where
             }
         }; // 🔓 Registry lock is released here
 
+        info!("About to execute add_callback for host_pid={host_pid}");
         // 🚀 Execute add_callback outside of registry lock to avoid blocking
         (self.add_callback)(host_pid, worker);
+        info!("add_callback completed for host_pid={host_pid}");
 
         // 🔒 Separately update PID registry to minimize lock contention
         {
             let mut pid_registry = self.pid_registry.write().await;
             pid_registry.insert(host_pid, entry_for_pid_registry);
+            info!("PID registry updated for host_pid={host_pid}");
         }
 
         info!(
