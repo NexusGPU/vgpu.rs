@@ -189,6 +189,10 @@ async fn main() -> Result<()> {
     let (k8s_shutdown_sender, k8s_shutdown_receiver) = oneshot::channel::<()>();
 
     let host_pid_probe = Arc::new(HostPidProbe::new(Duration::from_secs(1)));
+
+    // create command dispatcher
+    let command_dispatcher = Arc::new(CommandDispatcher::new());
+
     // Setup worker manager
     let worker_manager = Arc::new(WorkerManager::new(
         host_pid_probe.clone(),
@@ -208,13 +212,11 @@ async fn main() -> Result<()> {
                 hypervisor.remove_process(pid);
             }
         },
+        command_dispatcher.clone(),
     ));
 
     // Setup API server shutdown channel
     let (api_shutdown_sender, api_shutdown_receiver) = oneshot::channel::<()>();
-
-    // create command dispatcher
-    let command_dispatcher = Arc::new(CommandDispatcher::new());
 
     // Start GPU observer task
     let gpu_observer_task = {

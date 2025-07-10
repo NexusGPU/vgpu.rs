@@ -3,8 +3,40 @@ use std::collections::HashMap;
 pub mod influx;
 pub mod json;
 
-/// Represents a field value that can be encoded in metrics
-#[derive(Debug, Clone, serde::Serialize)]
+/// Parameters for encoding GPU metrics
+#[derive(Debug, Clone)]
+pub struct GpuMetricsParams<'a> {
+    pub gpu_uuid: &'a str,
+    pub node_name: &'a str,
+    pub gpu_pool: &'a str,
+    pub rx: f64,
+    pub tx: f64,
+    pub temperature: f64,
+    pub memory_bytes: u64,
+    pub compute_percentage: f64,
+    pub compute_tflops: f64,
+    pub timestamp: i64,
+}
+
+/// Parameters for encoding worker metrics
+#[derive(Debug, Clone)]
+pub struct WorkerMetricsParams<'a> {
+    pub gpu_uuid: &'a str,
+    pub node_name: &'a str,
+    pub gpu_pool: &'a str,
+    pub worker_identifier: &'a str,
+    pub namespace: &'a str,
+    pub workload: &'a str,
+    pub memory_bytes: u64,
+    pub compute_percentage: f64,
+    pub compute_tflops: f64,
+    pub memory_percentage: f64,
+    pub timestamp: i64,
+    pub extra_labels: &'a HashMap<String, String>,
+}
+
+/// Field value for metrics
+#[derive(Debug, Clone)]
 pub enum FieldValue {
     String(String),
     Integer(i64),
@@ -49,7 +81,7 @@ impl From<bool> for FieldValue {
     }
 }
 
-/// Trait for encoding metrics data into different formats
+/// Trait for encoding metrics in different formats
 pub trait MetricsEncoder: Send + Sync {
     /// Encode metrics with measurement name, tags, fields, and timestamp
     fn encode_metrics(
@@ -60,7 +92,26 @@ pub trait MetricsEncoder: Send + Sync {
         timestamp: i64,
     ) -> String;
 
+    /// Encode GPU metrics using parameters struct
+    fn encode_gpu_metrics_with_params(&self, params: &GpuMetricsParams) -> String {
+        let mut tags = HashMap::new();
+        tags.insert("node".to_string(), params.node_name.to_string());
+        tags.insert("pool".to_string(), params.gpu_pool.to_string());
+        tags.insert("uuid".to_string(), params.gpu_uuid.to_string());
+
+        let mut fields = HashMap::new();
+        fields.insert("rx".to_string(), params.rx.into());
+        fields.insert("tx".to_string(), params.tx.into());
+        fields.insert("temperature".to_string(), params.temperature.into());
+        fields.insert("memory_bytes".to_string(), params.memory_bytes.into());
+        fields.insert("compute_percentage".to_string(), params.compute_percentage.into());
+        fields.insert("compute_tflops".to_string(), params.compute_tflops.into());
+
+        self.encode_metrics("tf_gpu_usage", &tags, &fields, params.timestamp)
+    }
+
     /// Encode GPU metrics (convenience method)
+    #[allow(clippy::too_many_arguments)]
     fn encode_gpu_metrics(
         &self,
         gpu_uuid: &str,
@@ -74,23 +125,47 @@ pub trait MetricsEncoder: Send + Sync {
         compute_tflops: f64,
         timestamp: i64,
     ) -> String {
+        let params = GpuMetricsParams {
+            gpu_uuid,
+            node_name,
+            gpu_pool,
+            rx,
+            tx,
+            temperature,
+            memory_bytes,
+            compute_percentage,
+            compute_tflops,
+            timestamp,
+        };
+        self.encode_gpu_metrics_with_params(&params)
+    }
+
+    /// Encode worker metrics using parameters struct
+    fn encode_worker_metrics_with_params(&self, params: &WorkerMetricsParams) -> String {
         let mut tags = HashMap::new();
-        tags.insert("node".to_string(), node_name.to_string());
-        tags.insert("pool".to_string(), gpu_pool.to_string());
-        tags.insert("uuid".to_string(), gpu_uuid.to_string());
+        tags.insert("node".to_string(), params.node_name.to_string());
+        tags.insert("pool".to_string(), params.gpu_pool.to_string());
+        tags.insert("uuid".to_string(), params.gpu_uuid.to_string());
+        tags.insert("worker".to_string(), params.worker_identifier.to_string());
+        tags.insert("namespace".to_string(), params.namespace.to_string());
+        tags.insert("workload".to_string(), params.workload.to_string());
+
+        // Add extra labels as tags - avoid unnecessary cloning
+        for (key, value) in params.extra_labels {
+            tags.insert(key.clone(), value.clone());
+        }
 
         let mut fields = HashMap::new();
-        fields.insert("rx".to_string(), rx.into());
-        fields.insert("tx".to_string(), tx.into());
-        fields.insert("temperature".to_string(), temperature.into());
-        fields.insert("memory_bytes".to_string(), memory_bytes.into());
-        fields.insert("compute_percentage".to_string(), compute_percentage.into());
-        fields.insert("compute_tflops".to_string(), compute_tflops.into());
+        fields.insert("memory_bytes".to_string(), params.memory_bytes.into());
+        fields.insert("compute_percentage".to_string(), params.compute_percentage.into());
+        fields.insert("compute_tflops".to_string(), params.compute_tflops.into());
+        fields.insert("memory_percentage".to_string(), params.memory_percentage.into());
 
-        self.encode_metrics("tf_gpu_usage", &tags, &fields, timestamp)
+        self.encode_metrics("tf_worker_usage", &tags, &fields, params.timestamp)
     }
 
     /// Encode worker metrics (convenience method)
+    #[allow(clippy::too_many_arguments)]
     fn encode_worker_metrics(
         &self,
         gpu_uuid: &str,
@@ -106,26 +181,21 @@ pub trait MetricsEncoder: Send + Sync {
         timestamp: i64,
         extra_labels: &HashMap<String, String>,
     ) -> String {
-        let mut tags = HashMap::new();
-        tags.insert("node".to_string(), node_name.to_string());
-        tags.insert("pool".to_string(), gpu_pool.to_string());
-        tags.insert("uuid".to_string(), gpu_uuid.to_string());
-        tags.insert("worker".to_string(), worker_identifier.to_string());
-        tags.insert("namespace".to_string(), namespace.to_string());
-        tags.insert("workload".to_string(), workload.to_string());
-
-        // Add extra labels as tags - avoid unnecessary cloning
-        for (key, value) in extra_labels {
-            tags.insert(key.clone(), value.clone());
-        }
-
-        let mut fields = HashMap::new();
-        fields.insert("memory_bytes".to_string(), memory_bytes.into());
-        fields.insert("compute_percentage".to_string(), compute_percentage.into());
-        fields.insert("compute_tflops".to_string(), compute_tflops.into());
-        fields.insert("memory_percentage".to_string(), memory_percentage.into());
-
-        self.encode_metrics("tf_worker_usage", &tags, &fields, timestamp)
+        let params = WorkerMetricsParams {
+            gpu_uuid,
+            node_name,
+            gpu_pool,
+            worker_identifier,
+            namespace,
+            workload,
+            memory_bytes,
+            compute_percentage,
+            compute_tflops,
+            memory_percentage,
+            timestamp,
+            extra_labels,
+        };
+        self.encode_worker_metrics_with_params(&params)
     }
 }
 
@@ -133,7 +203,8 @@ pub trait MetricsEncoder: Send + Sync {
 pub fn create_encoder(format: &str) -> Box<dyn MetricsEncoder + Send + Sync> {
     match format.to_lowercase().as_str() {
         "json" => Box::new(json::JsonEncoder::new()),
-        "influx" | _ => Box::new(influx::InfluxEncoder::new()),
+        "influx" => Box::new(influx::InfluxEncoder::new()),
+        _ => Box::new(influx::InfluxEncoder::new()),
     }
 }
 
@@ -386,7 +457,7 @@ mod tests {
         fields.insert("string_field".to_string(), "hello".into());
         fields.insert("int_field".to_string(), 42i64.into());
         fields.insert("uint_field".to_string(), 100u64.into());
-        fields.insert("float_field".to_string(), 3.14f64.into());
+        fields.insert("float_field".to_string(), std::f64::consts::PI.into());
         fields.insert("bool_field".to_string(), true.into());
 
         let result = encoder.encode_metrics("mixed_types", &tags, &fields, 1234567890);
@@ -394,7 +465,7 @@ mod tests {
         assert!(result.contains("hello"));
         assert!(result.contains("42"));
         assert!(result.contains("100"));
-        assert!(result.contains("3.14"));
+        assert!(result.contains(std::f64::consts::PI.to_string().as_str()));
         assert!(result.contains("true"));
     }
 }

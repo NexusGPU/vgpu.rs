@@ -62,8 +62,6 @@ pub enum HostPidProbeError {
     ProcReadError { message: String },
     #[display("Failed to parse process information: {message}")]
     ParseError { message: String },
-    #[display("Subscription channel was closed")]
-    ChannelClosed,
 }
 
 impl Error for HostPidProbeError {}
@@ -630,7 +628,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_clears_subscriptions() {
         let probe = HostPidProbe::new(Duration::from_millis(50));
-        let _ = probe
+        let _receiver = probe
             .subscribe(make_req(123), Duration::from_millis(100))
             .await;
 

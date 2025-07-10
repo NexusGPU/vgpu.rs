@@ -71,6 +71,7 @@ where E: Endpoint
     }
 }
 
+#[allow(dead_code)]
 pub struct JwtAuthEndpoint<E> {
     inner: E,
     config: Arc<JwtAuthConfig>,
@@ -252,7 +253,7 @@ mod tests {
         let config = JwtAuthConfig {
             public_key: "test-key".to_string(),
         };
-        let middleware = JwtAuthMiddleware::new(config);
+        let _middleware = JwtAuthMiddleware::new(config);
 
         // Create a token with invalid JSON in payload
         let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -278,7 +279,7 @@ mod tests {
         let config = JwtAuthConfig {
             public_key: "test-key".to_string(),
         };
-        let middleware = JwtAuthMiddleware::new(config);
+        let _middleware = JwtAuthMiddleware::new(config);
 
         // Create a token with incomplete payload
         let header_b64 =
@@ -309,7 +310,7 @@ mod tests {
         let config = JwtAuthConfig {
             public_key: "test-key".to_string(),
         };
-        let middleware = JwtAuthMiddleware::new(config);
+        let _middleware = JwtAuthMiddleware::new(config);
         let test_payload = create_test_payload();
 
         // Create token using URL_SAFE encoder

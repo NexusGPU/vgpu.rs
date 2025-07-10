@@ -27,12 +27,13 @@ impl TensorFusionPodInfo {
         annotations: &BTreeMap<String, String>,
         labels: &BTreeMap<String, String>,
     ) -> Result<Self, Report<KubernetesError>> {
-        let mut worker_info = WorkerInfo::default();
-
-        worker_info.labels = labels.clone();
-        worker_info.workload_name = labels
-            .get(&format!("{TENSOR_FUSION_DOMAIN}/workload"))
-            .cloned();
+        let mut worker_info = WorkerInfo {
+            labels: labels.clone(),
+            workload_name: labels
+                .get(&format!("{TENSOR_FUSION_DOMAIN}/workload"))
+                .cloned(),
+            ..Default::default()
+        };
 
         // Parse TFLOPS request
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/tflops-request")) {
