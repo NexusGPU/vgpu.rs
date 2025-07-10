@@ -217,8 +217,10 @@ fn get_k8s_service_account_token() -> Result<String, Report<ConfigError>> {
 
 // Make the original function private
 fn parse_limits_and_create_device_configs(nvml: &Nvml) -> Vec<DeviceConfig> {
-    let up_limit_json = env::var("TENSOR_FUSION_CUDA_UP_LIMIT").unwrap_or_else(|_| "{}".to_string());
-    let mem_limit_json = env::var("TENSOR_FUSION_CUDA_MEM_LIMIT").unwrap_or_else(|_| "{}".to_string());
+    let up_limit_json =
+        env::var("TENSOR_FUSION_CUDA_UP_LIMIT").unwrap_or_else(|_| "{}".to_string());
+    let mem_limit_json =
+        env::var("TENSOR_FUSION_CUDA_MEM_LIMIT").unwrap_or_else(|_| "{}".to_string());
     let (device_configs, visible_devices) =
         parse_limits_json_and_create_device_configs(&up_limit_json, &mem_limit_json, nvml);
     // Set CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES environment variables

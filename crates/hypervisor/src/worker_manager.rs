@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Ok;
 use anyhow::Result;
@@ -173,9 +174,11 @@ where
             "Starting PID discovery for worker"
         );
 
-        let receiver = self.host_pid_probe.subscribe(subscription_request).await;
+        let receiver = self
+            .host_pid_probe
+            .subscribe(subscription_request, Duration::from_secs(5))
+            .await;
 
-        // Handle PID discovery result without spawning a task (sequential processing)
         let process_info = receiver
             .await
             .map_err(|_| anyhow::anyhow!("PID discovery subscription was cancelled"))?;
