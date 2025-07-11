@@ -98,7 +98,7 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
     }
 
     /// Start the scheduling loop asynchronously
-    pub(crate) async fn run_async(&self) {
+    pub(crate) async fn run(&self) {
         let scheduling_interval = self.scheduling_interval;
 
         loop {

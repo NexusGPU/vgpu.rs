@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::future::BoxFuture;
+use nvml_wrapper::Nvml;
 use poem::handler;
 use poem::web::Data;
 use poem::web::Query;
@@ -12,6 +14,7 @@ use tracing::info;
 use super::types::JwtPayload;
 use crate::api::types::WorkerQueryResponse;
 use crate::gpu_observer::GpuObserver;
+use crate::limiter_coordinator::LimiterCoordinator;
 use crate::process::worker::TensorFusionWorker;
 use crate::worker_manager::WorkerManager;
 use crate::worker_manager::WorkerRegistry;
@@ -33,8 +36,18 @@ pub async fn get_worker_info<AddCB, RemoveCB>(
     gpu_observer: Data<&Arc<GpuObserver>>,
 ) -> poem::Result<poem::web::Json<WorkerQueryResponse>>
 where
-    AddCB: Fn(u32, Arc<TensorFusionWorker>) + Send + Sync + 'static,
-    RemoveCB: Fn(u32) + Send + Sync + 'static,
+    AddCB: Fn(
+            &str, // container_name
+            u32,  // container_pid
+            u32,  // host_pid
+            Arc<TensorFusionWorker>,
+            Arc<LimiterCoordinator>,
+            Arc<Nvml>,
+        ) -> BoxFuture<'static, ()>
+        + Send
+        + Sync
+        + 'static,
+    RemoveCB: Fn(&str, &str, u32, u32) -> BoxFuture<'static, ()> + Send + Sync + 'static, /* pod_name, container_name, container_pid, host_pid */
 {
     // Extract JWT payload from request extensions
     let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
@@ -178,7 +191,9 @@ where
 
     // re-acquire the registry lock
     let registry = worker_registry.read().await;
-    let worker_entry = registry.get(&worker_key).expect("Worker should exist after PID discovery");
+    let worker_entry = registry
+        .get(&worker_key)
+        .expect("Worker should exist after PID discovery");
 
     // Update the WorkerInfo with host_pid
     let mut worker_info = worker_entry.info.clone();

@@ -248,6 +248,7 @@ mod tests {
     use tokio::task;
 
     use super::*;
+    use crate::Waker;
 
     /// Task processor that handles trap requests using the TrapHandler
     #[derive(Clone)]
@@ -305,7 +306,7 @@ mod tests {
         }
     }
 
-    impl crate::Waker for SimpleWaker {
+    impl Waker for SimpleWaker {
         fn send(&self, _trap_id: u64, action: TrapAction) -> Result<(), TrapError> {
             let mut action_guard = self.action.lock().unwrap();
             *action_guard = Some(action);
@@ -332,13 +333,7 @@ mod tests {
     }
 
     impl TrapHandler for RecordingTrapHandler {
-        fn handle_trap(
-            &self,
-            pid: u32,
-            trap_id: u64,
-            frame: &TrapFrame,
-            waker: Box<dyn crate::Waker>,
-        ) {
+        fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Box<dyn Waker>) {
             self.requests
                 .lock()
                 .unwrap()
@@ -352,13 +347,7 @@ mod tests {
     struct TestTrapHandler;
 
     impl TrapHandler for TestTrapHandler {
-        fn handle_trap(
-            &self,
-            _pid: u32,
-            trap_id: u64,
-            _frame: &TrapFrame,
-            waker: Box<dyn crate::Waker>,
-        ) {
+        fn handle_trap(&self, _pid: u32, trap_id: u64, _frame: &TrapFrame, waker: Box<dyn Waker>) {
             let _ = waker.send(trap_id, TrapAction::Resume);
         }
     }

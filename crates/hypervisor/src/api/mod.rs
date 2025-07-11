@@ -45,5 +45,3 @@ pub mod server;
 pub mod types;
 
 // Re-export main types and functions for easy access
-pub use server::ApiServer;
-pub use types::JwtAuthConfig;

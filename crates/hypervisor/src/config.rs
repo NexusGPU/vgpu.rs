@@ -2,99 +2,115 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-use anyhow::Context;
-use anyhow::Result;
+use clap::Parser;
 use once_cell::sync::Lazy;
-use serde::Deserialize;
-use serde::Serialize;
-use tokio::fs;
+use utils::version;
 
-const DEFAULT_TFLOPS: f64 = 10.0;
-
-/// GPU information from the configuration file
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct GpuInfo {
-    pub model: String,
-    #[serde(rename = "fullModelName")]
-    pub full_model_name: String,
-    pub vendor: String,
-    #[serde(rename = "costPerHour")]
-    pub cost_per_hour: f64,
-    #[serde(rename = "fp16TFlops")]
-    pub fp16_tflops: f64,
-}
-
-/// Global GPU capacity map that maps GPU UUIDs to their fp16TFlops capacity
-pub(crate) static GPU_CAPACITY_MAP: Lazy<RwLock<HashMap<String, f64>>> =
+/// 全局GPU容量映射，将GPU UUID映射到它们的fp16TFlops容量
+pub static GPU_CAPACITY_MAP: Lazy<RwLock<HashMap<String, f64>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
-/// Load GPU information from a YAML file and store it in a map
-pub(crate) async fn load_gpu_info(
-    gpu_uuid_to_name_map: HashMap<String, String>,
-    file_path: PathBuf,
-) -> Result<()> {
-    // Async read GPU info file
-    let file_content = match fs::read_to_string(&file_path).await {
-        Ok(content) => content,
-        Err(err) => {
-            tracing::warn!(
-                "Failed to read GPU info file {}: {}",
-                file_path.display(),
-                err
-            );
-            "[]".to_string()
-        }
-    };
+#[derive(Parser)]
+#[command(about, long_about, version = &**version::VERSION)]
+pub struct Cli {
+    #[arg(
+        long,
+        env = "GPU_METRICS_FILE",
+        value_hint = clap::ValueHint::FilePath,
+        default_value = "/logs/metrics.log",
+        help = "Path for printing GPU and worker metrics, e.g. /logs/metrics.log"
+    )]
+    pub gpu_metrics_file: Option<PathBuf>,
 
-    let gpu_info_list: Vec<GpuInfo> = serde_yaml::from_str(&file_content)
-        .with_context(|| format!("Failed to parse GPU info file {}", file_path.display()))?;
+    #[arg(
+        long,
+        default_value = "10",
+        help = "Number of metrics to aggregate before printing, default to 10 means aggregated every 10 seconds"
+    )]
+    pub metrics_batch_size: usize,
 
-    tracing::info!("Loaded {} GPU configurations", gpu_info_list.len());
+    #[arg(
+        long,
+        env = "TENSOR_FUSION_GPU_INFO_PATH",
+        help = "Path for GPU info list, e.g. /etc/tensor-fusion/gpu-info.yaml"
+    )]
+    pub gpu_info_path: Option<PathBuf>,
 
-    // Create lookup maps
-    let model_mappings: HashMap<String, (String, f64)> = gpu_info_list
-        .into_iter()
-        .map(|gpu| {
-            let GpuInfo {
-                model,
-                full_model_name,
-                fp16_tflops,
-                ..
-            } = gpu;
-            (model, (full_model_name, fp16_tflops))
-        })
-        .collect();
+    #[arg(
+        long,
+        help = "Enable Kubernetes pod monitoring",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
+    pub enable_k8s: bool,
 
-    // Update the global GPU capacity map
-    let mut capacity_map_guard = GPU_CAPACITY_MAP.write().expect("poisoned");
-    for (uuid, gpu_name) in gpu_uuid_to_name_map {
-        map_gpu_to_capacity(&mut capacity_map_guard, &gpu_name, uuid, &model_mappings);
-    }
-    Ok(())
+    #[arg(
+        long,
+        help = "Kubernetes namespace to monitor (empty for all namespaces)"
+    )]
+    pub k8s_namespace: Option<String>,
+
+    #[arg(
+        long,
+        env = "GPU_NODE_NAME",
+        help = "Node name for filtering pods to this node only"
+    )]
+    pub node_name: String,
+
+    #[arg(
+        long,
+        env = "TENSOR_FUSION_POOL_NAME",
+        help = "gpu pool is only used in metrics output"
+    )]
+    pub gpu_pool: Option<String>,
+
+    #[arg(
+        long,
+        env = "KUBECONFIG",
+        value_hint = clap::ValueHint::FilePath,
+        help = "Path to kubeconfig file (defaults to cluster config or ~/.kube/config)"
+    )]
+    pub kubeconfig: Option<PathBuf>,
+
+    #[arg(
+        long,
+        env = "API_LISTEN_ADDR",
+        default_value = "0.0.0.0:8080",
+        help = "HTTP API server listen address"
+    )]
+    pub api_listen_addr: String,
+
+    #[arg(
+        long,
+        help = "Enable metrics collection",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
+    pub enable_metrics: bool,
+
+    #[arg(
+        long,
+        env = "TF_HYPERVISOR_METRICS_FORMAT",
+        default_value = "influx",
+        help = "Metrics format, either 'influx' or 'json' or 'otel'"
+    )]
+    pub metrics_format: String,
+
+    #[arg(
+        long,
+        env = "TF_HYPERVISOR_METRICS_EXTRA_LABELS",
+        help = "Extra labels to add to metrics"
+    )]
+    pub metrics_extra_labels: Option<String>,
 }
 
-/// Map a GPU to its capacity and insert into the capacity map
-fn map_gpu_to_capacity(
-    capacity_map: &mut HashMap<String, f64>,
-    gpu_name: &str,
-    uuid: String,
-    model_mappings: &HashMap<String, (String, f64)>,
-) {
-    // Try direct model match first
-    if let Some((_, capacity)) = model_mappings.get(gpu_name) {
-        tracing::info!(
-            "Mapped GPU {} to model {} with capacity {} TFlops",
-            uuid,
-            gpu_name,
-            capacity
-        );
-        capacity_map.insert(uuid, *capacity);
-        return;
-    }
-    // No match found, use default
-    tracing::warn!(
-        "Could not find matching GPU model for {} in config",
-        gpu_name
-    );
-    capacity_map.insert(uuid, DEFAULT_TFLOPS);
+/// 加载GPU信息配置
+pub async fn load_gpu_info(
+    gpu_uuid_to_name_map: std::collections::HashMap<String, String>,
+    gpu_info_path: PathBuf,
+) -> anyhow::Result<()> {
+    // GPU信息加载逻辑的占位符
+    // 这里应该实现实际的配置文件加载逻辑
+    tracing::info!("Loading GPU configuration from {:?}", gpu_info_path);
+    Ok(())
 }

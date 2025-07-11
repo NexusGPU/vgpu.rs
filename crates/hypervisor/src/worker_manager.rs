@@ -12,6 +12,8 @@ use anyhow::Ok;
 use anyhow::Result;
 use api_types::QosLevel;
 use api_types::WorkerInfo;
+use futures::future::BoxFuture;
+use nvml_wrapper::Nvml;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
@@ -22,7 +24,9 @@ use crate::host_pid_probe::PodProcessInfo;
 use crate::host_pid_probe::SubscriptionRequest;
 use crate::k8s::TensorFusionPodInfo;
 use crate::limiter_comm::CommandDispatcher;
+use crate::limiter_coordinator::LimiterCoordinator;
 use crate::process::worker::TensorFusionWorker;
+use crate::process::GpuProcess;
 
 /// Container-level information within a pod
 #[derive(Clone)]
@@ -80,8 +84,6 @@ impl WorkerEntry {
     }
 }
 
-
-
 /// Worker registry for storing and managing worker information.
 pub type WorkerRegistry = Arc<RwLock<HashMap<String, WorkerEntry>>>;
 
@@ -109,12 +111,116 @@ impl<AddCB, RemoveCB> WorkerManager<AddCB, RemoveCB> {
     pub fn registry(&self) -> &WorkerRegistry {
         &self.registry
     }
+
+    /// Get pod name from host PID.
+    pub async fn get_pod_name_by_host_pid(&self, host_pid: u32) -> Option<String> {
+        let pid_registry = self.pid_registry.read().await;
+        pid_registry
+            .get(&host_pid)
+            .map(|entry| entry.info.pod_name.clone())
+    }
+
+    /// Get namespace from host PID.
+    pub async fn get_namespace_by_host_pid(&self, host_pid: u32) -> Option<String> {
+        let pid_registry = self.pid_registry.read().await;
+        pid_registry
+            .get(&host_pid)
+            .map(|entry| entry.info.namespace.clone())
+    }
+
+    /// Get all host PIDs for a given pod.
+    pub async fn get_host_pids_by_pod(&self, pod_name: &str, namespace: &str) -> Vec<u32> {
+        let worker_key = format!("{namespace}/{pod_name}");
+        let registry = self.registry.read().await;
+
+        if let Some(entry) = registry.get(&worker_key) {
+            let mut pids = Vec::new();
+            for container_info in entry.containers.values() {
+                for host_pid in container_info.container_pid_to_host_pid.values() {
+                    pids.push(*host_pid);
+                }
+            }
+            pids
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get all container names for a given pod.
+    pub async fn get_container_names_by_pod(&self, pod_name: &str, namespace: &str) -> Vec<String> {
+        let worker_key = format!("{namespace}/{pod_name}");
+        let registry = self.registry.read().await;
+
+        if let Some(entry) = registry.get(&worker_key) {
+            entry.containers.keys().cloned().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get container name from host PID.
+    pub async fn get_container_name_by_host_pid(&self, host_pid: u32) -> Option<String> {
+        let pid_registry = self.pid_registry.read().await;
+        if let Some(entry) = pid_registry.get(&host_pid) {
+            // Search through containers to find which one has this host PID
+            for (container_name, container_info) in &entry.containers {
+                if container_info
+                    .container_pid_to_host_pid
+                    .values()
+                    .any(|&pid| pid == host_pid)
+                {
+                    return Some(container_name.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if a pod exists in the registry.
+    pub async fn pod_exists(&self, pod_name: &str, namespace: &str) -> bool {
+        let worker_key = format!("{namespace}/{pod_name}");
+        let registry = self.registry.read().await;
+        registry.contains_key(&worker_key)
+    }
+
+    /// Get pod information by pod name and namespace.
+    pub async fn get_pod_info(&self, pod_name: &str, namespace: &str) -> Option<WorkerEntry> {
+        let worker_key = format!("{namespace}/{pod_name}");
+        let registry = self.registry.read().await;
+        registry.get(&worker_key).cloned()
+    }
+
+    /// Get all active pods (returns namespace/pod_name keys).
+    pub async fn get_all_active_pods(&self) -> Vec<String> {
+        let registry = self.registry.read().await;
+        registry.keys().cloned().collect()
+    }
+
+    /// Get pod and namespace from worker key.
+    pub fn parse_worker_key(worker_key: &str) -> Option<(String, String)> {
+        let parts: Vec<&str> = worker_key.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            Some((parts[0].to_string(), parts[1].to_string()))
+        } else {
+            None
+        }
+    }
 }
 
 impl<AddCB, RemoveCB> WorkerManager<AddCB, RemoveCB>
 where
-    AddCB: Fn(u32, Arc<TensorFusionWorker>) + Send + Sync + 'static,
-    RemoveCB: Fn(u32) + Send + Sync + 'static,
+    AddCB: Fn(
+            &str, // container_name
+            u32,  // container_pid
+            u32,  // host_pid
+            Arc<TensorFusionWorker>,
+            Arc<LimiterCoordinator>,
+            Arc<Nvml>,
+        ) -> BoxFuture<'static, ()>
+        + Send
+        + Sync
+        + 'static,
+    RemoveCB: Fn(&str, &str, u32, u32) -> BoxFuture<'static, ()> + Send + Sync + 'static, /* pod_name, container_name, container_pid, host_pid */
 {
     /// Create a new worker manager with host PID probe.
     pub fn new(
@@ -155,6 +261,29 @@ where
         container_name: &str,
         container_pid: u32,
         gpu_observer: Arc<GpuObserver>,
+    ) -> Result<PodProcessInfo> {
+        self.discover_worker_pid_with_registration(
+            pod_name,
+            namespace,
+            container_name,
+            container_pid,
+            gpu_observer,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Discover worker PID and register with limiter coordinator
+    pub async fn discover_worker_pid_with_registration(
+        &self,
+        pod_name: &str,
+        namespace: &str,
+        container_name: &str,
+        container_pid: u32,
+        gpu_observer: Arc<GpuObserver>,
+        limiter_coordinator: Option<Arc<LimiterCoordinator>>,
+        nvml: Option<Arc<Nvml>>,
     ) -> Result<PodProcessInfo> {
         let subscription_request = SubscriptionRequest {
             pod_name: pod_name.to_string(),
@@ -197,6 +326,8 @@ where
             process_info.host_pid,
             process_info.container_pid,
             gpu_observer.clone(),
+            limiter_coordinator,
+            nvml,
         )
         .await?;
 
@@ -212,9 +343,11 @@ where
         host_pid: u32,
         container_pid: u32,
         gpu_observer: Arc<GpuObserver>,
+        limiter_coordinator: Option<Arc<LimiterCoordinator>>,
+        nvml: Option<Arc<Nvml>>,
     ) -> Result<()> {
         let worker_key = format!("{namespace}/{pod_name}");
-        
+
         info!("associate_discovered_worker started for {worker_key} host_pid={host_pid}");
 
         // Create worker and update registry in a limited scope to reduce lock hold time
@@ -264,18 +397,24 @@ where
                 warn!("Attempted to associate PID with non-existent worker: {worker_key}");
                 return Err(anyhow::anyhow!("Worker not found in registry"));
             }
-        }; // 🔓 Registry lock is released here
+        };
 
-        info!("About to execute add_callback for host_pid={host_pid}");
-        // 🚀 Execute add_callback outside of registry lock to avoid blocking
-        (self.add_callback)(host_pid, worker);
-        info!("add_callback completed for host_pid={host_pid}");
+        // Call the add_callback with limiter_coordinator and nvml
+        if let (Some(limiter_coordinator), Some(nvml)) = (limiter_coordinator, nvml) {
+            (self.add_callback)(
+                container_name,
+                container_pid,
+                host_pid,
+                worker.clone(),
+                limiter_coordinator,
+                nvml,
+            )
+            .await;
+        }
 
-        // 🔒 Separately update PID registry to minimize lock contention
         {
             let mut pid_registry = self.pid_registry.write().await;
             pid_registry.insert(host_pid, entry_for_pid_registry);
-            info!("PID registry updated for host_pid={host_pid}");
         }
 
         info!(
@@ -328,9 +467,28 @@ where
                 // Call remove callback for all containers with workers
                 for (container_name, container_info) in &entry.containers {
                     if let Some(worker) = &container_info.worker {
-                        use crate::process::GpuProcess;
                         info!("Removing worker for container: {container_name}");
-                        (self.remove_callback)(worker.pid());
+
+                        // Find the container_pid for this worker's host_pid
+                        let host_pid = worker.pid();
+                        if let Some((container_pid, _)) = container_info
+                            .container_pid_to_host_pid
+                            .iter()
+                            .find(|(_, &hpid)| hpid == host_pid)
+                        {
+                            (self.remove_callback)(
+                                pod_name,
+                                container_name,
+                                *container_pid,
+                                host_pid,
+                            )
+                            .await;
+                        } else {
+                            warn!(
+                                "Could not find container_pid for host_pid {} in container {}",
+                                host_pid, container_name
+                            );
+                        }
                     }
                 }
 
@@ -473,12 +631,24 @@ mod tests {
         let add_count_clone = add_count.clone();
         let remove_count_clone = remove_count.clone();
 
-        let add_callback = move |_pid: u32, _worker: Arc<TensorFusionWorker>| {
+        let add_callback = move |_container_name: &str,
+                                 _container_pid: u32,
+                                 _host_pid: u32,
+                                 _worker: Arc<TensorFusionWorker>,
+                                 _limiter_coordinator: Arc<LimiterCoordinator>,
+                                 _nvml: Arc<Nvml>|
+              -> BoxFuture<'static, ()> {
             add_count_clone.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
         };
 
-        let remove_callback = move |_pid: u32| {
+        let remove_callback = move |_pod_name: &str,
+                                    _container_name: &str,
+                                    _container_pid: u32,
+                                    _host_pid: u32|
+              -> BoxFuture<'static, ()> {
             remove_count_clone.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
         };
 
         let worker_manager = WorkerManager::new(

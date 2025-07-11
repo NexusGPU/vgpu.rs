@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use error_stack::Report;
+use futures::future::BoxFuture;
+use nvml_wrapper::Nvml;
 use poem::listener::TcpListener;
 use poem::middleware::Tracing;
 use poem::post;
@@ -25,6 +27,8 @@ use super::types::JwtAuthConfig;
 use crate::api::handlers::get_worker_info;
 use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
+use crate::limiter_coordinator::LimiterCoordinator;
+use crate::process::worker::TensorFusionWorker;
 use crate::worker_manager::WorkerManager;
 
 /// HTTP API server for querying pod resource information
@@ -39,8 +43,18 @@ pub struct ApiServer<AddCB, RemoveCB> {
 
 impl<AddCB, RemoveCB> ApiServer<AddCB, RemoveCB>
 where
-    AddCB: Fn(u32, Arc<crate::process::worker::TensorFusionWorker>) + Send + Sync + 'static,
-    RemoveCB: Fn(u32) + Send + Sync + 'static,
+    AddCB: Fn(
+            &str, // container_name
+            u32,  // container_pid
+            u32,  // host_pid
+            Arc<TensorFusionWorker>,
+            Arc<LimiterCoordinator>,
+            Arc<Nvml>,
+        ) -> BoxFuture<'static, ()>
+        + Send
+        + Sync
+        + 'static,
+    RemoveCB: Fn(&str, &str, u32, u32) -> BoxFuture<'static, ()> + Send + Sync + 'static, /* pod_name, container_name, container_pid, host_pid */
 {
     /// Create a new API server
     pub fn new(

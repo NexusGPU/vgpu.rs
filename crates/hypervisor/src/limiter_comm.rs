@@ -104,7 +104,6 @@ fn generate_command_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-
 #[cfg(test)]
 mod tests {
     use similar_asserts::assert_eq;

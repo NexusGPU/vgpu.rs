@@ -2,6 +2,7 @@ mod build_info;
 pub mod hooks;
 pub mod logging;
 pub mod macros;
+pub mod shared_memory;
 pub mod version;
 
 use std::borrow::Cow;

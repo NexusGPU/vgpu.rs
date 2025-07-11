@@ -1,7 +1,10 @@
 {
     "cSpell.words": [
         "appender",
+        "bidir",
+        "chrono",
         "CUDA",
+        "frida",
         "KUBECONFIG",
         "libadd",
         "libcuda",
@@ -12,9 +15,11 @@
         "Nvml",
         "oneshot",
         "pids",
+        "reqwest",
         "Sched",
         "serde",
         "serviceaccount",
+        "Shmem",
         "tflops",
         "thiserror"
     ],

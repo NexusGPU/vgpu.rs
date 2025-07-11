@@ -104,7 +104,10 @@ pub trait MetricsEncoder: Send + Sync {
         fields.insert("tx".to_string(), params.tx.into());
         fields.insert("temperature".to_string(), params.temperature.into());
         fields.insert("memory_bytes".to_string(), params.memory_bytes.into());
-        fields.insert("compute_percentage".to_string(), params.compute_percentage.into());
+        fields.insert(
+            "compute_percentage".to_string(),
+            params.compute_percentage.into(),
+        );
         fields.insert("compute_tflops".to_string(), params.compute_tflops.into());
 
         self.encode_metrics("tf_gpu_usage", &tags, &fields, params.timestamp)
@@ -157,9 +160,15 @@ pub trait MetricsEncoder: Send + Sync {
 
         let mut fields = HashMap::new();
         fields.insert("memory_bytes".to_string(), params.memory_bytes.into());
-        fields.insert("compute_percentage".to_string(), params.compute_percentage.into());
+        fields.insert(
+            "compute_percentage".to_string(),
+            params.compute_percentage.into(),
+        );
         fields.insert("compute_tflops".to_string(), params.compute_tflops.into());
-        fields.insert("memory_percentage".to_string(), params.memory_percentage.into());
+        fields.insert(
+            "memory_percentage".to_string(),
+            params.memory_percentage.into(),
+        );
 
         self.encode_metrics("tf_worker_usage", &tags, &fields, params.timestamp)
     }

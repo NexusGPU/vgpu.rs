@@ -15,10 +15,10 @@ use ipc_channel::ipc::IpcOneShotServer;
 use ipc_channel::ipc::IpcReceiver;
 use ipc_channel::ipc::IpcReceiverSet;
 use ipc_channel::ipc::IpcSender;
+use TrapError;
 
 use crate::Trap;
 use crate::TrapAction;
-use crate::TrapError;
 use crate::TrapFrame;
 use crate::TrapHandler;
 use crate::Waker;
@@ -98,7 +98,7 @@ impl IpcTrap {
     /// Creates a client-side IpcTrap by connecting to a server.
     /// This should be used in a different process than the one that called `wait_client`.
     /// This method waits for a SIGUSR1 signal or the server name file to appear, with a timeout.
-    pub fn connect<P: AsRef<Path>>(path: P) -> Result<Self, crate::TrapError> {
+    pub fn connect<P: AsRef<Path>>(path: P) -> Result<Self, TrapError> {
         // Get our process ID
         let pid = std::process::id();
 
@@ -140,7 +140,7 @@ impl IpcTrap {
 }
 
 impl Trap for IpcTrap {
-    fn enter_trap_and_wait(&self, frame: TrapFrame) -> Result<TrapAction, crate::TrapError> {
+    fn enter_trap_and_wait(&self, frame: TrapFrame) -> Result<TrapAction, TrapError> {
         // Generate a unique ID for this trap request
         let trap_id = self.next_trap_id.fetch_add(1, Ordering::SeqCst);
 
@@ -157,9 +157,7 @@ impl Trap for IpcTrap {
         }
 
         // Send the frame with its ID to the server
-        self.sender
-            .send((trap_id, frame))
-            .map_err(crate::TrapError::Ipc)?;
+        self.sender.send((trap_id, frame)).map_err(TrapError::Ipc)?;
 
         // Wait for the response using the condvar
         let (mutex, condvar) = &*pair;
@@ -294,7 +292,7 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
         }
     }
 
-    pub fn run(&self) -> Result<(), crate::TrapError> {
+    pub fn run(&self) -> Result<(), TrapError> {
         loop {
             let events = self.ipc_receiver_set.lock().expect("poisoning").select()?;
             for event in events {

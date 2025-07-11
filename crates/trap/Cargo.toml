@@ -13,7 +13,6 @@ ipc-channel = { workspace = true, optional = true}
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true }
-libc = { workspace = true }
 
 # HTTP feature dependencies
 reqwest = { workspace = true, features = ["json", "rustls-tls"], optional = true, default-features = false }
