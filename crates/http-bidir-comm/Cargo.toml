@@ -15,7 +15,6 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 derive_more = { workspace = true, features = ["display", "error", "from"] }
 poem = { workspace = true }
 async-stream = { workspace = true }
-futures-util = { workspace = true }
 eventsource = { workspace = true }
 url = { workspace = true }
 

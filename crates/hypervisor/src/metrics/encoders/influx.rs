@@ -9,6 +9,12 @@ use crate::metrics::BytesWrapper;
 /// InfluxDB line protocol encoder
 pub struct InfluxEncoder;
 
+impl Default for InfluxEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InfluxEncoder {
     pub fn new() -> Self {
         Self

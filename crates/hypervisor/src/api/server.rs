@@ -28,8 +28,8 @@ use crate::limiter_comm::CommandDispatcher;
 use crate::worker_manager::WorkerManager;
 
 /// HTTP API server for querying pod resource information
-pub struct ApiServer<AddCB, RemoveCB> {
-    worker_manager: Arc<WorkerManager<AddCB, RemoveCB>>,
+pub struct ApiServer {
+    worker_manager: Arc<WorkerManager>,
     listen_addr: String,
     jwt_config: JwtAuthConfig,
     trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
@@ -37,14 +37,10 @@ pub struct ApiServer<AddCB, RemoveCB> {
     gpu_observer: Arc<GpuObserver>,
 }
 
-impl<AddCB, RemoveCB> ApiServer<AddCB, RemoveCB>
-where
-    AddCB: Fn(u32, Arc<crate::process::worker::TensorFusionWorker>) + Send + Sync + 'static,
-    RemoveCB: Fn(u32) + Send + Sync + 'static,
-{
+impl ApiServer {
     /// Create a new API server
     pub fn new(
-        worker_manager: Arc<WorkerManager<AddCB, RemoveCB>>,
+        worker_manager: Arc<WorkerManager>,
         listen_addr: String,
         jwt_config: JwtAuthConfig,
         trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
@@ -74,10 +70,7 @@ where
         let limiter_routes = self.command_dispatcher.create_routes();
 
         let app = Route::new()
-            .at(
-                "/api/v1/worker",
-                get_worker_info::<AddCB, RemoveCB>::default(),
-            )
+            .at("/api/v1/worker", get_worker_info)
             .nest("/api/v1/trap", trap_routes)
             .nest("/api/v1/limiter", limiter_routes)
             .data(self.worker_manager.registry().clone())

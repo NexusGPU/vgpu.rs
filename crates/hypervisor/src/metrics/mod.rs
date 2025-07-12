@@ -6,6 +6,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::config::GPU_CAPACITY_MAP;
 use crate::gpu_observer::GpuObserver;
+use crate::process::GpuResources;
 use crate::worker_manager::WorkerManager;
 
 pub mod encoders;
@@ -60,12 +61,12 @@ struct AccumulatedWorkerMetrics {
 }
 
 /// Run metrics collection asynchronously
-pub(crate) async fn run_metrics<AddCB, RemoveCB>(
+pub(crate) async fn run_metrics(
     gpu_observer: Arc<GpuObserver>,
     metrics_batch_size: usize,
     node_name: &str,
     gpu_pool: Option<&str>,
-    worker_mgr: Arc<WorkerManager<AddCB, RemoveCB>>,
+    worker_mgr: Arc<WorkerManager>,
     metrics_format: &str,
     metrics_extra_labels: Option<&str>,
 ) {
@@ -119,13 +120,13 @@ pub(crate) async fn run_metrics<AddCB, RemoveCB>(
 
         // Accumulate process metrics
         // First, collect all the process metrics data to avoid holding the lock across await points
-        let process_metrics_snapshot: Vec<(String, Vec<(u32, crate::GpuResources)>)> = {
+        let process_metrics_snapshot: Vec<(String, Vec<(u32, GpuResources)>)> = {
             let metrics_guard = gpu_observer.metrics.read().expect("poisoned");
             metrics_guard
                 .process_metrics
                 .iter()
                 .map(|(gpu_uuid, (process_metrics, _))| {
-                    let processes: Vec<(u32, crate::GpuResources)> = process_metrics
+                    let processes: Vec<(u32, GpuResources)> = process_metrics
                         .iter()
                         .map(|(pid, resources)| (*pid, resources.clone()))
                         .collect();

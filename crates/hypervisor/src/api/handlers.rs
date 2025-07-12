@@ -12,7 +12,6 @@ use tracing::info;
 use super::types::JwtPayload;
 use crate::api::types::WorkerQueryResponse;
 use crate::gpu_observer::GpuObserver;
-use crate::process::worker::TensorFusionWorker;
 use crate::worker_manager::WorkerManager;
 use crate::worker_manager::WorkerRegistry;
 
@@ -25,17 +24,13 @@ pub struct WorkerQuery {
 
 /// Get pod resource information using JWT token info and container details
 #[handler]
-pub async fn get_worker_info<AddCB, RemoveCB>(
+pub async fn get_worker_info(
     req: &Request,
     query: Query<WorkerQuery>,
     worker_registry: Data<&WorkerRegistry>,
-    worker_manager: Data<&Arc<WorkerManager<AddCB, RemoveCB>>>,
+    worker_manager: Data<&Arc<WorkerManager>>,
     gpu_observer: Data<&Arc<GpuObserver>>,
-) -> poem::Result<poem::web::Json<WorkerQueryResponse>>
-where
-    AddCB: Fn(u32, Arc<TensorFusionWorker>) + Send + Sync + 'static,
-    RemoveCB: Fn(u32) + Send + Sync + 'static,
-{
+) -> poem::Result<poem::web::Json<WorkerQueryResponse>> {
     // Extract JWT payload from request extensions
     let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
         poem::Error::from_string(
@@ -178,7 +173,9 @@ where
 
     // re-acquire the registry lock
     let registry = worker_registry.read().await;
-    let worker_entry = registry.get(&worker_key).expect("Worker should exist after PID discovery");
+    let worker_entry = registry
+        .get(&worker_key)
+        .expect("Worker should exist after PID discovery");
 
     // Update the WorkerInfo with host_pid
     let mut worker_info = worker_entry.info.clone();

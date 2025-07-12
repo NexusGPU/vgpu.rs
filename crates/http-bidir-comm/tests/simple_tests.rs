@@ -224,7 +224,7 @@ async fn special_characters_in_data() {
     let server = HttpServer::<SimpleTask, SimpleResult>::new();
 
     // Test with special characters
-    let special_message = "Hello 世界! 🦀 Rust \"quotes\" and\nnewlines\ttabs";
+    let special_message = "Hello world! 🦀 Rust \"quotes\" and\nnewlines\ttabs";
     let task = SimpleTask {
         id: 1,
         message: special_message.to_string(),

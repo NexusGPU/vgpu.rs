@@ -10,7 +10,7 @@ use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::Nvml;
 use tokio::sync::mpsc;
 
-use super::GpuResources;
+use crate::process::GpuResources;
 
 type ProcessId = u32;
 type GpuUuid = String;

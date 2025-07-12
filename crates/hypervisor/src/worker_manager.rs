@@ -8,10 +8,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Ok;
 use anyhow::Result;
 use api_types::QosLevel;
 use api_types::WorkerInfo;
+use nvml_wrapper::Nvml;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
@@ -20,12 +20,18 @@ use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::host_pid_probe::PodProcessInfo;
 use crate::host_pid_probe::SubscriptionRequest;
+use crate::hypervisor::Hypervisor;
 use crate::k8s::TensorFusionPodInfo;
 use crate::limiter_comm::CommandDispatcher;
+use crate::limiter_coordinator::LimiterCoordinator;
 use crate::process::worker::TensorFusionWorker;
+use crate::process::GpuProcess;
+use crate::scheduler::weighted::WeightedScheduler;
+use crate::worker_registration::register_worker_to_limiter_coordinator;
+use crate::worker_registration::unregister_worker_from_limiter_coordinator;
 
-/// Container-level information within a pod
-#[derive(Clone)]
+/// Container information for tracking container-specific details.
+#[derive(Debug, Clone)]
 pub struct ContainerInfo {
     pub container_name: String,
     /// Mapping from container PID to host PID for this container
@@ -44,8 +50,8 @@ impl ContainerInfo {
     }
 }
 
-/// Entry that combines Kubernetes annotation info and container-level information
-#[derive(Clone, Default)]
+/// Worker entry combining worker info with container tracking.
+#[derive(Debug, Clone)]
 pub struct WorkerEntry {
     pub info: WorkerInfo,
     /// Container information keyed by container name
@@ -80,8 +86,6 @@ impl WorkerEntry {
     }
 }
 
-
-
 /// Worker registry for storing and managing worker information.
 pub type WorkerRegistry = Arc<RwLock<HashMap<String, WorkerEntry>>>;
 
@@ -89,16 +93,17 @@ pub type WorkerRegistry = Arc<RwLock<HashMap<String, WorkerEntry>>>;
 pub type PidRegistry = Arc<RwLock<HashMap<u32, WorkerEntry>>>;
 
 /// Worker manager that handles worker lifecycle based on pod events.
-pub struct WorkerManager<AddCB, RemoveCB> {
+pub struct WorkerManager {
     registry: WorkerRegistry,
     pid_registry: PidRegistry,
-    add_callback: AddCB,
-    remove_callback: RemoveCB,
     host_pid_probe: Arc<HostPidProbe>,
     command_dispatcher: Arc<CommandDispatcher>,
+    hypervisor: Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
+    limiter_coordinator: Arc<LimiterCoordinator>,
+    nvml: Arc<Nvml>,
 }
 
-impl<AddCB, RemoveCB> WorkerManager<AddCB, RemoveCB> {
+impl WorkerManager {
     /// Find a worker by its PID.
     pub async fn find_worker_by_pid(&self, pid: u32) -> Option<WorkerEntry> {
         let pid_registry = self.pid_registry.read().await;
@@ -109,27 +114,119 @@ impl<AddCB, RemoveCB> WorkerManager<AddCB, RemoveCB> {
     pub fn registry(&self) -> &WorkerRegistry {
         &self.registry
     }
+
+    /// Get pod name from host PID.
+    pub async fn get_pod_name_by_host_pid(&self, host_pid: u32) -> Option<String> {
+        let pid_registry = self.pid_registry.read().await;
+        pid_registry
+            .get(&host_pid)
+            .map(|entry| entry.info.pod_name.clone())
+    }
+
+    /// Get namespace from host PID.
+    pub async fn get_namespace_by_host_pid(&self, host_pid: u32) -> Option<String> {
+        let pid_registry = self.pid_registry.read().await;
+        pid_registry
+            .get(&host_pid)
+            .map(|entry| entry.info.namespace.clone())
+    }
+
+    /// Get all host PIDs for a given pod.
+    pub async fn get_host_pids_by_pod(&self, pod_name: &str, namespace: &str) -> Vec<u32> {
+        let worker_key = format!("{namespace}/{pod_name}");
+        let registry = self.registry.read().await;
+
+        if let Some(entry) = registry.get(&worker_key) {
+            let mut pids = Vec::new();
+            for container_info in entry.containers.values() {
+                for host_pid in container_info.container_pid_to_host_pid.values() {
+                    pids.push(*host_pid);
+                }
+            }
+            pids
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get all container names for a given pod.
+    pub async fn get_container_names_by_pod(&self, pod_name: &str, namespace: &str) -> Vec<String> {
+        let worker_key = format!("{namespace}/{pod_name}");
+        let registry = self.registry.read().await;
+
+        if let Some(entry) = registry.get(&worker_key) {
+            entry.containers.keys().cloned().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get container name from host PID.
+    pub async fn get_container_name_by_host_pid(&self, host_pid: u32) -> Option<String> {
+        let pid_registry = self.pid_registry.read().await;
+        if let Some(entry) = pid_registry.get(&host_pid) {
+            // Search through containers to find which one has this host PID
+            for (container_name, container_info) in &entry.containers {
+                if container_info
+                    .container_pid_to_host_pid
+                    .values()
+                    .any(|&pid| pid == host_pid)
+                {
+                    return Some(container_name.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if a pod exists in the registry.
+    pub async fn pod_exists(&self, pod_name: &str, namespace: &str) -> bool {
+        let worker_key = format!("{namespace}/{pod_name}");
+        let registry = self.registry.read().await;
+        registry.contains_key(&worker_key)
+    }
+
+    /// Get pod information by pod name and namespace.
+    pub async fn get_pod_info(&self, pod_name: &str, namespace: &str) -> Option<WorkerEntry> {
+        let worker_key = format!("{namespace}/{pod_name}");
+        let registry = self.registry.read().await;
+        registry.get(&worker_key).cloned()
+    }
+
+    /// Get all active pods (returns namespace/pod_name keys).
+    pub async fn get_all_active_pods(&self) -> Vec<String> {
+        let registry = self.registry.read().await;
+        registry.keys().cloned().collect()
+    }
+
+    /// Get pod and namespace from worker key.
+    pub fn parse_worker_key(worker_key: &str) -> Option<(String, String)> {
+        let parts: Vec<&str> = worker_key.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            Some((parts[0].to_string(), parts[1].to_string()))
+        } else {
+            None
+        }
+    }
 }
 
-impl<AddCB, RemoveCB> WorkerManager<AddCB, RemoveCB>
-where
-    AddCB: Fn(u32, Arc<TensorFusionWorker>) + Send + Sync + 'static,
-    RemoveCB: Fn(u32) + Send + Sync + 'static,
-{
+impl WorkerManager {
     /// Create a new worker manager with host PID probe.
     pub fn new(
         host_pid_probe: Arc<HostPidProbe>,
-        add_callback: AddCB,
-        remove_callback: RemoveCB,
         command_dispatcher: Arc<CommandDispatcher>,
+        hypervisor: Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
+        limiter_coordinator: Arc<LimiterCoordinator>,
+        nvml: Arc<Nvml>,
     ) -> Self {
         Self {
             registry: Arc::new(RwLock::new(HashMap::new())),
             pid_registry: Arc::new(RwLock::new(HashMap::new())),
-            add_callback,
-            remove_callback,
             host_pid_probe,
             command_dispatcher,
+            hypervisor,
+            limiter_coordinator,
+            nvml,
         }
     }
 
@@ -147,8 +244,27 @@ where
         Ok(())
     }
 
-    /// Discover worker PID using HostPidProbe and automatically associate it.
+    /// Discover the host PID for a container
     pub async fn discover_worker_pid(
+        &self,
+        pod_name: &str,
+        namespace: &str,
+        container_name: &str,
+        container_pid: u32,
+        gpu_observer: Arc<GpuObserver>,
+    ) -> Result<PodProcessInfo> {
+        self.discover_worker_pid_with_registration(
+            pod_name,
+            namespace,
+            container_name,
+            container_pid,
+            gpu_observer,
+        )
+        .await
+    }
+
+    /// Discover worker PID and register with limiter coordinator
+    pub async fn discover_worker_pid_with_registration(
         &self,
         pod_name: &str,
         namespace: &str,
@@ -164,11 +280,8 @@ where
         };
 
         info!(
-            pod_name = %pod_name,
-            namespace = %namespace,
-            container_name = %container_name,
-            container_pid = %container_pid,
-            "Starting PID discovery for worker"
+            "Starting PID discovery for container {} in pod {}/{}",
+            container_name, namespace, pod_name
         );
 
         let receiver = self
@@ -181,29 +294,25 @@ where
             .map_err(|_| anyhow::anyhow!("PID discovery subscription was cancelled"))?;
 
         info!(
-            pod_name = %pod_name,
-            namespace = %namespace,
-            container_name = %container_name,
-            host_pid = process_info.host_pid,
-            container_pid = process_info.container_pid,
-            "Discovered worker PID"
+            "Discovered worker PID: host_pid={}, container_pid={} for container {} in pod {}/{}",
+            process_info.host_pid, process_info.container_pid, container_name, namespace, pod_name
         );
 
-        // Associate the worker with the discovered PID
+        // Associate the discovered worker
         self.associate_discovered_worker(
             pod_name,
             namespace,
             container_name,
             process_info.host_pid,
             process_info.container_pid,
-            gpu_observer.clone(),
+            gpu_observer,
         )
         .await?;
 
         Ok(process_info)
     }
 
-    /// Associate a worker with a discovered PID.
+    /// Associate a discovered worker with the registry and register it
     async fn associate_discovered_worker(
         &self,
         pod_name: &str,
@@ -214,7 +323,7 @@ where
         gpu_observer: Arc<GpuObserver>,
     ) -> Result<()> {
         let worker_key = format!("{namespace}/{pod_name}");
-        
+
         info!("associate_discovered_worker started for {worker_key} host_pid={host_pid}");
 
         // Create worker and update registry in a limited scope to reduce lock hold time
@@ -264,18 +373,33 @@ where
                 warn!("Attempted to associate PID with non-existent worker: {worker_key}");
                 return Err(anyhow::anyhow!("Worker not found in registry"));
             }
-        }; // 🔓 Registry lock is released here
+        };
 
-        info!("About to execute add_callback for host_pid={host_pid}");
-        // 🚀 Execute add_callback outside of registry lock to avoid blocking
-        (self.add_callback)(host_pid, worker);
-        info!("add_callback completed for host_pid={host_pid}");
+        // Add worker to hypervisor
+        if !self.hypervisor.process_exists(host_pid) {
+            tracing::info!("Adding new worker to hypervisor: {}", worker.name());
+            self.hypervisor.add_process(worker.as_ref().clone());
+        }
 
-        // 🔒 Separately update PID registry to minimize lock contention
+        // Register worker to limiter coordinator
+        if let Err(e) = register_worker_to_limiter_coordinator(
+            &self.limiter_coordinator,
+            &worker,
+            container_name,
+            container_pid,
+            host_pid,
+            &self.nvml,
+        )
+        .await
+        {
+            tracing::error!("Failed to register worker to limiter coordinator: {}", e);
+        } else {
+            tracing::info!("Successfully registered worker to limiter coordinator");
+        }
+
         {
             let mut pid_registry = self.pid_registry.write().await;
             pid_registry.insert(host_pid, entry_for_pid_registry);
-            info!("PID registry updated for host_pid={host_pid}");
         }
 
         info!(
@@ -328,9 +452,38 @@ where
                 // Call remove callback for all containers with workers
                 for (container_name, container_info) in &entry.containers {
                     if let Some(worker) = &container_info.worker {
-                        use crate::process::GpuProcess;
                         info!("Removing worker for container: {container_name}");
-                        (self.remove_callback)(worker.pid());
+
+                        // Find the container_pid for this worker's host_pid
+                        let host_pid = worker.pid();
+                        if let Some((container_pid, _)) = container_info
+                            .container_pid_to_host_pid
+                            .iter()
+                            .find(|(_, &hpid)| hpid == host_pid)
+                        {
+                            // Remove worker from hypervisor
+                            self.hypervisor.remove_process(host_pid);
+
+                            // Unregister worker from limiter coordinator
+                            if let Err(e) = unregister_worker_from_limiter_coordinator(
+                                &self.limiter_coordinator,
+                                pod_name,
+                                container_name,
+                                *container_pid,
+                            )
+                            .await
+                            {
+                                tracing::error!(
+                                    "Failed to unregister worker from limiter coordinator: {}",
+                                    e
+                                );
+                            }
+                        } else {
+                            warn!(
+                                "Could not find container_pid for host_pid {} in container {}",
+                                host_pid, container_name
+                            );
+                        }
                     }
                 }
 
@@ -466,26 +619,20 @@ mod tests {
     async fn worker_manager_new() {
         let host_pid_probe = Arc::new(HostPidProbe::new(Duration::from_millis(100)));
         let command_dispatcher = Arc::new(CommandDispatcher::new());
+        let limiter_coordinator = Arc::new(LimiterCoordinator::new(Duration::from_millis(100), 1));
+        let nvml = Arc::new(Nvml::init().unwrap());
 
-        let add_count = Arc::new(AtomicU32::new(0));
-        let remove_count = Arc::new(AtomicU32::new(0));
-
-        let add_count_clone = add_count.clone();
-        let remove_count_clone = remove_count.clone();
-
-        let add_callback = move |_pid: u32, _worker: Arc<TensorFusionWorker>| {
-            add_count_clone.fetch_add(1, Ordering::SeqCst);
-        };
-
-        let remove_callback = move |_pid: u32| {
-            remove_count_clone.fetch_add(1, Ordering::SeqCst);
-        };
+        let hypervisor = Arc::new(Hypervisor::new(
+            WeightedScheduler::new(),
+            Duration::from_secs(1),
+        ));
 
         let worker_manager = WorkerManager::new(
             host_pid_probe,
-            add_callback,
-            remove_callback,
             command_dispatcher,
+            hypervisor,
+            limiter_coordinator,
+            nvml,
         );
 
         assert!(worker_manager.registry().read().await.is_empty());

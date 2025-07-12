@@ -8,6 +8,12 @@ use super::MetricsEncoder;
 /// JSON encoder for metrics
 pub struct JsonEncoder;
 
+impl Default for JsonEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JsonEncoder {
     pub fn new() -> Self {
         Self

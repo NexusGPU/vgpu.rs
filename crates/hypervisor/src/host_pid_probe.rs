@@ -519,7 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_notifies_when_manual_process_is_sent() {
-        let probe = HostPidProbe::new(Duration::from_secs(30)); // 扫描间隔设大，避免真正扫描
+        let probe = HostPidProbe::new(Duration::from_secs(30)); // set scan interval to avoid real scanning
 
         let request = make_req(42);
         let receiver = probe

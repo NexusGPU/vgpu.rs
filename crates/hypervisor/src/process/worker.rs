@@ -57,11 +57,16 @@ impl TensorFusionWorker {
         format!("limiter_{}", self.id)
     }
 
+    /// Get GPU UUIDs for this worker
+    pub(crate) fn gpu_uuids(&self) -> &[String] {
+        &self.gpu_uuids
+    }
+
     /// Send command to limiter using CommandDispatcher
     fn send_command(&self, command_type: LimiterCommandType) -> Result<()> {
         let limiter_id = self.get_limiter_id();
 
-        // 使用 tokio::runtime::Handle 来运行异步代码
+        // Use tokio::runtime::Handle to run asynchronous code
         let rt = tokio::runtime::Handle::try_current()
             .map_err(|_| anyhow::anyhow!("No tokio runtime available"))?;
 

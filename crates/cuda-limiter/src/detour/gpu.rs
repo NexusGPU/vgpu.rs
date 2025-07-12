@@ -2,16 +2,14 @@ use std::ffi::c_int;
 use std::ffi::c_uint;
 use std::ffi::c_void;
 use std::sync::OnceLock;
-use std::time::Duration;
 
-use cudarc::driver::sys::cuDeviceGetCount;
+use cudarc::driver::sys::CUfunction;
 use cudarc::driver::sys::CUresult;
+use cudarc::driver::sys::CUstream;
 use tf_macro::hook_fn;
 use utils::hooks::HookManager;
 use utils::replace_symbol;
 
-use super::CUfunction;
-use super::CUstream;
 use crate::with_device;
 use crate::GLOBAL_LIMITER;
 
@@ -287,34 +285,9 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flag: c_uint) -> CUresult {
     if result != CUresult::CUDA_SUCCESS {
         return result;
     }
-    let _ = INIT.get_or_try_init(|| {
-        // Get the number of CUDA devices
-        let mut device_count: c_int = 0;
-        let count_result = cuDeviceGetCount(&mut device_count as *mut c_int);
 
-        if count_result != CUresult::CUDA_SUCCESS || device_count <= 0 {
-            tracing::error!("Failed to get device count or no devices found");
-            return Err(());
-        }
-
-        // Get the global limiter instance
-        let limiter = GLOBAL_LIMITER.get().expect("get limiter");
-        // Start a watcher thread for each device
-        for dev in limiter.devices.iter() {
-            std::thread::Builder::new()
-                .name(format!("utilization-watcher-{}", dev.dev_idx))
-                .spawn(move || {
-                    if let Err(err) = limiter.run_watcher(dev.dev_idx, Duration::from_millis(120)) {
-                        tracing::error!("Watcher for device {} failed: {:?}", dev.dev_idx, err);
-                    }
-                })
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "spawn utilization-watcher thread for device {}",
-                        dev.dev_idx
-                    )
-                });
-        }
+    let _ = INIT.get_or_try_init(|| -> Result<(), ()> {
+        tracing::debug!("CUDA initialized successfully, monitoring is handled by hypervisor");
         Ok(())
     });
 
