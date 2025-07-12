@@ -26,10 +26,11 @@ kube = { workspace = true, features = ["runtime", "derive"] }
 k8s-openapi = { workspace = true, features = ["v1_28"] }
 tokio = { workspace = true, features = ["full"] }
 error-stack = { workspace = true }
-futures = { workspace = true }
+futures.workspace = true
 poem = { workspace = true }
 http-bidir-comm = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+tokio-util = "0.7.15"
 
 
 [[bin]]

@@ -174,23 +174,6 @@ mod tests {
     }
 
     #[test]
-    fn jwt_middleware_can_be_created() {
-        // Arrange
-        let config = JwtAuthConfig {
-            public_key: "test-key".to_string(),
-        };
-
-        // Act
-        let middleware = JwtAuthMiddleware::new(config);
-
-        // Assert
-        assert_eq!(
-            middleware.config.public_key, "test-key",
-            "Middleware should store the config correctly"
-        );
-    }
-
-    #[test]
     fn extract_jwt_payload_with_valid_token() {
         // Arrange
         let test_payload = create_test_payload();

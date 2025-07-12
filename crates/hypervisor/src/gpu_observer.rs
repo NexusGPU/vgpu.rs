@@ -9,6 +9,7 @@ use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::Nvml;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::process::GpuResources;
 
@@ -56,38 +57,52 @@ impl GpuObserver {
     }
 
     /// Run the GPU observer loop asynchronously
-    pub(crate) async fn run(&self, update_interval: Duration) {
+    pub(crate) async fn run(
+        &self,
+        update_interval: Duration,
+        cancellation_token: CancellationToken,
+    ) {
         loop {
-            // Query new metrics without holding the lock across .await
-            let metrics_result = {
-                let last_metrics_guard = self.metrics.read().expect("poisoned");
-                self.query_metrics(&last_metrics_guard)
-            };
-
-            match metrics_result {
-                Ok(metrics) => {
-                    // Update the metrics – obtain write lock briefly
-                    *self.metrics.write().expect("poisoned") = metrics;
-
-                    // Clone sender list while holding read lock, then drop guard before await
-                    let sender_list = {
-                        let senders_guard = self.senders.read().expect("poisoned");
-                        senders_guard.clone()
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    tracing::info!("GPU observer shutdown requested");
+                    break;
+                }
+                _ = async {
+                    // Query new metrics without holding the lock across .await
+                    let metrics_result = {
+                        let last_metrics_guard = self.metrics.read().expect("poisoned");
+                        self.query_metrics(&last_metrics_guard)
                     };
 
-                    // Notify subscribers concurrently (sender::send is async)
-                    for sender in sender_list {
-                        if let Err(e) = sender.send(()).await {
-                            tracing::error!("Failed to send update signal: {}", e);
+                    match metrics_result {
+                        Ok(metrics) => {
+                            // Update the metrics – obtain write lock briefly
+                            *self.metrics.write().expect("poisoned") = metrics;
+
+                            // Clone sender list while holding read lock, then drop guard before await
+                            let sender_list = {
+                                let senders_guard = self.senders.read().expect("poisoned");
+                                senders_guard.clone()
+                            };
+
+                            // Notify subscribers concurrently (sender::send is async)
+                            for sender in sender_list {
+                                if let Err(e) = sender.send(()).await {
+                                    tracing::error!("Failed to send update signal: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to update GPU metrics: {}", e);
                         }
                     }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to update GPU metrics: {}", e);
+
+                    tokio::time::sleep(update_interval).await;
+                } => {
+                    // Continue the loop
                 }
             }
-
-            tokio::time::sleep(update_interval).await;
         }
     }
 

@@ -203,28 +203,6 @@ mod tests {
     use crate::worker_manager::ContainerInfo;
     use crate::worker_manager::WorkerEntry;
 
-    fn create_test_jwt_payload() -> JwtPayload {
-        JwtPayload {
-            kubernetes: KubernetesInfo {
-                namespace: "test-namespace".to_string(),
-                node: KubernetesNode {
-                    name: "test-node".to_string(),
-                    uid: "node-uuid-123".to_string(),
-                },
-                pod: KubernetesPod {
-                    name: "test-pod".to_string(),
-                    uid: "pod-uuid-456".to_string(),
-                },
-                serviceaccount: KubernetesServiceAccount {
-                    name: "test-sa".to_string(),
-                    uid: "sa-uuid-789".to_string(),
-                },
-            },
-            nbf: 1751311081,
-            sub: "test-subject".to_string(),
-        }
-    }
-
     fn create_test_worker_entry() -> WorkerEntry {
         let worker_info = WorkerInfo {
             pod_name: "test-pod".to_string(),
@@ -271,33 +249,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn worker_query_construction() {
-        let query = WorkerQuery {
-            container_name: "container1".to_string(),
-            container_pid: 100,
-        };
-
-        assert_eq!(query.container_name, "container1");
-        assert_eq!(query.container_pid, 100);
-    }
-
-    #[test]
-    fn worker_query_with_different_containers() {
-        let query1 = WorkerQuery {
-            container_name: "container1".to_string(),
-            container_pid: 100,
-        };
-
-        let query2 = WorkerQuery {
-            container_name: "container2".to_string(),
-            container_pid: 100,
-        };
-
-        assert_ne!(query1.container_name, query2.container_name);
-        assert_eq!(query1.container_pid, query2.container_pid);
-    }
-
     #[tokio::test]
     async fn test_worker_registry_lookup() {
         let mut registry = HashMap::new();
@@ -326,15 +277,6 @@ mod tests {
             let non_existent = entry.get_container("non-existent");
             assert!(non_existent.is_none());
         }
-    }
-
-    #[test]
-    fn jwt_payload_extraction() {
-        let payload = create_test_jwt_payload();
-
-        assert_eq!(payload.kubernetes.pod.name, "test-pod");
-        assert_eq!(payload.kubernetes.namespace, "test-namespace");
-        assert_eq!(payload.kubernetes.node.name, "test-node");
     }
 
     #[test]

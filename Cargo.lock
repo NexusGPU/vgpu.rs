@@ -1437,6 +1437,7 @@ dependencies = [
  "tempfile",
  "test-log",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

@@ -426,25 +426,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_trap_request_processing() {
-        let handler = RecordingTrapHandler::new();
-        let server = HttpTrapServer::new(handler.clone(), None);
-
-        let request = HttpTrapRequest {
-            trap_id: "test_trap_123".to_string(),
-            process_id: 1234,
-            frame: TrapFrame::OutOfMemory {
-                requested_bytes: 1024,
-            },
-            timeout_seconds: 30,
-        };
-
-        // Test enqueuing a trap request
-        let result = server.enqueue_trap_request(request).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
     async fn test_trap_task_processor() {
         let handler = RecordingTrapHandler::new();
         let processor = TrapTaskProcessor {

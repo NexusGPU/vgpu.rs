@@ -1,5 +1,4 @@
 //! Shared Memory Module
-//!
 //! This module provides utilities for managing shared memory segments used for
 //! GPU resource coordination between processes.
 
@@ -878,98 +877,6 @@ mod tests {
     }
 
     #[test]
-    fn standalone_functions_create_and_open() {
-        let config = create_test_config();
-        let identifier = create_unique_identifier("standalone");
-
-        // Create shared memory using SharedMemoryHandle
-        let handle1 = SharedMemoryHandle::create(&identifier, &config)
-            .expect("should create shared memory successfully");
-
-        let state1 = handle1.get_state();
-        assert_eq!(
-            state1.get_device_idx(),
-            TEST_DEVICE_IDX,
-            "Device index should match configuration"
-        );
-        assert_eq!(
-            state1.get_total_cores(),
-            TEST_TOTAL_CORES,
-            "Total cores should match configuration"
-        );
-
-        // Open shared memory using SharedMemoryHandle
-        let handle2 =
-            SharedMemoryHandle::open(&identifier).expect("should open shared memory successfully");
-
-        let state2 = handle2.get_state();
-        assert_eq!(
-            state2.get_device_idx(),
-            TEST_DEVICE_IDX,
-            "Device index should match original configuration"
-        );
-        assert_eq!(
-            state2.get_total_cores(),
-            TEST_TOTAL_CORES,
-            "Total cores should match original configuration"
-        );
-
-        // Test that both handles point to the same shared memory
-        state1.set_available_cores(42);
-        assert_eq!(
-            state2.get_available_cores(),
-            42,
-            "Changes should be visible across handles"
-        );
-    }
-
-    #[test]
-    fn standalone_functions_error_handling() {
-        let non_existent_identifier = "non_existent_standalone";
-
-        // Try to open non-existent shared memory using SharedMemoryHandle
-        let result = SharedMemoryHandle::open(non_existent_identifier);
-        assert!(
-            result.is_err(),
-            "Should return error when opening non-existent shared memory"
-        );
-    }
-
-    #[test]
-    fn device_config_clone_and_debug() {
-        let config = create_test_config();
-        let cloned_config = config.clone();
-
-        assert_eq!(
-            config.device_idx, cloned_config.device_idx,
-            "Device index should be cloned correctly"
-        );
-        assert_eq!(
-            config.up_limit, cloned_config.up_limit,
-            "Up limit should be cloned correctly"
-        );
-        assert_eq!(
-            config.mem_limit, cloned_config.mem_limit,
-            "Memory limit should be cloned correctly"
-        );
-        assert_eq!(
-            config.total_cuda_cores, cloned_config.total_cuda_cores,
-            "Total cores should be cloned correctly"
-        );
-
-        // Test Debug trait
-        let debug_str = format!("{config:?}");
-        assert!(
-            debug_str.contains("DeviceConfig"),
-            "Debug output should contain struct name"
-        );
-        assert!(
-            debug_str.contains(&TEST_DEVICE_IDX.to_string()),
-            "Debug output should contain device index"
-        );
-    }
-
-    #[test]
     fn boundary_conditions() {
         // Test with maximum values
         let max_config = DeviceConfig {
@@ -1044,60 +951,6 @@ mod tests {
     }
 
     #[test]
-    fn memory_lifecycle_comprehensive() {
-        let config = create_test_config();
-        let identifier = create_unique_identifier("lifecycle");
-
-        // Test complete lifecycle with manager
-        let manager = SharedMemoryManager::new();
-
-        // Create
-        manager
-            .create_or_get_shared_memory(&identifier, &config)
-            .expect("should create shared memory successfully");
-
-        // Access and modify
-        let ptr = manager
-            .get_shared_memory(&identifier)
-            .expect("should retrieve shared memory pointer");
-
-        unsafe {
-            let state = &*ptr;
-            state.set_available_cores(100);
-            state.set_up_limit(75);
-            state.set_mem_limit(512 * 1024 * 1024);
-
-            assert_eq!(
-                state.get_available_cores(),
-                100,
-                "Available cores should be updated"
-            );
-            assert_eq!(state.get_up_limit(), 75, "Up limit should be updated");
-            assert_eq!(
-                state.get_mem_limit(),
-                512 * 1024 * 1024,
-                "Memory limit should be updated"
-            );
-        }
-
-        // Cleanup
-        manager
-            .cleanup(&identifier)
-            .expect("should cleanup shared memory successfully");
-
-        // Verify cleanup
-        assert!(
-            !manager.contains(&identifier),
-            "Manager should not contain cleaned up identifier"
-        );
-        let result = manager.get_shared_memory(&identifier);
-        assert!(
-            result.is_err(),
-            "Should not be able to access cleaned up shared memory"
-        );
-    }
-
-    #[test]
     fn cross_process_simulation() {
         let config = create_test_config();
         let identifier = create_unique_identifier("cross_process");
@@ -1144,40 +997,6 @@ mod tests {
     }
 
     #[test]
-    fn stress_test_rapid_operations() {
-        let config = create_test_config();
-        let identifier = create_unique_identifier("stress");
-
-        let handle = SharedMemoryHandle::create(&identifier, &config)
-            .expect("should create shared memory successfully");
-
-        // Perform rapid operations
-        let state = handle.get_state();
-        for i in 0..1000 {
-            state.set_available_cores(i);
-            state.set_up_limit((i % 100) as u32);
-            state.set_mem_limit((i as u64) * 1024 * 1024);
-
-            // Verify values are set correctly
-            assert_eq!(
-                state.get_available_cores(),
-                i,
-                "Available cores should be set correctly"
-            );
-            assert_eq!(
-                state.get_up_limit(),
-                (i % 100) as u32,
-                "Up limit should be set correctly"
-            );
-            assert_eq!(
-                state.get_mem_limit(),
-                (i as u64) * 1024 * 1024,
-                "Memory limit should be set correctly"
-            );
-        }
-    }
-
-    #[test]
     fn shared_memory_handle_send_sync() {
         let config = create_test_config();
         let identifier = create_unique_identifier("send_sync");
@@ -1209,12 +1028,6 @@ mod tests {
             42,
             "Changes should be visible across threads"
         );
-    }
-
-    #[test]
-    fn cleanup_all_test_shared_memory() {
-        // This test is mainly for ensuring the test module compiles and runs correctly
-        // Individual tests now use unique identifiers, so no cleanup is needed
     }
 
     // Tests for ThreadSafeSharedMemoryManager

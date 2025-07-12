@@ -14,7 +14,7 @@ use kube::Api;
 use kube::Client;
 use tokio::select;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -108,16 +108,16 @@ impl PodWatcher {
     /// # Errors
     ///
     /// - [`KubernetesError::WatchFailed`] if the watch operation fails repeatedly
-    #[tracing::instrument(skip(self, shutdown_rx), fields(namespace = ?self.namespace, node_name = ?self.node_name))]
+    #[tracing::instrument(skip(self, cancellation_token), fields(namespace = ?self.namespace, node_name = ?self.node_name))]
     pub(crate) async fn run(
         &self,
-        mut shutdown_rx: oneshot::Receiver<()>,
+        cancellation_token: CancellationToken,
     ) -> Result<(), Report<KubernetesError>> {
         info!("Starting pod watcher");
 
         loop {
             select! {
-                _ = &mut shutdown_rx => {
+                _ = cancellation_token.cancelled() => {
                     info!("Pod watcher shutdown requested");
                     break;
                 }

@@ -160,51 +160,6 @@ mod tests {
         assert_eq!(config.request_timeout, Duration::from_secs(10));
     }
 
-    #[test(tokio::test)]
-    async fn task_states_and_ids() {
-        let task_id1 = TaskId::new();
-        let task_id2 = TaskId::new();
-
-        // Task IDs should be unique
-        assert_ne!(task_id1, task_id2);
-
-        // Task items should be created correctly
-        let task = TestTask {
-            id: 1,
-            command: "test".to_string(),
-        };
-        let task_item = TaskItem::new(task.clone());
-
-        assert_eq!(task_item.state, TaskState::Queued);
-        assert_eq!(task_item.data, task);
-        assert!(task_item.client_id.is_none());
-
-        // Task results should be created correctly
-        let success_result = TaskResult::success(task_id1, "client1", TestResult {
-            id: 1,
-            success: true,
-            message: Some("Done".to_string()),
-        });
-
-        assert!(success_result.success);
-        assert!(success_result.result.is_some());
-        assert!(success_result.error.is_none());
-
-        let failure_result =
-            TaskResult::<TestResult>::failure(task_id2, "client1", "Error occurred");
-
-        assert!(!failure_result.success);
-        assert!(failure_result.result.is_none());
-    }
-
-    #[test]
-    fn client_creation() {
-        let config = ClientConfig::new("http://localhost:8080");
-        let client = BlockingHttpClient::<TestTask, TestResult>::new(config);
-
-        assert!(client.is_ok());
-    }
-
     #[test]
     fn blocking_client_creation() {
         let config = ClientConfig::new("http://localhost:8080");

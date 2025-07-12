@@ -126,10 +126,6 @@ impl PodDeviceUsage {
         self.active_containers.is_empty()
     }
 
-    fn has_containers(&self) -> bool {
-        !self.active_containers.is_empty()
-    }
-
     /// Gets all host_pids in the pod.
     pub fn get_host_pids(&self) -> Vec<u32> {
         self.active_containers

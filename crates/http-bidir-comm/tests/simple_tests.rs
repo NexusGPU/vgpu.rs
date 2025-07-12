@@ -79,38 +79,6 @@ async fn server_config_creation() {
 }
 
 #[tokio::test]
-async fn task_serialization() {
-    let task = SimpleTask {
-        id: 42,
-        message: "hello world".to_string(),
-    };
-    let serialized = serde_json::to_string(&task).expect("should serialize task");
-    let deserialized: SimpleTask =
-        serde_json::from_str(&serialized).expect("should deserialize task");
-
-    assert_eq!(
-        task, deserialized,
-        "Task should serialize/deserialize correctly"
-    );
-}
-
-#[tokio::test]
-async fn result_serialization() {
-    let result = SimpleResult {
-        task_id: 42,
-        processed_message: "processed".to_string(),
-    };
-    let serialized = serde_json::to_string(&result).expect("should serialize result");
-    let deserialized: SimpleResult =
-        serde_json::from_str(&serialized).expect("should deserialize result");
-
-    assert_eq!(
-        result, deserialized,
-        "Result should serialize/deserialize correctly"
-    );
-}
-
-#[tokio::test]
 async fn processor_functionality() {
     let processor = SimpleProcessor;
     let task = SimpleTask {

@@ -10,7 +10,7 @@ use poem::web::Json;
 use poem::EndpointExt;
 use poem::Route;
 use poem::Server;
-use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
 use trap::http::HttpTrapRequest;
@@ -62,7 +62,7 @@ impl ApiServer {
     /// # Errors
     ///
     /// - [`ApiError::ServerError`] if the server fails to start or bind to the address
-    pub async fn run(self, mut shutdown_rx: oneshot::Receiver<()>) -> Result<(), Report<ApiError>> {
+    pub async fn run(self, cancellation_token: CancellationToken) -> Result<(), Report<ApiError>> {
         info!("Starting HTTP API server on {}", self.listen_addr);
 
         let trap_routes = Route::new().at("/", post(trap_endpoint).data(self.trap_handler.clone()));
@@ -98,7 +98,7 @@ impl ApiServer {
                     }
                 }
             }
-            _ = &mut shutdown_rx => {
+            _ = cancellation_token.cancelled() => {
                 info!("API server shutdown requested");
                 Ok(())
             }

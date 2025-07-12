@@ -3,6 +3,7 @@
         "appender",
         "bidir",
         "chrono",
+        "clippy",
         "condvar",
         "CUDA",
         "cudarc",

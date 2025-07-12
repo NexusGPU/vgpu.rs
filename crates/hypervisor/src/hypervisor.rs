@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::process::GpuProcess;
 use crate::scheduler::GpuScheduler;
 use crate::scheduler::SchedulingDecision;
@@ -98,13 +100,23 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
     }
 
     /// Start the scheduling loop asynchronously
-    pub(crate) async fn run(&self) {
+    pub(crate) async fn run(&self, cancellation_token: CancellationToken) {
         let scheduling_interval = self.scheduling_interval;
 
         loop {
-            self.schedule_once();
-            // Sleep for the scheduling interval
-            tokio::time::sleep(scheduling_interval).await;
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    tracing::info!("Hypervisor shutdown requested");
+                    break;
+                }
+                _ = async {
+                    self.schedule_once();
+                    // Sleep for the scheduling interval
+                    tokio::time::sleep(scheduling_interval).await;
+                } => {
+                    // Continue the loop
+                }
+            }
         }
     }
 }
