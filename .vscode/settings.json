@@ -26,7 +26,8 @@
         "serviceaccount",
         "Shmem",
         "tflops",
-        "thiserror"
+        "thiserror",
+        "vgpu"
     ],
     "rust-analyzer.checkOnSave": true
 }
