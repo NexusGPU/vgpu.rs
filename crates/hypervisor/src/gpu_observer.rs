@@ -80,18 +80,8 @@ impl GpuObserver {
                             // Update the metrics – obtain write lock briefly
                             *self.metrics.write().expect("poisoned") = metrics;
 
-                            // Clone sender list while holding read lock, then drop guard before await
-                            let sender_list = {
-                                let senders_guard = self.senders.read().expect("poisoned");
-                                senders_guard.clone()
-                            };
-
-                            // Notify subscribers concurrently (sender::send is async)
-                            for sender in sender_list {
-                                if let Err(e) = sender.send(()).await {
-                                    tracing::error!("Failed to send update signal: {}", e);
-                                }
-                            }
+                            // Notify subscribers and clean up closed channels
+                            self.notify_subscribers().await;
                         }
                         Err(e) => {
                             tracing::warn!("Failed to update GPU metrics: {}", e);
@@ -103,6 +93,39 @@ impl GpuObserver {
                     // Continue the loop
                 }
             }
+        }
+    }
+
+    /// Notify all subscribers and clean up closed channels
+    async fn notify_subscribers(&self) {
+        // Clone sender list while holding read lock
+        let sender_list = {
+            let senders_guard = self.senders.read().expect("poisoned");
+            senders_guard.clone()
+        };
+
+        // Track which senders are still valid
+        let mut valid_senders = Vec::new();
+        
+        // Notify subscribers and identify closed channels
+        for sender in sender_list {
+            match sender.send(()).await {
+                Ok(()) => {
+                    // Channel is still open, keep it
+                    valid_senders.push(sender);
+                }
+                Err(_) => {
+                    // Channel is closed, don't keep it
+                    // We don't log this as an error since it's normal for subscribers to disconnect
+                    tracing::debug!("Subscriber disconnected, cleaning up channel");
+                }
+            }
+        }
+        
+        // Update the senders list with only valid senders
+        {
+            let mut senders_guard = self.senders.write().expect("poisoned");
+            *senders_guard = valid_senders;
         }
     }
 

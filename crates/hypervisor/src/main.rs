@@ -15,6 +15,8 @@ mod process;
 mod scheduler;
 mod worker_manager;
 mod worker_registration;
+mod gpu_allocation_watcher;
+mod kube_client;
 
 use anyhow::Context;
 use anyhow::Result;

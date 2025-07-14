@@ -163,6 +163,14 @@ pub struct DaemonArgs {
         default_value = "/var/lib/kubelet/device-plugins/tensor-fusion.sock"
     )]
     pub device_plugin_socket_path: String,
+
+    #[arg(
+        long,
+        help = "Kubelet device state path for fetching GPU allocation state of other device plugins",
+        default_value = "/var/lib/kubelet/device-plugins/kubelet_internal_checkpoint",
+        value_hint = clap::ValueHint::FilePath,
+    )]
+    pub kubelet_device_state_path: PathBuf,
 }
 
 #[derive(Parser)]

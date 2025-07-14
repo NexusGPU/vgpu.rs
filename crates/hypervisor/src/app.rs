@@ -20,6 +20,7 @@ use crate::metrics;
 use crate::process::worker::TensorFusionWorker;
 use crate::scheduler::weighted::WeightedScheduler;
 use crate::worker_manager::WorkerManager;
+use crate::gpu_allocation_watcher::GpuDeviceStateWatcher;
 
 pub type HypervisorType = Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>;
 
@@ -35,6 +36,7 @@ pub struct Application {
     pub command_dispatcher: Arc<CommandDispatcher>,
     pub device_plugin: Arc<GpuDevicePlugin>,
     pub limiter_coordinator: Arc<LimiterCoordinator>,
+    pub gpu_device_state_watcher: Arc<GpuDeviceStateWatcher>,
     pub daemon_args: DaemonArgs,
 }
 
@@ -178,6 +180,23 @@ impl Tasks {
             let k8s_processor_task =
                 self.spawn_k8s_processor_task(k8s_update_receiver, app.worker_manager.clone());
             self.tasks.push(k8s_processor_task);
+
+            // Start GPU device state watcher task
+            let gpu_device_state_watcher_task = {
+                let gpu_device_state_watcher = app.gpu_device_state_watcher.clone();
+                let token = self.cancellation_token.clone();
+                let kubeconfig = app.cli.kubeconfig.clone();
+
+                tokio::spawn(async move {
+                    tracing::info!("Starting GPU device state watcher task");
+                    if let Err(e) = gpu_device_state_watcher.run(token, kubeconfig).await {
+                        tracing::error!("GPU device state watcher failed: {e:?}");
+                    } else {
+                        tracing::info!("GPU device state watcher completed");
+                    }
+                })
+            };
+            self.tasks.push(gpu_device_state_watcher_task);
         }
 
         // Start API server task

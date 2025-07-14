@@ -24,9 +24,10 @@
                 "GPU_NODE_NAME": "gpu-2"
             },
             "args": [
-                "--enable-k8s",
                 "--gpu-metrics-file",
-                "logs/metrics.log"
+                "logs/metrics.log",
+                "--kubelet-device-state-path",
+                "logs/device_state.json"
             ],
             "cwd": "${workspaceFolder}"
         }

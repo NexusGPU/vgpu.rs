@@ -36,6 +36,9 @@ tonic = "0.13"
 tower = { workspace = true }
 device-plugin-pb = { workspace = true }
 hyper-util = { version = "0.1", features = ["tokio"] }
+schemars = { workspace = true }
+notify = "6.1"
+
 
 [[bin]]
 name = "hypervisor"
