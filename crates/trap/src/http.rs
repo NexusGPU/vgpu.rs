@@ -135,7 +135,7 @@ impl BlockingHttpTrap {
             attempts += 1;
             match http_client.post(&url).json(&request).send() {
                 Ok(resp) => {
-                    if resp.status() == StatusCode::OK {
+                    if resp.status().is_success() {
                         // Successful response – parse JSON body.
                         let trap_resp: HttpTrapResponse = resp.json().map_err(|e| {
                             TrapError::Io(IoError::other(format!(
@@ -147,6 +147,10 @@ impl BlockingHttpTrap {
                         // Non-200 response -> treat as error.
                         let status = resp.status();
                         let text = resp.text().unwrap_or_default();
+                        if attempts <= self.config.retry_attempts {
+                            std::thread::sleep(self.config.retry_delay);
+                            continue;
+                        }
                         return Err(TrapError::Io(IoError::other(format!(
                             "Trap server responded with {status}: {text}"
                         ))));
@@ -471,5 +475,137 @@ mod tests {
         assert_eq!(client_config.client_id, "test_client");
         assert_eq!(client_config.request_timeout, Duration::from_secs(60));
         assert_eq!(client_config.max_retries, 5);
+    }
+
+    #[tokio::test]
+    async fn test_blocking_http_trap_retry_mechanism() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Start a mock server.
+        let mock_server = MockServer::start().await;
+        let uri = mock_server.uri();
+
+        // The server will fail twice with 503, then succeed once with 200.
+        Mock::given(method("POST"))
+            .and(path("/api/v1/trap"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(2)
+            .mount(&mock_server)
+            .await;
+
+        let success_response = HttpTrapResponse {
+            trap_id: "some_id".to_string(),
+            action: TrapAction::Resume,
+            timestamp: Utc::now(),
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/api/v1/trap"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&success_response))
+            .mount(&mock_server)
+            .await;
+
+        // Configure the client to retry 3 times.
+        let config = HttpTrapConfig {
+            server_url: uri,
+            retry_attempts: 3,
+            retry_delay: Duration::from_millis(100),
+            ..Default::default()
+        };
+
+                let result = tokio::task::spawn_blocking(move || {
+            let trap_client = BlockingHttpTrap::new(config).unwrap();
+            let frame = TrapFrame::OutOfMemory { requested_bytes: 128 };
+            trap_client.send_trap_request(frame)
+        })
+        .await
+        .unwrap();
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), TrapAction::Resume));
+
+        // Verify that the server was called 3 times (2 failures + 1 success).
+        let received_requests = mock_server.received_requests().await.unwrap();
+        assert_eq!(received_requests.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_blocking_http_trap_handles_error_status() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Start a mock server.
+        let mock_server = MockServer::start().await;
+        let uri = mock_server.uri();
+
+        // The server will consistently return a 400 Bad Request.
+        Mock::given(method("POST"))
+            .and(path("/api/v1/trap"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("Invalid request format"))
+            .mount(&mock_server)
+            .await;
+
+        let config = HttpTrapConfig {
+            server_url: uri,
+            retry_attempts: 1, // No need to retry for this test
+            ..Default::default()
+        };
+
+                        let result = tokio::task::spawn_blocking(move || {
+            let trap_client = BlockingHttpTrap::new(config).unwrap();
+            let frame = TrapFrame::OutOfMemory { requested_bytes: 128 };
+            trap_client.send_trap_request(frame)
+        })
+        .await
+        .unwrap();
+        assert!(result.is_err());
+
+        if let Err(TrapError::Io(e)) = result {
+            let error_string = e.to_string();
+            assert!(error_string.contains("400 Bad Request"));
+            assert!(error_string.contains("Invalid request format"));
+        } else {
+            panic!("Expected TrapError::Io");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_blocking_http_trap_request_timeout() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Start a mock server.
+        let mock_server = MockServer::start().await;
+        let uri = mock_server.uri();
+
+        // The server will delay its response longer than the client's timeout.
+        Mock::given(method("POST"))
+            .and(path("/api/v1/trap"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+            .mount(&mock_server)
+            .await;
+
+        let config = HttpTrapConfig {
+            server_url: uri,
+            timeout: Duration::from_secs(1),
+            retry_attempts: 0, // Disable retries for a clean timeout test
+            ..Default::default()
+        };
+
+                        let result = tokio::task::spawn_blocking(move || {
+            let trap_client = BlockingHttpTrap::new(config).unwrap();
+            let frame = TrapFrame::OutOfMemory { requested_bytes: 128 };
+            trap_client.send_trap_request(frame)
+        })
+        .await
+        .unwrap();
+        assert!(result.is_err());
+
+        if let Err(TrapError::Io(e)) = result {
+            let error_string = e.to_string();
+                                                assert!(error_string.contains("HTTP request failed"));
+        } else {
+            panic!("Expected TrapError::Io for timeout");
+        }
     }
 }

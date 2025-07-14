@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use crate::app;
 use crate::app::Application;
-use crate::config::Cli;
+use crate::config::DaemonArgs;
 use crate::gpu_init::initialize_gpu_system;
 use crate::gpu_init::GpuSystem;
 use crate::gpu_observer::GpuObserver;
@@ -19,13 +19,13 @@ use crate::worker_manager::WorkerManager;
 
 /// Application builder
 pub struct ApplicationBuilder {
-    cli: Cli,
+    daemon_args: DaemonArgs,
 }
 
 impl ApplicationBuilder {
     /// Create new application builder
-    pub fn new(cli: Cli) -> Self {
-        Self { cli }
+    pub fn new(daemon_args: DaemonArgs) -> Self {
+        Self { daemon_args }
     }
 
     /// Build complete application
@@ -33,7 +33,7 @@ impl ApplicationBuilder {
         tracing::info!("Building application components...");
 
         // Initialize GPU system
-        let gpu_system = initialize_gpu_system(&self.cli).await?;
+        let gpu_system = initialize_gpu_system(&self.daemon_args).await?;
 
         // Create core components
         let components = self.create_core_components(&gpu_system).await?;
@@ -47,7 +47,7 @@ impl ApplicationBuilder {
             worker_manager,
             host_pid_probe: components.host_pid_probe,
             command_dispatcher: components.command_dispatcher,
-            cli: self.cli,
+            daemon_args: self.daemon_args,
             device_plugin: components.device_plugin,
             limiter_coordinator: components.limiter_coordinator,
         })
@@ -77,7 +77,7 @@ impl ApplicationBuilder {
         ));
 
         let device_plugin = GpuDevicePlugin::new(
-            self.cli.device_plugin_socket_path.clone(),
+            self.daemon_args.device_plugin_socket_path.clone(),
             "tensor-fusion.ai/shm".to_string(),
             "/dev/shm".to_string(),
             false,

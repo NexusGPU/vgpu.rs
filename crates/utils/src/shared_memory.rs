@@ -454,7 +454,7 @@ mod tests {
     }
 
     fn create_unique_identifier(test_name: &str) -> String {
-        format!("{TEST_IDENTIFIER}_{test_name}_{}", std::process::id())
+        format!("{}_{}_{}", TEST_IDENTIFIER, test_name, std::process::id())
     }
 
     #[test]
@@ -1197,5 +1197,139 @@ mod tests {
 
         assert_send::<ThreadSafeSharedMemoryManager>();
         assert_sync::<ThreadSafeSharedMemoryManager>();
+    }
+
+    #[test]
+    fn test_concurrent_creation_race_condition() {
+        let manager = Arc::new(ThreadSafeSharedMemoryManager::new());
+        let config = create_test_config();
+        let identifier = create_unique_identifier("concurrent_creation_race");
+        let num_threads = 10;
+        let mut handles = vec![];
+
+        for _ in 0..num_threads {
+            let manager_clone = Arc::clone(&manager);
+            let config_clone = config.clone();
+            let identifier_clone = identifier.clone();
+            let handle = thread::spawn(move || {
+                let result =
+                    manager_clone.create_or_get_shared_memory(&identifier_clone, &config_clone);
+                assert!(result.is_ok(), "create_or_get_shared_memory should not fail");
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify that the shared memory was created and is accessible
+        assert!(manager.contains(&identifier));
+        let ptr = manager.get_shared_memory(&identifier).unwrap();
+        unsafe {
+            let state = &*ptr;
+            assert_eq!(state.get_device_idx(), config.device_idx);
+        }
+
+        // Cleanup
+        manager.cleanup(&identifier).unwrap();
+        assert!(!manager.contains(&identifier));
+    }
+
+    #[test]
+    fn test_cleanup_concurrency() {
+        let manager = Arc::new(ThreadSafeSharedMemoryManager::new());
+        let config = create_test_config();
+        let identifier = create_unique_identifier("cleanup_concurrency");
+
+        // Create the shared memory segment initially
+        manager
+            .create_or_get_shared_memory(&identifier, &config)
+            .unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let manager_clone1 = Arc::clone(&manager);
+        let identifier_clone1 = identifier.clone();
+        let cleanup_handle = thread::spawn(move || {
+            // Wait for the signal from the access thread
+            rx.recv().unwrap();
+            manager_clone1.cleanup(&identifier_clone1).unwrap();
+        });
+
+        let manager_clone2 = Arc::clone(&manager);
+        let identifier_clone2 = identifier.clone();
+        let access_handle = thread::spawn(move || {
+            // Signal the cleanup thread to start
+            tx.send(()).unwrap();
+            // Repeatedly try to access the shared memory
+            for _ in 0..100 {
+                if manager_clone2
+                    .get_shared_memory(&identifier_clone2)
+                    .is_err()
+                {
+                    // Success: cleanup happened and we can no longer access the memory
+                    return true;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            // Failure: we were always able to access the memory
+            false
+        });
+
+        cleanup_handle.join().unwrap();
+        let access_result = access_handle.join().unwrap();
+
+        assert!(access_result, "Access should fail after cleanup");
+
+        // Final check to ensure it's gone
+        assert!(!manager.contains(&identifier));
+    }
+
+    #[test]
+    fn test_multi_threaded_read_write_integration() {
+        let manager = Arc::new(ThreadSafeSharedMemoryManager::new());
+        let config = create_test_config();
+        let identifier = create_unique_identifier("multi_thread_integration");
+
+        // Create the shared memory segment
+        manager
+            .create_or_get_shared_memory(&identifier, &config)
+            .unwrap();
+
+        let num_threads = 5;
+        let mut handles = vec![];
+
+        for i in 0..num_threads {
+            let identifier_clone = identifier.clone();
+            let handle = thread::spawn(move || {
+                let handle = SharedMemoryHandle::open(&identifier_clone).unwrap();
+                let state = handle.get_state();
+
+                // Write a unique value from this thread
+                state.set_available_cores(i as i32);
+                thread::sleep(Duration::from_millis(20)); // Allow time for other threads to see it
+
+                // Read the value and see if it has been changed by another thread
+                let value = state.get_available_cores();
+                (i, value)
+            });
+            handles.push(handle);
+        }
+
+        let mut results = vec![];
+        for handle in handles {
+            results.push(handle.join().unwrap());
+        }
+
+        // Check that the final value is one of the values written by the threads
+        let final_value = SharedMemoryHandle::open(&identifier)
+            .unwrap()
+            .get_state()
+            .get_available_cores();
+        assert!((0..num_threads as i32).contains(&final_value));
+
+        // Cleanup
+        manager.cleanup(&identifier).unwrap();
     }
 }

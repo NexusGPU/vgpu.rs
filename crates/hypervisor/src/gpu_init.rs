@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use nvml_wrapper::Nvml;
 
-use crate::config::Cli;
+use crate::config::DaemonArgs;
 
 /// GPU system information structure
 pub struct GpuSystem {
@@ -14,7 +14,7 @@ pub struct GpuSystem {
 }
 
 /// Initialize GPU system
-pub async fn initialize_gpu_system(cli: &Cli) -> Result<GpuSystem> {
+pub async fn initialize_gpu_system(daemon_args: &DaemonArgs) -> Result<GpuSystem> {
     tracing::info!("Initializing GPU system...");
 
     // Initialize NVML
@@ -24,7 +24,7 @@ pub async fn initialize_gpu_system(cli: &Cli) -> Result<GpuSystem> {
     let (device_count, gpu_uuid_to_name_map) = discover_gpu_devices(&nvml)?;
 
     // Load GPU information configuration
-    load_gpu_config(&gpu_uuid_to_name_map, cli).await?;
+    load_gpu_config(&gpu_uuid_to_name_map, daemon_args).await?;
 
     Ok(GpuSystem { nvml, device_count })
 }
@@ -64,8 +64,11 @@ fn discover_gpu_devices(nvml: &Nvml) -> Result<(u32, HashMap<String, String>)> {
     Ok((device_count, gpu_uuid_to_name_map))
 }
 
-async fn load_gpu_config(gpu_uuid_to_name_map: &HashMap<String, String>, cli: &Cli) -> Result<()> {
-    let gpu_info_path = cli
+async fn load_gpu_config(
+    gpu_uuid_to_name_map: &HashMap<String, String>,
+    daemon_args: &DaemonArgs,
+) -> Result<()> {
+    let gpu_info_path = daemon_args
         .gpu_info_path
         .clone()
         .unwrap_or_else(|| PathBuf::from("./gpu-info.yaml"));

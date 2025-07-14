@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 use clap::Parser;
+use clap::Subcommand;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde::Serialize;
@@ -33,6 +34,21 @@ pub struct GpuInfo {
 #[derive(Parser)]
 #[command(about, long_about, version = &**version::VERSION)]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Run hypervisor daemon
+    Daemon(DaemonArgs),
+    /// Mount shared memory
+    #[command(name = "mount-shm")]
+    MountShm(MountShmArgs),
+}
+
+#[derive(Parser)]
+pub struct DaemonArgs {
     #[arg(
         long,
         env = "GPU_METRICS_FILE",
@@ -147,6 +163,19 @@ pub struct Cli {
         default_value = "/var/lib/kubelet/device-plugins/tensor-fusion.sock"
     )]
     pub device_plugin_socket_path: String,
+}
+
+#[derive(Parser)]
+pub struct MountShmArgs {
+    #[arg(
+        long,
+        help = "Shared memory mount point path",
+        default_value = "/tensor-fusion/shm"
+    )]
+    pub mount_point: PathBuf,
+
+    #[arg(long, help = "Shared memory size in MB", default_value = "64")]
+    pub size_mb: u64,
 }
 
 /// load GPU info from config file

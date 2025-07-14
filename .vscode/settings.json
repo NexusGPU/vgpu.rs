@@ -29,6 +29,7 @@
         "Shmem",
         "tflops",
         "thiserror",
+        "tmpfs",
         "vgpu"
     ],
     "rust-analyzer.checkOnSave": true

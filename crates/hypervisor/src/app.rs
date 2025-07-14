@@ -7,7 +7,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::api::server::ApiServer;
-use crate::config::Cli;
+use crate::config::DaemonArgs;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::hypervisor::Hypervisor;
@@ -35,7 +35,7 @@ pub struct Application {
     pub command_dispatcher: Arc<CommandDispatcher>,
     pub device_plugin: Arc<GpuDevicePlugin>,
     pub limiter_coordinator: Arc<LimiterCoordinator>,
-    pub cli: Cli,
+    pub daemon_args: DaemonArgs,
 }
 
 impl Application {
@@ -78,7 +78,7 @@ impl Application {
 
 /// Task manager, responsible for starting and managing all background tasks
 pub struct Tasks {
-    tasks: Vec<JoinHandle<()>>,
+    pub tasks: Vec<JoinHandle<()>>,
     cancellation_token: CancellationToken,
 }
 
@@ -98,7 +98,7 @@ impl Tasks {
 
     /// Start all background tasks
     pub async fn spawn_all_tasks(&mut self, app: &crate::app::Application) -> Result<()> {
-        let cli = &app.cli;
+        let cli = &app.daemon_args;
 
         // Start GPU observer task
         let gpu_observer_task = {
