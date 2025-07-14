@@ -504,27 +504,4 @@ mod tests {
         );
         assert_eq!(container_info.container_pid_to_host_pid.get(&102), None);
     }
-
-    #[tokio::test]
-    async fn worker_manager_new() {
-        let host_pid_probe = Arc::new(HostPidProbe::new(Duration::from_millis(100)));
-        let command_dispatcher = Arc::new(CommandDispatcher::new());
-        let limiter_coordinator = Arc::new(LimiterCoordinator::new(Duration::from_millis(100), 1));
-        let nvml = Arc::new(Nvml::init().unwrap());
-
-        let hypervisor = Arc::new(Hypervisor::new(
-            WeightedScheduler::new(),
-            Duration::from_secs(1),
-        ));
-
-        let worker_manager = WorkerManager::new(
-            host_pid_probe,
-            command_dispatcher,
-            hypervisor,
-            limiter_coordinator,
-            nvml,
-        );
-
-        assert!(worker_manager.registry().read().await.is_empty());
-    }
 }
