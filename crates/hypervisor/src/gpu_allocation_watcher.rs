@@ -851,8 +851,9 @@ mod tests {
 
     #[test]
     fn test_gpu_resource_serialization() {
-        let mut status = GpuResourceStatus::default();
-        status.used_by = Some("nvidia-device-plugin".to_string());
+        let status = GpuResourceStatus {
+            used_by: Some("nvidia-device-plugin".to_string()),
+        };
 
         let json_str =
             serde_json::to_string(&status).expect("should serialize GPU resource status");
