@@ -168,6 +168,7 @@ impl Tasks {
                         }
                         Err(e) => {
                             tracing::error!("Failed to create Kubernetes pod watcher: {e:?}");
+                            
                         }
                     }
                 })
@@ -295,34 +296,31 @@ impl Tasks {
     /// wait for tasks to complete or receive shutdown signal
     pub async fn wait_for_completion(&mut self) -> Result<()> {
         // take all tasks from Vec to avoid borrow issues
-        let mut tasks = std::mem::take(&mut self.tasks);
+        let tasks = std::mem::take(&mut self.tasks);
 
-        tokio::select! {
-            result = async {
-                // wait for any task to complete
-                while let Some(task) = tasks.pop() {
-                    if let Ok(result) = task.await {
-                        return Some(result);
-                    }
-                }
-                None
-            } => {
-                if result.is_some() {
-                    tracing::error!("A task completed unexpectedly");
-                }
-            }
-            _ = tokio::signal::ctrl_c() => {
+        // run ctrl-c handler
+        let cancellation_token = self.cancellation_token.clone();
+        tokio::spawn(async move {
+            if let Ok(()) = tokio::signal::ctrl_c().await {
                 tracing::info!("Received Ctrl+C, shutting down...");
+                tracing::info!("Cancelling all tasks...");
+                cancellation_token.cancel();
             }
+        });
+
+        // wait for all tasks to complete
+        tracing::info!("Waiting for all tasks to complete...");
+        let results = futures::future::join_all(tasks).await;
+        
+        // check task results
+        for task_result in results {
+            if let Err(e) = task_result {
+                tracing::error!("Task failed: {}", e);
+            }
+
         }
-
-        // Cancel all tasks using the unified cancellation token
-        tracing::info!("Cancelling all tasks...");
-        self.cancellation_token.cancel();
-
-        // Wait for all tasks to complete gracefully
-        futures::future::join_all(tasks).await;
-
+        
+        tracing::info!("All tasks completed");
         Ok(())
     }
 
@@ -402,3 +400,4 @@ impl Tasks {
         })
     }
 }
+

@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,8 +79,14 @@ impl ApplicationBuilder {
             gpu_system.device_count,
         ));
 
+        let device_plugin_socket_path = Path::new(&self.daemon_args.device_plugin_socket_path);
+        let endpoint = device_plugin_socket_path
+            .file_name()
+            .expect("device plugin socket path should have a file name")
+            .to_string_lossy()
+            .to_string();
         let device_plugin = GpuDevicePlugin::new(
-            self.daemon_args.device_plugin_socket_path.clone(),
+            endpoint,
             "tensor-fusion.ai/shm".to_string(),
             "/dev/shm".to_string(),
             false,
