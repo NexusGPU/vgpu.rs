@@ -178,7 +178,7 @@ pub struct MountShmArgs {
     #[arg(
         long,
         help = "Shared memory mount point path",
-        default_value = "/tensor-fusion/shm"
+        default_value = "/run/tensor-fusion/shm"
     )]
     pub mount_point: PathBuf,
 
