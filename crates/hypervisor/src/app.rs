@@ -168,7 +168,6 @@ impl Tasks {
                         }
                         Err(e) => {
                             tracing::error!("Failed to create Kubernetes pod watcher: {e:?}");
-                            
                         }
                     }
                 })
@@ -311,15 +310,14 @@ impl Tasks {
         // wait for all tasks to complete
         tracing::info!("Waiting for all tasks to complete...");
         let results = futures::future::join_all(tasks).await;
-        
+
         // check task results
         for task_result in results {
             if let Err(e) = task_result {
                 tracing::error!("Task failed: {}", e);
             }
-
         }
-        
+
         tracing::info!("All tasks completed");
         Ok(())
     }
@@ -400,4 +398,3 @@ impl Tasks {
         })
     }
 }
-
