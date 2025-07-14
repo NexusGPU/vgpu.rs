@@ -278,6 +278,25 @@ jobs:
             echo "cross is already installed, skipping installation."
           fi
 
+      - name: Setup Cross.toml for CI
+        run: |
+          cat > Cross.toml << 'EOF'
+          [build.env]
+          passthrough = [
+              "VERSION",
+          ]
+
+          [target.x86_64-unknown-linux-gnu]
+          pre-build = [
+              "apt-get update && apt-get install -y protobuf-compiler"
+          ]
+
+          [target.aarch64-unknown-linux-gnu] 
+          pre-build = [
+              "apt-get update && apt-get install -y protobuf-compiler"
+          ]
+          EOF
+
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
 
