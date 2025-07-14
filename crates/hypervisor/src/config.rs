@@ -122,11 +122,36 @@ pub struct Cli {
         help = "Extra labels to add to metrics"
     )]
     pub metrics_extra_labels: Option<String>,
+
+    #[arg(
+        long,
+        help = "Enable device plugin",
+        default_value_t = true,
+        env = "ENABLE_DEVICE_PLUGIN",
+        action = clap::ArgAction::Set
+    )]
+    pub enable_device_plugin: bool,
+
+    #[arg(
+        long,
+        help = "kubelet socket path",
+        env = "KUBELET_SOCKET_PATH",
+        default_value = "/var/lib/kubelet/device-plugins/kubelet.sock"
+    )]
+    pub kubelet_socket_path: String,
+
+    #[arg(
+        long,
+        help = "device plugin socket path",
+        env = "DEVICE_PLUGIN_SOCKET_PATH",
+        default_value = "/var/lib/kubelet/device-plugins/tensor-fusion.sock"
+    )]
+    pub device_plugin_socket_path: String,
 }
 
 /// load GPU info from config file
 pub async fn load_gpu_info(
-    gpu_uuid_to_name_map: std::collections::HashMap<String, String>,
+    gpu_uuid_to_name_map: &HashMap<String, String>,
     gpu_info_path: PathBuf,
 ) -> anyhow::Result<()> {
     tracing::info!("Loading GPU configuration from {:?}", gpu_info_path);
@@ -156,7 +181,7 @@ pub async fn load_gpu_info(
     let total_gpus = gpu_uuid_to_name_map.len();
 
     for (gpu_uuid, gpu_name) in gpu_uuid_to_name_map {
-        if let Some(gpu_info) = model_to_info.get(&gpu_name) {
+        if let Some(gpu_info) = model_to_info.get(gpu_name) {
             capacity_map.insert(gpu_uuid.clone(), gpu_info.fp16_tflops);
             tracing::info!(
                 "Mapped GPU {} ({}) to {} TFlops",
@@ -171,7 +196,7 @@ pub async fn load_gpu_info(
                 gpu_uuid,
                 gpu_name
             );
-            capacity_map.insert(gpu_uuid, 0.0);
+            capacity_map.insert(gpu_uuid.clone(), 0.0);
         }
     }
 
@@ -232,7 +257,7 @@ mod tests {
         );
 
         // test loading GPU config
-        let result = load_gpu_info(gpu_uuid_to_name_map, temp_path).await;
+        let result = load_gpu_info(&gpu_uuid_to_name_map, temp_path).await;
         assert!(result.is_ok());
 
         // verify GPU_CAPACITY_MAP content

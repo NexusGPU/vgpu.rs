@@ -63,6 +63,7 @@ struct AccumulatedWorkerMetrics {
 }
 
 /// Run metrics collection asynchronously
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_metrics(
     gpu_observer: Arc<GpuObserver>,
     metrics_batch_size: usize,

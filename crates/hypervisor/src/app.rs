@@ -11,9 +11,11 @@ use crate::config::Cli;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::hypervisor::Hypervisor;
+use crate::k8s::device_plugin::GpuDevicePlugin;
 use crate::k8s::PodWatcher;
 use crate::k8s::WorkerUpdate;
 use crate::limiter_comm::CommandDispatcher;
+use crate::limiter_coordinator::LimiterCoordinator;
 use crate::metrics;
 use crate::process::worker::TensorFusionWorker;
 use crate::scheduler::weighted::WeightedScheduler;
@@ -31,6 +33,8 @@ pub struct Application {
     pub worker_manager: Arc<WorkerManagerType>,
     pub host_pid_probe: Arc<HostPidProbe>,
     pub command_dispatcher: Arc<CommandDispatcher>,
+    pub device_plugin: Arc<GpuDevicePlugin>,
+    pub limiter_coordinator: Arc<LimiterCoordinator>,
     pub cli: Cli,
 }
 
@@ -40,10 +44,10 @@ impl Application {
         tracing::info!("Starting all application tasks...");
 
         // Create task manager
-        let mut task_manager = Tasks::new();
+        let mut tasks = Tasks::new();
 
         // Start all background tasks
-        if let Err(e) = task_manager.spawn_all_tasks(self).await {
+        if let Err(e) = tasks.spawn_all_tasks(self).await {
             tracing::error!("Failed to spawn application tasks: {}", e);
             return Err(e);
         }
@@ -51,7 +55,7 @@ impl Application {
         tracing::info!("All application tasks started successfully");
 
         // Wait for tasks to complete or receive shutdown signal
-        if let Err(e) = task_manager.wait_for_completion().await {
+        if let Err(e) = tasks.wait_for_completion().await {
             tracing::error!("Error during task execution: {}", e);
             return Err(e);
         }
@@ -222,6 +226,49 @@ impl Tasks {
             })
         };
         self.tasks.push(hypervisor_task);
+
+        // start device plugin task
+        if cli.enable_device_plugin {
+            let device_plugin_task = {
+                let device_plugin = app.device_plugin.clone();
+                let kubelet_socket_path = cli.kubelet_socket_path.clone();
+                let device_plugin_socket_path = cli.device_plugin_socket_path.clone();
+                let token = self.cancellation_token.clone();
+
+                tokio::spawn(async move {
+                    tracing::info!("Starting device plugin task");
+
+                    if let Err(e) = device_plugin
+                        .register_with_kubelet(&kubelet_socket_path)
+                        .await
+                    {
+                        tracing::error!("Failed to register device plugin with kubelet: {}", e);
+                        return;
+                    }
+
+                    if let Err(e) = device_plugin.start(&device_plugin_socket_path, token).await {
+                        tracing::error!("Failed to start device plugin: {}", e);
+                        return;
+                    }
+
+                    tracing::info!("Device plugin task completed");
+                })
+            };
+            self.tasks.push(device_plugin_task);
+        }
+
+        // start limiter coordinator task
+        let limiter_coordinator_task = {
+            let limiter_coordinator = app.limiter_coordinator.clone();
+            let token = self.cancellation_token.clone();
+
+            tokio::spawn(async move {
+                tracing::info!("Starting limiter coordinator task");
+                limiter_coordinator.run(token).await;
+                tracing::info!("Limiter coordinator task completed");
+            })
+        };
+        self.tasks.push(limiter_coordinator_task);
 
         Ok(())
     }

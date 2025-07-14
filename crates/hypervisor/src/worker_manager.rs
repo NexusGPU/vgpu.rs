@@ -1,5 +1,3 @@
-//! Worker management module.
-#![allow(dead_code)]
 //! This module provides functionality for managing workers based on Kubernetes pod events.
 //! It replaces the old socket-based worker watcher with a pod-centric approach where
 //! pods are treated as workers.
@@ -33,7 +31,6 @@ use crate::worker_registration::unregister_worker_from_limiter_coordinator;
 /// Container information for tracking container-specific details.
 #[derive(Debug, Clone)]
 pub struct ContainerInfo {
-    pub container_name: String,
     /// Mapping from container PID to host PID for this container
     pub container_pid_to_host_pid: HashMap<u32, u32>,
     /// Optional worker instance for this container
@@ -41,9 +38,8 @@ pub struct ContainerInfo {
 }
 
 impl ContainerInfo {
-    fn new(container_name: String) -> Self {
+    fn new() -> Self {
         Self {
-            container_name,
             container_pid_to_host_pid: HashMap::new(),
             worker: None,
         }
@@ -65,10 +61,7 @@ impl WorkerEntry {
         // Initialize containers from WorkerInfo
         if let Some(container_names) = &info.containers {
             for container_name in container_names {
-                containers.insert(
-                    container_name.clone(),
-                    ContainerInfo::new(container_name.clone()),
-                );
+                containers.insert(container_name.clone(), ContainerInfo::new());
             }
         }
 
@@ -78,11 +71,6 @@ impl WorkerEntry {
     /// Get container info by container name
     pub fn get_container(&self, container_name: &str) -> Option<&ContainerInfo> {
         self.containers.get(container_name)
-    }
-
-    /// Get mutable container info by container name
-    pub fn get_container_mut(&mut self, container_name: &str) -> Option<&mut ContainerInfo> {
-        self.containers.get_mut(container_name)
     }
 }
 
@@ -113,100 +101,6 @@ impl WorkerManager {
     /// Get the worker registry for API queries.
     pub fn registry(&self) -> &WorkerRegistry {
         &self.registry
-    }
-
-    /// Get pod name from host PID.
-    pub async fn get_pod_name_by_host_pid(&self, host_pid: u32) -> Option<String> {
-        let pid_registry = self.pid_registry.read().await;
-        pid_registry
-            .get(&host_pid)
-            .map(|entry| entry.info.pod_name.clone())
-    }
-
-    /// Get namespace from host PID.
-    pub async fn get_namespace_by_host_pid(&self, host_pid: u32) -> Option<String> {
-        let pid_registry = self.pid_registry.read().await;
-        pid_registry
-            .get(&host_pid)
-            .map(|entry| entry.info.namespace.clone())
-    }
-
-    /// Get all host PIDs for a given pod.
-    pub async fn get_host_pids_by_pod(&self, pod_name: &str, namespace: &str) -> Vec<u32> {
-        let worker_key = format!("{namespace}/{pod_name}");
-        let registry = self.registry.read().await;
-
-        if let Some(entry) = registry.get(&worker_key) {
-            let mut pids = Vec::new();
-            for container_info in entry.containers.values() {
-                for host_pid in container_info.container_pid_to_host_pid.values() {
-                    pids.push(*host_pid);
-                }
-            }
-            pids
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Get all container names for a given pod.
-    pub async fn get_container_names_by_pod(&self, pod_name: &str, namespace: &str) -> Vec<String> {
-        let worker_key = format!("{namespace}/{pod_name}");
-        let registry = self.registry.read().await;
-
-        if let Some(entry) = registry.get(&worker_key) {
-            entry.containers.keys().cloned().collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Get container name from host PID.
-    pub async fn get_container_name_by_host_pid(&self, host_pid: u32) -> Option<String> {
-        let pid_registry = self.pid_registry.read().await;
-        if let Some(entry) = pid_registry.get(&host_pid) {
-            // Search through containers to find which one has this host PID
-            for (container_name, container_info) in &entry.containers {
-                if container_info
-                    .container_pid_to_host_pid
-                    .values()
-                    .any(|&pid| pid == host_pid)
-                {
-                    return Some(container_name.clone());
-                }
-            }
-        }
-        None
-    }
-
-    /// Check if a pod exists in the registry.
-    pub async fn pod_exists(&self, pod_name: &str, namespace: &str) -> bool {
-        let worker_key = format!("{namespace}/{pod_name}");
-        let registry = self.registry.read().await;
-        registry.contains_key(&worker_key)
-    }
-
-    /// Get pod information by pod name and namespace.
-    pub async fn get_pod_info(&self, pod_name: &str, namespace: &str) -> Option<WorkerEntry> {
-        let worker_key = format!("{namespace}/{pod_name}");
-        let registry = self.registry.read().await;
-        registry.get(&worker_key).cloned()
-    }
-
-    /// Get all active pods (returns namespace/pod_name keys).
-    pub async fn get_all_active_pods(&self) -> Vec<String> {
-        let registry = self.registry.read().await;
-        registry.keys().cloned().collect()
-    }
-
-    /// Get pod and namespace from worker key.
-    pub fn parse_worker_key(worker_key: &str) -> Option<(String, String)> {
-        let parts: Vec<&str> = worker_key.splitn(2, '/').collect();
-        if parts.len() == 2 {
-            Some((parts[0].to_string(), parts[1].to_string()))
-        } else {
-            None
-        }
     }
 }
 
@@ -357,7 +251,7 @@ impl WorkerManager {
                 let container_info = entry
                     .containers
                     .entry(container_name.to_string())
-                    .or_insert_with(|| ContainerInfo::new(container_name.to_string()));
+                    .or_insert_with(ContainerInfo::new);
 
                 // Update container info
                 container_info.worker = Some(worker.clone());
@@ -503,8 +397,6 @@ impl WorkerManager {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::atomic::AtomicU32;
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -582,7 +474,6 @@ mod tests {
 
         let container = entry.get_container("container1");
         assert!(container.is_some());
-        assert_eq!(container.unwrap().container_name, "container1");
 
         let non_existent = entry.get_container("non-existent");
         assert!(non_existent.is_none());
@@ -590,16 +481,15 @@ mod tests {
 
     #[test]
     fn container_info_new() {
-        let container_info = ContainerInfo::new("test-container".to_string());
+        let container_info = ContainerInfo::new();
 
-        assert_eq!(container_info.container_name, "test-container");
         assert!(container_info.container_pid_to_host_pid.is_empty());
         assert!(container_info.worker.is_none());
     }
 
     #[test]
     fn container_info_pid_mapping() {
-        let mut container_info = ContainerInfo::new("test-container".to_string());
+        let mut container_info = ContainerInfo::new();
 
         container_info.container_pid_to_host_pid.insert(100, 1234);
         container_info.container_pid_to_host_pid.insert(101, 1235);

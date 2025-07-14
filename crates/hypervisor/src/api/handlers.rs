@@ -199,7 +199,6 @@ mod tests {
     use api_types::*;
     use tokio::sync::RwLock;
 
-    use super::*;
     use crate::worker_manager::ContainerInfo;
     use crate::worker_manager::WorkerEntry;
 
@@ -225,7 +224,6 @@ mod tests {
             containers: {
                 let mut containers = HashMap::new();
                 containers.insert("container1".to_string(), ContainerInfo {
-                    container_name: "container1".to_string(),
                     container_pid_to_host_pid: {
                         let mut map = HashMap::new();
                         map.insert(100, 1234);
@@ -235,7 +233,6 @@ mod tests {
                     worker: None,
                 });
                 containers.insert("container2".to_string(), ContainerInfo {
-                    container_name: "container2".to_string(),
                     container_pid_to_host_pid: {
                         let mut map = HashMap::new();
                         map.insert(200, 2234);
@@ -280,27 +277,6 @@ mod tests {
     }
 
     #[test]
-    fn worker_entry_container_operations() {
-        let mut entry = create_test_worker_entry();
-
-        // Test get_container
-        let container1 = entry.get_container("container1");
-        assert!(container1.is_some());
-        assert_eq!(container1.unwrap().container_name, "container1");
-
-        // Test get_container_mut
-        if let Some(container1_mut) = entry.get_container_mut("container1") {
-            container1_mut.container_pid_to_host_pid.insert(102, 1236);
-        }
-
-        let container1_after = entry.get_container("container1").unwrap();
-        assert_eq!(
-            container1_after.container_pid_to_host_pid.get(&102),
-            Some(&1236)
-        );
-    }
-
-    #[test]
     fn container_info_multiple_pids() {
         let worker_info = WorkerInfo {
             pod_name: "test-pod".to_string(),
@@ -323,7 +299,6 @@ mod tests {
             containers: {
                 let mut containers = HashMap::new();
                 containers.insert("test-container".to_string(), ContainerInfo {
-                    container_name: "test-container".to_string(),
                     container_pid_to_host_pid: {
                         let mut map = HashMap::new();
                         map.insert(100, 1234);

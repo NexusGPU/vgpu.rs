@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::app;
 use crate::app::Application;
 use crate::config::Cli;
 use crate::gpu_init::initialize_gpu_system;
@@ -10,6 +11,7 @@ use crate::gpu_init::GpuSystem;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::hypervisor::Hypervisor;
+use crate::k8s::device_plugin::GpuDevicePlugin;
 use crate::limiter_comm::CommandDispatcher;
 use crate::limiter_coordinator::LimiterCoordinator;
 use crate::scheduler::weighted::WeightedScheduler;
@@ -46,6 +48,8 @@ impl ApplicationBuilder {
             host_pid_probe: components.host_pid_probe,
             command_dispatcher: components.command_dispatcher,
             cli: self.cli,
+            device_plugin: components.device_plugin,
+            limiter_coordinator: components.limiter_coordinator,
         })
     }
 
@@ -72,12 +76,21 @@ impl ApplicationBuilder {
             gpu_system.device_count,
         ));
 
+        let device_plugin = GpuDevicePlugin::new(
+            self.cli.device_plugin_socket_path.clone(),
+            "tensor-fusion.ai/shm".to_string(),
+            "/dev/shm".to_string(),
+            false,
+            false,
+        );
+
         Ok(CoreComponents {
             hypervisor,
             gpu_observer,
             host_pid_probe,
             command_dispatcher,
             limiter_coordinator,
+            device_plugin,
         })
     }
 
@@ -102,9 +115,10 @@ impl ApplicationBuilder {
 
 /// Core components collection
 struct CoreComponents {
-    hypervisor: Arc<crate::app::HypervisorType>,
+    hypervisor: Arc<app::HypervisorType>,
     gpu_observer: Arc<GpuObserver>,
     host_pid_probe: Arc<HostPidProbe>,
     command_dispatcher: Arc<CommandDispatcher>,
     limiter_coordinator: Arc<LimiterCoordinator>,
+    device_plugin: Arc<GpuDevicePlugin>,
 }

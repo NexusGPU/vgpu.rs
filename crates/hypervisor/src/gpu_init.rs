@@ -11,7 +11,6 @@ use crate::config::Cli;
 pub struct GpuSystem {
     pub nvml: Arc<Nvml>,
     pub device_count: u32,
-    pub gpu_uuid_to_name_map: HashMap<String, String>,
 }
 
 /// Initialize GPU system
@@ -27,11 +26,7 @@ pub async fn initialize_gpu_system(cli: &Cli) -> Result<GpuSystem> {
     // Load GPU information configuration
     load_gpu_config(&gpu_uuid_to_name_map, cli).await?;
 
-    Ok(GpuSystem {
-        nvml,
-        device_count,
-        gpu_uuid_to_name_map,
-    })
+    Ok(GpuSystem { nvml, device_count })
 }
 
 fn init_nvml() -> Result<Nvml> {
@@ -75,8 +70,7 @@ async fn load_gpu_config(gpu_uuid_to_name_map: &HashMap<String, String>, cli: &C
         .clone()
         .unwrap_or_else(|| PathBuf::from("./gpu-info.yaml"));
 
-    if let Err(e) = crate::config::load_gpu_info(gpu_uuid_to_name_map.clone(), gpu_info_path).await
-    {
+    if let Err(e) = crate::config::load_gpu_info(gpu_uuid_to_name_map, gpu_info_path).await {
         tracing::warn!("Failed to load GPU information: {}", e);
     } else {
         tracing::info!("GPU configuration loaded successfully");

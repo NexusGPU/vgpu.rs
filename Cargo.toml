@@ -10,6 +10,7 @@ members = [
   "crates/trap",
   "crates/http-bidir-comm",
   "crates/bootstrap",
+  "crates/device-plugin-pb",
 ]
 exclude = [
   "crates/integration-test",
@@ -21,6 +22,7 @@ trap = { path = "crates/trap" }
 utils = { path = "crates/utils" }
 tf-macro = { path = "crates/macro" }
 http-bidir-comm = { path = "crates/http-bidir-comm" }
+device-plugin-pb = { path = "crates/device-plugin-pb" }
 tracing = "0.1"
 thiserror = "2.0"
 derive_more = "1.0"
@@ -67,3 +69,4 @@ eventsource = { git="https://github.com/NexusGPU/eventsource.git" }
 url = "2.5"
 libloading = "0.8"
 shared_memory = "0.12"
+tower = "0.5"
