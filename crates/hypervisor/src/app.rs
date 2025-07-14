@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::api::server::ApiServer;
 use crate::config::DaemonArgs;
+use crate::gpu_allocation_watcher::GpuDeviceStateWatcher;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::hypervisor::Hypervisor;
@@ -20,7 +21,6 @@ use crate::metrics;
 use crate::process::worker::TensorFusionWorker;
 use crate::scheduler::weighted::WeightedScheduler;
 use crate::worker_manager::WorkerManager;
-use crate::gpu_allocation_watcher::GpuDeviceStateWatcher;
 
 pub type HypervisorType = Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>;
 
@@ -185,7 +185,7 @@ impl Tasks {
             let gpu_device_state_watcher_task = {
                 let gpu_device_state_watcher = app.gpu_device_state_watcher.clone();
                 let token = self.cancellation_token.clone();
-                let kubeconfig = app.cli.kubeconfig.clone();
+                let kubeconfig = app.daemon_args.kubeconfig.clone();
 
                 tokio::spawn(async move {
                     tracing::info!("Starting GPU device state watcher task");

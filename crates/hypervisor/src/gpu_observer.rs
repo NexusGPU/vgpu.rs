@@ -106,7 +106,7 @@ impl GpuObserver {
 
         // Track which senders are still valid
         let mut valid_senders = Vec::new();
-        
+
         // Notify subscribers and identify closed channels
         for sender in sender_list {
             match sender.send(()).await {
@@ -121,7 +121,7 @@ impl GpuObserver {
                 }
             }
         }
-        
+
         // Update the senders list with only valid senders
         {
             let mut senders_guard = self.senders.write().expect("poisoned");

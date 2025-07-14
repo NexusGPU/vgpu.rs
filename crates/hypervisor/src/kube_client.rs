@@ -1,12 +1,16 @@
 use std::path::PathBuf;
+
 use error_stack::Report;
 use error_stack::ResultExt;
-use kube::Client;
 use kube::config::KubeConfigOptions;
 use kube::config::Kubeconfig;
+use kube::Client;
+
 use crate::k8s::types::KubernetesError;
 
-pub async fn init_kube_client(kubeconfig: Option<PathBuf>) -> Result<Client, Report<KubernetesError>> {
+pub async fn init_kube_client(
+    kubeconfig: Option<PathBuf>,
+) -> Result<Client, Report<KubernetesError>> {
     let client = match kubeconfig {
         Some(kubeconfig_path) => {
             // Load kubeconfig from the specified file
@@ -30,8 +34,7 @@ pub async fn init_kube_client(kubeconfig: Option<PathBuf>) -> Result<Client, Rep
                     })?;
 
             Client::try_from(config).change_context(KubernetesError::ConnectionFailed {
-                message: "Failed to create Kubernetes client from custom kubeconfig"
-                    .to_string(),
+                message: "Failed to create Kubernetes client from custom kubeconfig".to_string(),
             })?
         }
         None => {

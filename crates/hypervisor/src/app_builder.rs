@@ -6,6 +6,7 @@ use anyhow::Result;
 use crate::app;
 use crate::app::Application;
 use crate::config::DaemonArgs;
+use crate::gpu_allocation_watcher::GpuDeviceStateWatcher;
 use crate::gpu_init::initialize_gpu_system;
 use crate::gpu_init::GpuSystem;
 use crate::gpu_observer::GpuObserver;
@@ -14,7 +15,6 @@ use crate::hypervisor::Hypervisor;
 use crate::k8s::device_plugin::GpuDevicePlugin;
 use crate::limiter_comm::CommandDispatcher;
 use crate::limiter_coordinator::LimiterCoordinator;
-use crate::gpu_allocation_watcher::GpuDeviceStateWatcher;
 use crate::scheduler::weighted::WeightedScheduler;
 use crate::worker_manager::WorkerManager;
 
@@ -53,7 +53,6 @@ impl ApplicationBuilder {
             limiter_coordinator: components.limiter_coordinator,
             gpu_device_state_watcher: components.gpu_device_state_watcher,
         })
-
     }
 
     /// Create core components
@@ -88,7 +87,7 @@ impl ApplicationBuilder {
         );
         // create a GPU device state watcher
         let gpu_device_state_watcher = Arc::new(GpuDeviceStateWatcher::new(
-            self.cli.kubelet_device_state_path.clone(),
+            self.daemon_args.kubelet_device_state_path.clone(),
         ));
 
         Ok(CoreComponents {

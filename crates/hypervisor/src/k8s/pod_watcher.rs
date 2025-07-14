@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::time::Duration;
+
 use error_stack::Report;
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
@@ -180,7 +181,6 @@ impl PodWatcher {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
