@@ -10,6 +10,7 @@ use cudarc::driver::sys::CUdevice;
 use cudarc::driver::DriverError;
 use thiserror::Error;
 use trap::TrapError;
+use utils::shared_memory::SharedDeviceState;
 use utils::shared_memory::SharedMemoryHandle;
 
 #[derive(Error, Debug)]
@@ -24,13 +25,14 @@ pub(crate) enum Error {
     InvalidDevice(u32),
 
     #[error("Invalid CUDA device: {0}")]
+    #[allow(dead_code)]
     InvalidCuDevice(CUdevice),
 
     #[error("Pod name not found in environment")]
     PodNameNotFound,
 
     #[error("Shared memory access failed: {0}")]
-    SharedMemoryError(#[from] anyhow::Error),
+    SharedMemory(#[from] anyhow::Error),
 
     #[error("Device {0} not configured")]
     DeviceNotConfigured(u32),
@@ -45,10 +47,13 @@ pub(crate) struct DeviceConfig {
     /// Device index
     pub device_idx: u32,
     /// Utilization percentage limit (0-100)
+    #[allow(dead_code)]
     pub up_limit: u32,
     /// Memory limit in bytes (0 means no limit)
+    #[allow(dead_code)]
     pub mem_limit: u64,
     /// Total number of CUDA cores
+    #[allow(dead_code)]
     pub total_cuda_cores: u32,
 }
 
@@ -133,7 +138,7 @@ impl Limiter {
 
             // Open shared memory for this device
             let shared_memory_handle =
-                SharedMemoryHandle::open(&pod_name).map_err(Error::SharedMemoryError)?;
+                SharedMemoryHandle::open(&pod_name).map_err(Error::SharedMemory)?;
             shared_memory_handles.insert(device_idx, shared_memory_handle);
         }
 
@@ -211,6 +216,7 @@ impl Limiter {
     }
 
     /// Get memory info for NVML hooks (total, used, free)
+    #[allow(dead_code)]
     pub(crate) fn get_memory_info(&self, device_idx: u32) -> Result<(u64, u64, u64), Error> {
         let handle = self
             .shared_memory_handles
@@ -264,7 +270,136 @@ impl Limiter {
     }
 }
 
+/// Trait for shared memory operations
+#[allow(dead_code)]
+pub(crate) trait SharedMemory {
+    /// Gets a reference to the shared device state
+    fn get_state(&self) -> &SharedDeviceState;
+}
+
+/// Implementation of SharedMemory trait for SharedMemoryHandle
+impl SharedMemory for SharedMemoryHandle {
+    fn get_state(&self) -> &SharedDeviceState {
+        self.get_state()
+    }
+}
+
 /// Get pod name from environment variable
 pub(crate) fn get_pod_name() -> Result<String, Error> {
     std::env::var("POD_NAME").map_err(|_| Error::PodNameNotFound)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use utils::shared_memory::SharedDeviceState;
+
+    use super::*;
+
+    /// Mock implementation of SharedMemory for testing
+    pub struct MockSharedMemory {
+        state: Arc<SharedDeviceState>,
+    }
+
+    impl MockSharedMemory {
+        /// Create a new MockSharedMemory with specified values
+        pub fn new(device_idx: u32, total_cores: u32, up_limit: u32, mem_limit: u64) -> Self {
+            let state = Arc::new(SharedDeviceState::new(
+                device_idx,
+                total_cores,
+                up_limit,
+                mem_limit,
+            ));
+            Self { state }
+        }
+
+        /// Set available CUDA cores for testing
+        pub fn set_available_cores(&self, cores: i32) {
+            self.state.set_available_cores(cores);
+        }
+
+        /// Set memory limit for testing
+        #[allow(dead_code)]
+        pub fn set_mem_limit(&self, limit: u64) {
+            self.state.set_mem_limit(limit);
+        }
+
+        /// Set pod memory used for testing
+        pub fn set_pod_memory_used(&self, used: u64) {
+            self.state.update_pod_memory_used(used, 0);
+        }
+    }
+
+    impl SharedMemory for MockSharedMemory {
+        fn get_state(&self) -> &SharedDeviceState {
+            &self.state
+        }
+    }
+
+    #[test]
+    fn test_memory_info_reporting() {
+        let mock = MockSharedMemory::new(0, 1000, 80, 1024 * 1024 * 1024); // 1GB limit
+        mock.set_pod_memory_used(512 * 1024 * 1024); // 512MB used
+
+        let state = mock.get_state();
+        let total = state.get_mem_limit();
+        let used = state.get_pod_memory_used();
+        let free = total.saturating_sub(used);
+
+        assert_eq!(total, 1024 * 1024 * 1024, "Total memory should be 1GB");
+        assert_eq!(used, 512 * 1024 * 1024, "Used memory should be 512MB");
+        assert_eq!(free, 512 * 1024 * 1024, "Free memory should be 512MB");
+    }
+
+    #[test]
+    fn test_memory_info_reporting_edge_cases() {
+        // Test when used memory equals total memory
+        let mock = MockSharedMemory::new(0, 1000, 80, 1024);
+        mock.set_pod_memory_used(1024);
+
+        let state = mock.get_state();
+        let total = state.get_mem_limit();
+        let used = state.get_pod_memory_used();
+        let free = total.saturating_sub(used);
+
+        assert_eq!(total, 1024, "Total memory should be 1024");
+        assert_eq!(used, 1024, "Used memory should be 1024");
+        assert_eq!(free, 0, "Free memory should be 0");
+
+        // Test when used memory exceeds total memory (should saturate to 0)
+        mock.set_pod_memory_used(2048);
+        let used = state.get_pod_memory_used();
+        let free = total.saturating_sub(used);
+
+        assert_eq!(free, 0, "Free memory should saturate to 0");
+    }
+
+    #[test]
+    fn test_shared_memory_trait_consistency() {
+        let mock = MockSharedMemory::new(1, 2048, 90, 2048 * 1024 * 1024);
+        mock.set_available_cores(1500);
+        mock.set_pod_memory_used(1024 * 1024 * 1024);
+
+        let state = mock.get_state();
+
+        assert_eq!(state.get_device_idx(), 1, "Device index should match");
+        assert_eq!(state.get_total_cores(), 2048, "Total cores should match");
+        assert_eq!(state.get_up_limit(), 90, "Up limit should match");
+        assert_eq!(
+            state.get_mem_limit(),
+            2048 * 1024 * 1024,
+            "Memory limit should match"
+        );
+        assert_eq!(
+            state.get_available_cores(),
+            1500,
+            "Available cores should match"
+        );
+        assert_eq!(
+            state.get_pod_memory_used(),
+            1024 * 1024 * 1024,
+            "Pod memory used should match"
+        );
+    }
 }

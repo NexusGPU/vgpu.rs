@@ -15,6 +15,7 @@ use crate::limiter::DeviceConfig;
 #[derive(Debug, Clone)]
 pub struct DeviceConfigResult {
     pub device_configs: Vec<DeviceConfig>,
+    #[allow(dead_code)]
     pub host_pid: u32,
 }
 
@@ -184,4 +185,120 @@ fn get_k8s_service_account_token() -> Result<String, Report<ConfigError>> {
     tracing::debug!("Successfully read Kubernetes service account token");
 
     Ok(token)
+}
+
+/// Get Kubernetes service account token from a custom path (for testing)
+#[allow(dead_code)]
+fn get_k8s_service_account_token_from_path(path: &str) -> Result<String, Report<ConfigError>> {
+    tracing::debug!("Reading Kubernetes service account token from: {}", path);
+
+    let token = fs::read_to_string(path).map_err(|e| {
+        tracing::error!("Failed to read service account token: {}", e);
+        Report::new(ConfigError::OidcAuth)
+    })?;
+
+    let token = token.trim().to_string();
+
+    if token.is_empty() {
+        tracing::error!("Service account token is empty");
+        return Err(Report::new(ConfigError::OidcAuth));
+    }
+
+    tracing::debug!("Successfully read Kubernetes service account token");
+
+    Ok(token)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use tempfile::NamedTempFile;
+
+    use super::*;
+
+    #[test]
+    fn test_read_token_successfully() {
+        // Create a temporary file with a token
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let test_token = "test-token-123";
+        writeln!(temp_file, "{test_token}").expect("Failed to write to temp file");
+
+        let token_path = temp_file.path().to_str().unwrap();
+        let result = get_k8s_service_account_token_from_path(token_path);
+
+        assert!(result.is_ok(), "Should successfully read token");
+        assert_eq!(
+            result.unwrap(),
+            test_token,
+            "Token should match expected value"
+        );
+    }
+
+    #[test]
+    fn test_read_token_with_whitespace() {
+        // Create a temporary file with a token that has surrounding whitespace
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let test_token = "test-token-with-spaces";
+        writeln!(temp_file, "  {test_token}  \n").expect("Failed to write to temp file");
+
+        let token_path = temp_file.path().to_str().unwrap();
+        let result = get_k8s_service_account_token_from_path(token_path);
+
+        assert!(result.is_ok(), "Should successfully read token");
+        assert_eq!(result.unwrap(), test_token, "Token should be trimmed");
+    }
+
+    #[test]
+    fn test_token_file_not_found() {
+        let non_existent_path = "/path/that/does/not/exist/token";
+        let result = get_k8s_service_account_token_from_path(non_existent_path);
+
+        assert!(result.is_err(), "Should return error for non-existent file");
+
+        let error = result.unwrap_err();
+        assert!(
+            matches!(error.current_context(), ConfigError::OidcAuth),
+            "Should return OidcAuth error"
+        );
+    }
+
+    #[test]
+    fn test_empty_token_file() {
+        // Create a temporary file with empty content
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        // Don't write anything to the file, leaving it empty
+
+        let token_path = temp_file.path().to_str().unwrap();
+        let result = get_k8s_service_account_token_from_path(token_path);
+
+        assert!(result.is_err(), "Should return error for empty file");
+
+        let error = result.unwrap_err();
+        assert!(
+            matches!(error.current_context(), ConfigError::OidcAuth),
+            "Should return OidcAuth error"
+        );
+    }
+
+    #[test]
+    fn test_whitespace_only_token_file() {
+        // Create a temporary file with only whitespace
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        writeln!(temp_file, "   \n\t  \n").expect("Failed to write to temp file");
+
+        let token_path = temp_file.path().to_str().unwrap();
+        let result = get_k8s_service_account_token_from_path(token_path);
+
+        assert!(
+            result.is_err(),
+            "Should return error for whitespace-only file"
+        );
+
+        let error = result.unwrap_err();
+        assert!(
+            matches!(error.current_context(), ConfigError::OidcAuth),
+            "Should return OidcAuth error"
+        );
+    }
 }

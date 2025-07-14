@@ -19,7 +19,6 @@ use http_bidir_comm::ClientConfig;
 use http_bidir_comm::HttpServer;
 use http_bidir_comm::ServerConfig;
 use reqwest::blocking::Client as BlockingClient;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
@@ -479,8 +478,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_blocking_http_trap_retry_mechanism() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::ResponseTemplate;
 
         // Start a mock server.
         let mock_server = MockServer::start().await;
@@ -514,9 +516,11 @@ mod tests {
             ..Default::default()
         };
 
-                let result = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let trap_client = BlockingHttpTrap::new(config).unwrap();
-            let frame = TrapFrame::OutOfMemory { requested_bytes: 128 };
+            let frame = TrapFrame::OutOfMemory {
+                requested_bytes: 128,
+            };
             trap_client.send_trap_request(frame)
         })
         .await
@@ -531,8 +535,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_blocking_http_trap_handles_error_status() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::ResponseTemplate;
 
         // Start a mock server.
         let mock_server = MockServer::start().await;
@@ -551,9 +558,11 @@ mod tests {
             ..Default::default()
         };
 
-                        let result = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let trap_client = BlockingHttpTrap::new(config).unwrap();
-            let frame = TrapFrame::OutOfMemory { requested_bytes: 128 };
+            let frame = TrapFrame::OutOfMemory {
+                requested_bytes: 128,
+            };
             trap_client.send_trap_request(frame)
         })
         .await
@@ -571,8 +580,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_blocking_http_trap_request_timeout() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::ResponseTemplate;
 
         // Start a mock server.
         let mock_server = MockServer::start().await;
@@ -592,9 +604,11 @@ mod tests {
             ..Default::default()
         };
 
-                        let result = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let trap_client = BlockingHttpTrap::new(config).unwrap();
-            let frame = TrapFrame::OutOfMemory { requested_bytes: 128 };
+            let frame = TrapFrame::OutOfMemory {
+                requested_bytes: 128,
+            };
             trap_client.send_trap_request(frame)
         })
         .await
@@ -603,7 +617,7 @@ mod tests {
 
         if let Err(TrapError::Io(e)) = result {
             let error_string = e.to_string();
-                                                assert!(error_string.contains("HTTP request failed"));
+            assert!(error_string.contains("HTTP request failed"));
         } else {
             panic!("Expected TrapError::Io for timeout");
         }

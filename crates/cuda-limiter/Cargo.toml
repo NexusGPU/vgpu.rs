@@ -23,3 +23,6 @@ http-bidir-comm = { workspace = true }
 libloading = { workspace = true }
 nvml-wrapper = { workspace = true }
 nvml-wrapper-sys = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

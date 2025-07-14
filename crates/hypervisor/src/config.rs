@@ -41,7 +41,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Run hypervisor daemon
-    Daemon(DaemonArgs),
+    Daemon(Box<DaemonArgs>),
     /// Mount shared memory
     #[command(name = "mount-shm")]
     MountShm(MountShmArgs),

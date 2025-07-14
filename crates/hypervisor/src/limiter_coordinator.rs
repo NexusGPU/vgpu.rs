@@ -797,7 +797,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        format!("{}-{}", test_name, timestamp)
+        format!("{test_name}-{timestamp}")
     }
 
     #[tokio::test]

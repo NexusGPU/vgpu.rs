@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Daemon(daemon_args) => run_daemon(daemon_args).await,
+        Commands::Daemon(daemon_args) => run_daemon(*daemon_args).await,
         Commands::MountShm(mount_shm_args) => run_mount_shm(mount_shm_args).await,
     }
 }
@@ -85,7 +85,7 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
     let mount_info = String::from_utf8_lossy(&mount_output.stdout);
     let mount_point_str = mount_shm_args.mount_point.to_string_lossy();
 
-    if mount_info.contains(&format!("on {} type tmpfs", mount_point_str)) {
+    if mount_info.contains(&format!("on {mount_point_str} type tmpfs")) {
         tracing::info!(
             "tmpfs is already mounted on {:?}",
             mount_shm_args.mount_point
@@ -100,7 +100,7 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
                 "-t",
                 "tmpfs",
                 "-o",
-                &format!("rw,nosuid,nodev,{}", size_arg),
+                &format!("rw,nosuid,nodev,{size_arg}"),
                 "tmpfs",
                 mount_point_str.as_ref(),
             ])
@@ -119,7 +119,7 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
         fs::metadata(&mount_shm_args.mount_point).context("get mount point metadata failed")?;
 
     let mut permissions = metadata.permissions();
-    permissions.set_mode(0755);
+    permissions.set_mode(0o0755);
 
     fs::set_permissions(&mount_shm_args.mount_point, permissions)
         .context("set permissions failed")?;

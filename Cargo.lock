@@ -696,6 +696,7 @@ dependencies = [
  "nvml-wrapper-sys",
  "reqwest",
  "serde_json",
+ "tempfile",
  "tf-macro",
  "thiserror 2.0.12",
  "tracing",

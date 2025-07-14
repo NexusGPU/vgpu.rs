@@ -1102,7 +1102,7 @@ mod tests {
                     thread::sleep(Duration::from_millis(1));
                 }
 
-                format!("Thread {} completed", i)
+                format!("Thread {i} completed")
             });
 
             handles.push(handle);
@@ -1214,7 +1214,10 @@ mod tests {
             let handle = thread::spawn(move || {
                 let result =
                     manager_clone.create_or_get_shared_memory(&identifier_clone, &config_clone);
-                assert!(result.is_ok(), "create_or_get_shared_memory should not fail");
+                assert!(
+                    result.is_ok(),
+                    "create_or_get_shared_memory should not fail"
+                );
             });
             handles.push(handle);
         }
@@ -1307,7 +1310,7 @@ mod tests {
                 let state = handle.get_state();
 
                 // Write a unique value from this thread
-                state.set_available_cores(i as i32);
+                state.set_available_cores(i);
                 thread::sleep(Duration::from_millis(20)); // Allow time for other threads to see it
 
                 // Read the value and see if it has been changed by another thread
@@ -1327,7 +1330,7 @@ mod tests {
             .unwrap()
             .get_state()
             .get_available_cores();
-        assert!((0..num_threads as i32).contains(&final_value));
+        assert!((0..num_threads).contains(&final_value));
 
         // Cleanup
         manager.cleanup(&identifier).unwrap();
