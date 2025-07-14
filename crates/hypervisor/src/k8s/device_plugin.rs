@@ -131,10 +131,7 @@ impl GpuDevicePlugin {
                 info!("successfully registered device plugin with kubelet");
                 Ok(())
             }
-            Err(e) => {
-                error!("failed to register device plugin with kubelet: {}", e);
-                Err(anyhow::anyhow!("registration failed: {}", e))
-            }
+            Err(e) => Err(anyhow::anyhow!("registration failed: {}", e)),
         }
     }
 

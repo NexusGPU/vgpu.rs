@@ -127,7 +127,7 @@ pub(crate) async fn run_metrics(
                                     .read()
                                     .expect("poisoned")
                                     .get(gpu_uuid)
-                                    .unwrap();
+                                    .unwrap_or(&0.0);
                             acc.count += 1;
                         }
 
@@ -170,7 +170,7 @@ pub(crate) async fn run_metrics(
                                         .read()
                                         .expect("poisoned")
                                         .get(&gpu_uuid)
-                                        .unwrap();
+                                        .unwrap_or(&0.0);
                                 acc.count += 1;
                             }
                         }

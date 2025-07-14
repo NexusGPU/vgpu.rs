@@ -171,6 +171,15 @@ pub struct DaemonArgs {
         value_hint = clap::ValueHint::FilePath,
     )]
     pub kubelet_device_state_path: PathBuf,
+
+    #[arg(
+        long,
+        help = "Detect in-use GPUs for other device plugins",
+        default_value_t = false,
+        env = "DETECT_IN_USED_GPUS",
+        action = clap::ArgAction::Set
+    )]
+    pub detect_in_used_gpus: bool,
 }
 
 #[derive(Parser)]

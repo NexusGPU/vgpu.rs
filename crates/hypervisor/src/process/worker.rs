@@ -65,35 +65,47 @@ impl TensorFusionWorker {
     /// Send command to limiter using CommandDispatcher
     fn send_command(&self, command_type: LimiterCommandType) -> Result<()> {
         let limiter_id = self.get_limiter_id();
+        let command_dispatcher = Arc::clone(&self.command_dispatcher);
+        let process_id = self.id;
 
-        // Use tokio::runtime::Handle to run asynchronous code
-        let rt = tokio::runtime::Handle::try_current()
-            .map_err(|_| anyhow::anyhow!("No tokio runtime available"))?;
+        // Clone values for use in the async closure
+        let limiter_id_clone = limiter_id.clone();
+        let command_type_clone = command_type.clone();
 
-        match rt.block_on(
-            self.command_dispatcher
-                .enqueue_command(&limiter_id, command_type.clone()),
-        ) {
-            Ok(_command_id) => {
-                tracing::info!(
-                    "Command {:?} sent successfully to limiter {} for process {}",
-                    command_type,
-                    limiter_id,
-                    self.id
-                );
-                Ok(())
+        // Spawn a task to send the command asynchronously without blocking
+        tokio::spawn(async move {
+            match command_dispatcher
+                .enqueue_command(&limiter_id_clone, command_type_clone.clone())
+                .await
+            {
+                Ok(_command_id) => {
+                    tracing::info!(
+                        "Command {:?} sent successfully to limiter {} for process {}",
+                        command_type_clone,
+                        limiter_id_clone,
+                        process_id
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to send command {:?} to limiter {} for process {}: {}",
+                        command_type_clone,
+                        limiter_id_clone,
+                        process_id,
+                        e
+                    );
+                }
             }
-            Err(e) => {
-                tracing::error!(
-                    "Failed to send command {:?} to limiter {} for process {}: {}",
-                    command_type,
-                    limiter_id,
-                    self.id,
-                    e
-                );
-                Err(anyhow::anyhow!("Failed to send command to limiter: {}", e))
-            }
-        }
+        });
+
+        // Return immediately - the command will be sent asynchronously
+        tracing::info!(
+            "Queued command {:?} for limiter {} for process {}",
+            command_type,
+            limiter_id,
+            self.id
+        );
+        Ok(())
     }
 }
 

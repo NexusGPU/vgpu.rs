@@ -177,10 +177,11 @@ impl GpuDeviceStateWatcher {
 
         // Spawn task to forward events from sync to async channel
         let fs_tx_clone = fs_tx.clone();
-        tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
             while let Ok(event) = rx.recv() {
-                if fs_tx_clone.send(event).await.is_err() {
-                    debug!("Filesystem event receiver dropped, stopping forwarder");
+                let send_result =
+                    tokio::runtime::Handle::current().block_on(fs_tx_clone.send(event));
+                if send_result.is_err() {
                     break;
                 }
             }

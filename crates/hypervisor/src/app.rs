@@ -49,12 +49,10 @@ impl Application {
         let mut tasks = Tasks::new();
 
         // Start all background tasks
-        if let Err(e) = tasks.spawn_all_tasks(self).await {
+        if let Err(e) = tasks.spawn_all_tasks(self) {
             tracing::error!("Failed to spawn application tasks: {}", e);
             return Err(e);
         }
-
-        tracing::info!("All application tasks started successfully");
 
         // Wait for tasks to complete or receive shutdown signal
         if let Err(e) = tasks.wait_for_completion().await {
@@ -99,7 +97,7 @@ impl Tasks {
     }
 
     /// Start all background tasks
-    pub async fn spawn_all_tasks(&mut self, app: &crate::app::Application) -> Result<()> {
+    pub fn spawn_all_tasks(&mut self, app: &crate::app::Application) -> Result<()> {
         let cli = &app.daemon_args;
 
         // Start GPU observer task
@@ -181,58 +179,60 @@ impl Tasks {
                 self.spawn_k8s_processor_task(k8s_update_receiver, app.worker_manager.clone());
             self.tasks.push(k8s_processor_task);
 
-            // Start GPU device state watcher task
-            let gpu_device_state_watcher_task = {
-                let gpu_device_state_watcher = app.gpu_device_state_watcher.clone();
+            if cli.detect_in_used_gpus {
+                // Start GPU device state watcher task
+                let gpu_device_state_watcher_task = {
+                    let gpu_device_state_watcher = app.gpu_device_state_watcher.clone();
+                    let token = self.cancellation_token.clone();
+                    let kubeconfig = app.daemon_args.kubeconfig.clone();
+
+                    tokio::spawn(async move {
+                        tracing::info!("Starting GPU device state watcher task");
+                        if let Err(e) = gpu_device_state_watcher.run(token, kubeconfig).await {
+                            tracing::error!("GPU device state watcher failed: {e:?}");
+                        } else {
+                            tracing::info!("GPU device state watcher completed");
+                        }
+                    })
+                };
+                self.tasks.push(gpu_device_state_watcher_task);
+            }
+
+            // Start API server task
+            let api_server_task = {
+                let worker_manager = app.worker_manager.clone();
+                let listen_addr = cli.api_listen_addr.clone();
+                let gpu_observer = app.gpu_observer.clone();
+                let command_dispatcher = app.command_dispatcher.clone();
+                let hypervisor = app.hypervisor.clone();
                 let token = self.cancellation_token.clone();
-                let kubeconfig = app.daemon_args.kubeconfig.clone();
 
                 tokio::spawn(async move {
-                    tracing::info!("Starting GPU device state watcher task");
-                    if let Err(e) = gpu_device_state_watcher.run(token, kubeconfig).await {
-                        tracing::error!("GPU device state watcher failed: {e:?}");
+                    tracing::info!("Starting API server on {}", listen_addr);
+
+                    // Create default JWT config - you may want to make this configurable
+                    let jwt_config = crate::api::types::JwtAuthConfig {
+                        public_key: "default-public-key".to_string(),
+                    };
+
+                    let api_server = ApiServer::new(
+                        worker_manager,
+                        listen_addr,
+                        jwt_config,
+                        hypervisor,
+                        command_dispatcher,
+                        gpu_observer,
+                    );
+
+                    if let Err(e) = api_server.run(token).await {
+                        tracing::error!("API server failed: {}", e);
                     } else {
-                        tracing::info!("GPU device state watcher completed");
+                        tracing::info!("API server completed");
                     }
                 })
             };
-            self.tasks.push(gpu_device_state_watcher_task);
+            self.tasks.push(api_server_task);
         }
-
-        // Start API server task
-        let api_server_task = {
-            let worker_manager = app.worker_manager.clone();
-            let listen_addr = cli.api_listen_addr.clone();
-            let gpu_observer = app.gpu_observer.clone();
-            let command_dispatcher = app.command_dispatcher.clone();
-            let hypervisor = app.hypervisor.clone();
-            let token = self.cancellation_token.clone();
-
-            tokio::spawn(async move {
-                tracing::info!("Starting API server on {}", listen_addr);
-
-                // Create default JWT config - you may want to make this configurable
-                let jwt_config = crate::api::types::JwtAuthConfig {
-                    public_key: "default-public-key".to_string(),
-                };
-
-                let api_server = ApiServer::new(
-                    worker_manager,
-                    listen_addr,
-                    jwt_config,
-                    hypervisor,
-                    command_dispatcher,
-                    gpu_observer,
-                );
-
-                if let Err(e) = api_server.run(token).await {
-                    tracing::error!("API server failed: {}", e);
-                } else {
-                    tracing::info!("API server completed");
-                }
-            })
-        };
-        self.tasks.push(api_server_task);
 
         // start hypervisor task
         let hypervisor_task = {
@@ -257,16 +257,16 @@ impl Tasks {
                 tokio::spawn(async move {
                     tracing::info!("Starting device plugin task");
 
+                    if let Err(e) = device_plugin.start(&device_plugin_socket_path, token).await {
+                        tracing::error!("Failed to start device plugin: {}", e);
+                        return;
+                    }
+
                     if let Err(e) = device_plugin
                         .register_with_kubelet(&kubelet_socket_path)
                         .await
                     {
                         tracing::error!("Failed to register device plugin with kubelet: {}", e);
-                        return;
-                    }
-
-                    if let Err(e) = device_plugin.start(&device_plugin_socket_path, token).await {
-                        tracing::error!("Failed to start device plugin: {}", e);
                         return;
                     }
 
