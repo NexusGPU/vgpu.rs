@@ -17,6 +17,8 @@ jobs:
     - uses: actions/checkout@v4
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
+    - name: Install protobuf compiler
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
     - name: Install CUDA toolkit
       uses: Jimver/cuda-toolkit@v0.2.26
       with:
