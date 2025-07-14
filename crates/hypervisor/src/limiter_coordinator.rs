@@ -58,6 +58,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use nvml_wrapper::error::NvmlError;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tokio::time::sleep;
@@ -561,10 +562,15 @@ impl LimiterCoordinator {
                     .context("Failed to get device by index")?;
 
                 // Get process utilization samples.
-                let process_utilization_samples = dev
-                    .process_utilization_stats(last_seen_timestamp)
-                    .context("Failed to get process utilization stats")?;
+                let process_utilization_samples =
+                    dev.process_utilization_stats(last_seen_timestamp);
 
+                if let Err(NvmlError::NotFound) = process_utilization_samples {
+                    return Ok(None);
+                }
+
+                let process_utilization_samples = process_utilization_samples
+                    .context("Failed to get process utilization stats")?;
                 // Initialize utilization counters.
                 let mut current = Utilization::default();
                 let mut valid = false;
