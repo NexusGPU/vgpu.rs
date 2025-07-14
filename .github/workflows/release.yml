@@ -270,39 +270,11 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
 
-      - name: Install cross
-        run: |
-          if ! (command -v cross &> /dev/null && command -v cross-util &> /dev/null); then
-            cargo install cross --git https://github.com/cross-rs/cross
-          else
-            echo "cross is already installed, skipping installation."
-          fi
-
-      - name: Setup Cross.toml for CI
-        run: |
-          cat > Cross.toml << 'EOF'
-          [build.env]
-          passthrough = [
-              "VERSION",
-          ]
-
-          [target.x86_64-unknown-linux-gnu]
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
-
-          [target.aarch64-unknown-linux-gnu] 
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
-          EOF
-
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
 
-
       - name: Build for amd64
-        run: VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target x86_64-unknown-linux-gnu
+        run: VERSION=${{ needs.release.outputs.version }} cargo build -p hypervisor --release --target x86_64-unknown-linux-gnu
       
       - id: meta
         uses: docker/metadata-action@v5
