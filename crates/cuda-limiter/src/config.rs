@@ -1,21 +1,27 @@
-use std::collections::HashSet;
 use std::env;
 use std::fs;
 
 use api_types::WorkerQueryResponse;
 use error_stack::Report;
 use error_stack::ResultExt;
-use nvml_wrapper::error::NvmlError;
-use nvml_wrapper::Nvml;
 use reqwest::blocking::Client;
 
-use crate::limiter::DeviceConfig;
+/// Configuration for a CUDA device
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DeviceLimit {
+    /// Utilization percentage limit (0-100)
+    #[allow(dead_code)]
+    pub up_limit: u32,
+    /// Memory limit in bytes (0 means no limit)
+    #[allow(dead_code)]
+    pub mem_limit: u64,
+}
 
 /// Configuration result containing device configs and host PID
 #[derive(Debug, Clone)]
 pub struct DeviceConfigResult {
-    pub device_configs: Vec<DeviceConfig>,
     #[allow(dead_code)]
+    pub device_limit: DeviceLimit,
     pub host_pid: u32,
 }
 
@@ -28,12 +34,9 @@ pub enum ConfigError {
     OidcAuth,
     #[error("JSON parsing failed")]
     JsonParsing,
-    #[error("NVML error")]
-    Nvml(NvmlError),
 }
 
 pub fn get_device_configs(
-    nvml: &Nvml,
     hypervisor_ip: &str,
     hypervisor_port: &str,
 ) -> Result<DeviceConfigResult, Report<ConfigError>> {
@@ -42,12 +45,11 @@ pub fn get_device_configs(
         String::new()
     });
 
-    fetch_device_configs_from_hypervisor(nvml, hypervisor_ip, hypervisor_port, &container_name)
+    fetch_device_configs_from_hypervisor(hypervisor_ip, hypervisor_port, &container_name)
 }
 
 /// Fetch device configurations from hypervisor API using Kubernetes service account token
 fn fetch_device_configs_from_hypervisor(
-    nvml: &Nvml,
     hypervisor_ip: &str,
     hypervisor_port: &str,
     container_name: &str,
@@ -102,60 +104,22 @@ fn fetch_device_configs_from_hypervisor(
     // Convert PodResourceInfo to DeviceConfig
     // Note: We need to extract device configuration from the pod resource info
     // For now, we'll create a single device config based on the resource limits
-    let device_configs = if let (Some(tflops_limit), Some(vram_limit)) =
+    let device_limit = if let (Some(tflops_limit), Some(vram_limit)) =
         (worker_info.tflops_limit, worker_info.vram_limit)
     {
-        let config = DeviceConfig::new(
-            0,                   // Default to device 0, may need to be configurable
-            tflops_limit as u32, // Convert TFLOPS to up_limit
-            vram_limit,
-            2048, // Default total CUDA cores, will be calculated by hypervisor
-        );
-        vec![config]
+        DeviceLimit {
+            up_limit: tflops_limit as u32,
+            mem_limit: vram_limit,
+        }
     } else {
         tracing::warn!("Pod resource info does not contain required limits");
-        vec![]
+        DeviceLimit::default()
     };
 
-    tracing::info!(
-        "Successfully fetched {} device configurations from hypervisor",
-        device_configs.len()
-    );
-
-    if let Some(gpu_uuids) = &worker_info.gpu_uuids {
-        if !gpu_uuids.is_empty() {
-            let lower_case_uuids: HashSet<_> = gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
-            let device_count = nvml
-                .device_count()
-                .map_err(|e| Report::new(ConfigError::Nvml(e)))?;
-
-            let mut device_indices = Vec::new();
-            for i in 0..device_count {
-                let device = nvml
-                    .device_by_index(i)
-                    .map_err(|e| Report::new(ConfigError::Nvml(e)))?;
-                let uuid = device
-                    .uuid()
-                    .map_err(|e| Report::new(ConfigError::Nvml(e)))?;
-                if lower_case_uuids.contains(&uuid.to_lowercase()) {
-                    device_indices.push(i.to_string());
-                }
-            }
-
-            if !device_indices.is_empty() {
-                let visible_devices = device_indices.join(",");
-                tracing::info!(
-                    "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
-                    &visible_devices
-                );
-                env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
-                env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
-            }
-        }
-    }
+    tracing::info!("Successfully fetched device limit from hypervisor: {device_limit:?}",);
 
     Ok(DeviceConfigResult {
-        device_configs,
+        device_limit,
         host_pid: worker_info.host_pid,
     })
 }

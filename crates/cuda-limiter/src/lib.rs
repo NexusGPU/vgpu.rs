@@ -33,8 +33,66 @@ static NGPU_INITIALIZED: Once = Once::new();
 static CUDA_HOOKS_INITIALIZED: Once = Once::new();
 static NVML_HOOKS_INITIALIZED: Once = Once::new();
 
+#[ctor]
+unsafe fn entry_point() {
+    logging::init();
+    init_hooks();
+}
+
 fn init_ngpu_library() {
     NGPU_INITIALIZED.call_once(|| {
+        // Get pod name from environment variable
+        let pod_identifier = match limiter::get_pod_identifier() {
+            Ok(name) => name,
+            Err(_) => {
+                tracing::error!("Failed to get pod name from environment, cuda-limiter disabled");
+                return;
+            }
+        };
+
+        let nvml = match Nvml::init().and(
+            Nvml::builder()
+                .lib_path(OsStr::new("libnvidia-ml.so.1"))
+                .init(),
+        ) {
+            Ok(nvml) => nvml,
+            Err(e) => {
+                tracing::error!("failed to initialize NVML: {}", e);
+                return;
+            }
+        };
+
+        let (hypervisor_ip, hypervisor_port) = match get_hypervisor_config() {
+            Some((ip, port)) => (ip, port),
+            None => {
+                tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
+                return;
+            }
+        };
+        // Get device indices from environment variable
+        let config = match config::get_device_configs(&hypervisor_ip, &hypervisor_port) {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::error!("failed to get device configs: {err}");
+                return;
+            }
+        };
+
+        let limiter = match Limiter::new(config.host_pid, nvml, pod_identifier) {
+            Ok(limiter) => limiter,
+            Err(err) => {
+                tracing::error!("failed to init limiter, err: {err}");
+                return;
+            }
+        };
+        GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
+
+        command_handler::start_background_handler(
+            &hypervisor_ip,
+            &hypervisor_port,
+            config.host_pid,
+        );
+
         // Load tensor-fusion/ngpu.so
         if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
             tracing::debug!("loading ngpu.so from: {ngpu_path}");
@@ -118,68 +176,6 @@ fn init_hooks() {
             );
         }
     }
-}
-
-#[ctor]
-unsafe fn entry_point() {
-    logging::init();
-
-    // Get pod name from environment variable
-    let pod_identifier = match limiter::get_pod_identifier() {
-        Ok(name) => name,
-        Err(_) => {
-            tracing::error!("Failed to get pod name from environment, cuda-limiter disabled");
-            return;
-        }
-    };
-
-    let nvml = match Nvml::init().and(
-        Nvml::builder()
-            .lib_path(OsStr::new("libnvidia-ml.so.1"))
-            .init(),
-    ) {
-        Ok(nvml) => nvml,
-        Err(e) => {
-            tracing::error!("failed to initialize NVML: {}", e);
-            return;
-        }
-    };
-
-    let (hypervisor_ip, hypervisor_port) = match get_hypervisor_config() {
-        Some((ip, port)) => (ip, port),
-        None => {
-            tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
-            return;
-        }
-    };
-
-    // Get device indices from environment variable
-    let config = match config::get_device_configs(&nvml, &hypervisor_ip, &hypervisor_port) {
-        Ok(config) => config,
-        Err(err) => {
-            tracing::error!("failed to get device configs: {err}");
-            return;
-        }
-    };
-
-    let limiter = match Limiter::new(
-        std::process::id(),
-        pod_identifier,
-        config.device_configs.iter().map(|c| c.device_idx).collect(),
-    ) {
-        Ok(limiter) => limiter,
-        Err(err) => {
-            tracing::error!("failed to init limiter, err: {err}");
-            return;
-        }
-    };
-    GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
-
-    init_hooks();
-
-    tracing::debug!("CUDA limiter initialized successfully");
-    // start Hypervisor command handler background thread (requires HYPERVISOR_IP / PORT)
-    command_handler::start_background_handler(&hypervisor_ip, &hypervisor_port, std::process::id());
 }
 
 enum TrapImpl {

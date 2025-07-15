@@ -28,16 +28,16 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_ptsz_detour(
     extra: *mut *mut c_void,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|_, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
         limiter.rate_limiter(
-            device,
+            device_uuid,
             grid_dim_x * grid_dim_y * grid_dim_z,
             block_dim_x * block_dim_y * block_dim_z,
         );
     });
 
-    FN_CU_LAUNCH_KERNEL_PTSZ(
+    FN_CU_LAUNCH_KERNEL(
         f,
         grid_dim_x,
         grid_dim_y,
@@ -67,10 +67,10 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_detour(
     extra: *mut *mut c_void,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|_, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
         limiter.rate_limiter(
-            device,
+            device_uuid,
             grid_dim_x * grid_dim_y * grid_dim_z,
             block_dim_x * block_dim_y * block_dim_z,
         );
@@ -94,18 +94,18 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_detour(
 #[hook_fn]
 pub(crate) unsafe extern "C" fn cu_launch_detour(f: CUfunction) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|device_idx, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
         // Get block dimensions
-        match limiter.get_block_dimensions(device) {
+        match limiter.get_block_dimensions(device_idx) {
             Ok((block_x, block_y, block_z)) => {
                 // Use the block dimensions to limit the rate
-                limiter.rate_limiter(device, 1, block_x * block_y * block_z);
+                limiter.rate_limiter(device_uuid, 1, block_x * block_y * block_z);
             }
             Err(_) => {
                 tracing::warn!("Failed to get block dimensions, using default");
-                limiter.rate_limiter(device, 1, 1);
+                limiter.rate_limiter(device_uuid, 1, 1);
             }
         }
     });
@@ -127,10 +127,10 @@ pub(crate) unsafe extern "C" fn cu_launch_cooperative_kernel_ptsz_detour(
     kernel_params: *mut *mut c_void,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|_, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
         limiter.rate_limiter(
-            device,
+            device_uuid,
             grid_dim_x * grid_dim_y * grid_dim_z,
             block_dim_x * block_dim_y * block_dim_z,
         );
@@ -164,10 +164,10 @@ pub(crate) unsafe extern "C" fn cu_launch_cooperative_kernel_detour(
     kernel_params: *mut *mut c_void,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|_, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
         limiter.rate_limiter(
-            device,
+            device_uuid,
             grid_dim_x * grid_dim_y * grid_dim_z,
             block_dim_x * block_dim_y * block_dim_z,
         );
@@ -194,22 +194,22 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_detour(
     grid_height: c_int,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|device_idx, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
         // Get block dimensions
-        match limiter.get_block_dimensions(device) {
+        match limiter.get_block_dimensions(device_idx) {
             Ok((block_x, block_y, block_z)) => {
                 // Use the block dimensions to limit the rate
                 limiter.rate_limiter(
-                    device,
+                    device_uuid,
                     (grid_width * grid_height) as u32,
                     block_x * block_y * block_z,
                 );
             }
             Err(_) => {
                 tracing::warn!("Failed to get block dimensions, using default");
-                limiter.rate_limiter(device, (grid_width * grid_height) as u32, 1);
+                limiter.rate_limiter(device_uuid, (grid_width * grid_height) as u32, 1);
             }
         }
     });
@@ -225,22 +225,22 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_async_detour(
     h_stream: CUstream,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|device_idx, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
         // Get block dimensions
-        match limiter.get_block_dimensions(device) {
+        match limiter.get_block_dimensions(device_idx) {
             Ok((block_x, block_y, block_z)) => {
                 // Use the block dimensions to limit the rate
                 limiter.rate_limiter(
-                    device,
+                    device_uuid,
                     (grid_width * grid_height) as u32,
                     block_x * block_y * block_z,
                 );
             }
             Err(_) => {
                 tracing::warn!("Failed to get block dimensions, using default");
-                limiter.rate_limiter(device, (grid_width * grid_height) as u32, 1);
+                limiter.rate_limiter(device_uuid, (grid_width * grid_height) as u32, 1);
             }
         }
     });
@@ -256,11 +256,11 @@ pub(crate) unsafe extern "C" fn cu_func_set_block_shape_detour(
     z: c_int,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|device_idx, _| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
         // Set block dimensions
-        if let Err(err) = limiter.set_block_dimensions(device, x as u32, y as u32, z as u32) {
+        if let Err(err) = limiter.set_block_dimensions(device_idx, x as u32, y as u32, z as u32) {
             tracing::warn!(
                 "Failed to set block dimensions: ({}, {}, {}): {:?}",
                 x,

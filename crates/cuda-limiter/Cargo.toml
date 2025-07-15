@@ -23,6 +23,8 @@ http-bidir-comm = { workspace = true }
 libloading = { workspace = true }
 nvml-wrapper = { workspace = true }
 nvml-wrapper-sys = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde", "std"] }
+hex = "0.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }

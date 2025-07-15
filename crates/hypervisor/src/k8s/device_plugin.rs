@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -263,11 +264,12 @@ impl DevicePlugin for DevicePluginService {
                 read_only: false,
             }];
 
+            let envs = HashMap::new();
             let container_response = ContainerAllocateResponse {
-                envs: std::collections::HashMap::new(), // no environment variables
+                envs,
                 mounts,
                 devices: Vec::new(), // no device files
-                annotations: std::collections::HashMap::new(),
+                annotations: HashMap::new(),
                 cdi_devices: Vec::new(), // no CDI devices
             };
 

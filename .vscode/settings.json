@@ -31,6 +31,7 @@
         "tflops",
         "thiserror",
         "tmpfs",
+        "Udeviceptr",
         "vgpu"
     ],
     "rust-analyzer.checkOnSave": true

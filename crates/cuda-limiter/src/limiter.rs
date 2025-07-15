@@ -1,17 +1,19 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::sync::Condvar;
-use std::sync::Mutex;
-use std::time::Duration;
 
 use cudarc::driver::sys::CUdevice;
+use cudarc::driver::CudaContext;
 use cudarc::driver::DriverError;
+use nvml_wrapper::error::NvmlError;
+use nvml_wrapper::Nvml;
+use nvml_wrapper_sys::bindings::nvmlDevice_t;
 use thiserror::Error;
 use trap::TrapError;
-use utils::shared_memory::SharedDeviceState;
+use utils::shared_memory::SharedDeviceInfoV1;
 use utils::shared_memory::SharedMemoryHandle;
+
+use crate::detour;
 
 #[derive(Error, Debug)]
 pub(crate) enum Error {
@@ -20,9 +22,6 @@ pub(crate) enum Error {
 
     #[error("Trap error: `{0}`")]
     Trap(#[from] TrapError),
-
-    #[error("Invalid device index: {0}")]
-    InvalidDevice(u32),
 
     #[error("Invalid CUDA device: {0}")]
     #[allow(dead_code)]
@@ -35,61 +34,22 @@ pub(crate) enum Error {
     SharedMemory(#[from] anyhow::Error),
 
     #[error("Device {0} not configured")]
-    DeviceNotConfigured(u32),
+    DeviceNotConfigured(String),
+
+    #[error("Device dim not configured: {0}")]
+    DeviceDimNotConfigured(i32),
 
     #[error("NVML error: {0}")]
     Nvml(#[from] nvml_wrapper::error::NvmlError),
 }
 
-/// Configuration for a CUDA device
-#[derive(Debug, Clone)]
-pub(crate) struct DeviceConfig {
-    /// Device index
-    pub device_idx: u32,
-    /// Utilization percentage limit (0-100)
-    #[allow(dead_code)]
-    pub up_limit: u32,
-    /// Memory limit in bytes (0 means no limit)
-    #[allow(dead_code)]
-    pub mem_limit: u64,
-    /// Total number of CUDA cores
-    #[allow(dead_code)]
-    pub total_cuda_cores: u32,
-}
-
-impl Default for DeviceConfig {
-    fn default() -> Self {
-        Self {
-            device_idx: 0,
-            up_limit: 80,        // 80% default utilization limit
-            mem_limit: 0,        // No memory limit by default
-            total_cuda_cores: 0, // Will be calculated based on hardware
-        }
-    }
-}
-
-impl DeviceConfig {
-    /// Create a DeviceConfig with specified parameters
-    pub fn new(device_idx: u32, up_limit: u32, mem_limit: u64, total_cuda_cores: u32) -> Self {
-        Self {
-            device_idx,
-            up_limit,
-            mem_limit,
-            total_cuda_cores,
-        }
-    }
-}
-
 /// Internal device information and state
 #[derive(Debug)]
-pub(crate) struct DeviceInfo {
-    pub(crate) dev_idx: u32,
+pub(crate) struct DeviceDim {
     /// Block dimensions set by cuFuncSetBlockShape
     pub(crate) block_x: AtomicU32,
     pub(crate) block_y: AtomicU32,
     pub(crate) block_z: AtomicU32,
-    /// Condition variable for signaling when CUDA cores become available
-    pub(crate) cores_condvar: Arc<(Mutex<()>, Condvar)>,
 }
 
 /// Main limiter struct that manages CUDA resource limits
@@ -98,10 +58,18 @@ pub(crate) struct Limiter {
     pub(crate) pid: u32,
     /// Pod name for shared memory access
     pod_identifier: String,
-    /// Information about each device
-    pub(crate) devices: Vec<DeviceInfo>,
     /// Shared memory handles for each device
-    shared_memory_handles: HashMap<u32, SharedMemoryHandle>,
+    shared_memory_handles: HashMap<String, SharedMemoryHandle>,
+    /// NVML instance
+    nvml: Nvml,
+    /// Device dimensions
+    current_devices_dim: HashMap<i32, DeviceDim>,
+
+    /// CUDA device mapping (CUdevice -> device_uuid)
+    cu_device_mapping: HashMap<CUdevice, String>,
+
+    /// Device count
+    device_count: u32,
 }
 
 impl std::fmt::Debug for Limiter {
@@ -109,7 +77,6 @@ impl std::fmt::Debug for Limiter {
         f.debug_struct("Limiter")
             .field("pid", &self.pid)
             .field("identifier", &self.pod_identifier)
-            .field("devices", &self.devices)
             .field(
                 "shared_memory_handles_count",
                 &self.shared_memory_handles.len(),
@@ -120,97 +87,60 @@ impl std::fmt::Debug for Limiter {
 
 impl Limiter {
     /// Creates a new Limiter instance
-    pub(crate) fn new(
-        pid: u32,
-        pod_identifier: String,
-        device_indices: Vec<u32>,
-    ) -> Result<Self, Error> {
-        let mut devices = Vec::new();
-        let mut shared_memory_handles = HashMap::new();
+    pub(crate) fn new(pid: u32, nvml: Nvml, pod_identifier: String) -> Result<Self, Error> {
+        let mut cu_device_mapping = HashMap::new();
+        let device_count = nvml.device_count()?;
+        let mut uuid_mapping = HashMap::new();
 
-        for device_idx in device_indices {
-            // Create device info
-            let device_info = DeviceInfo {
-                dev_idx: device_idx,
-                block_x: AtomicU32::new(0),
-                block_y: AtomicU32::new(0),
-                block_z: AtomicU32::new(0),
-                cores_condvar: Arc::new((Mutex::new(()), Condvar::new())),
-            };
-
-            devices.push(device_info);
-
-            // Open shared memory for this device
-            let shared_memory_handle =
-                SharedMemoryHandle::open(&pod_identifier).map_err(Error::SharedMemory)?;
-            shared_memory_handles.insert(device_idx, shared_memory_handle);
+        for idx in 0..device_count {
+            let ctx = CudaContext::new(idx as usize)?;
+            let device = nvml.device_by_index(idx)?;
+            let uuid = device.uuid()?;
+            uuid_mapping.insert(idx as i32, uuid.clone());
+            tracing::info!("Device {idx} UUID: {uuid}");
+            cu_device_mapping.insert(ctx.cu_device(), uuid);
         }
+        detour::GLOBAL_DEVICE_UUIDS
+            .set(uuid_mapping)
+            .expect("set GLOBAL_DEVICE_UUIDS");
 
         Ok(Limiter {
             pid,
             pod_identifier,
-            devices,
-            shared_memory_handles,
+            current_devices_dim: HashMap::new(),
+            shared_memory_handles: HashMap::new(),
+            nvml,
+            cu_device_mapping,
+            device_count,
         })
     }
 
-    /// Get device info by index
-    fn get_device(&self, device_idx: u32) -> Result<&DeviceInfo, Error> {
-        self.devices
-            .iter()
-            .find(|d| d.dev_idx == device_idx)
-            .ok_or(Error::InvalidDevice(device_idx))
-    }
-
     /// Rate limiter that waits for available CUDA cores
-    pub(crate) fn rate_limiter(&self, device_idx: u32, grids: u32, _blocks: u32) {
-        let device = self.get_device(device_idx).expect("get device");
+    pub(crate) fn rate_limiter(&self, device_uuid: &str, grids: u32, _blocks: u32) {
         let kernel_size = grids as i32;
 
         // Get shared memory handle for this device
         let handle = self
             .shared_memory_handles
-            .get(&device_idx)
+            .get(device_uuid)
             .expect("Shared memory handle not found");
 
-        // Wait for available cores using condition variable
-        let (lock, cvar) = &*device.cores_condvar;
-        let mut guard = lock.lock().expect("poisoned");
-
+        let state = handle.get_state();
         loop {
-            // Try to consume cores from shared memory
-            let state = handle.get_state();
             let available = state.get_available_cores();
-
-            if available >= kernel_size {
-                // Atomically decrease available cores
-                let current = state
-                    .available_cuda_cores
-                    .fetch_sub(kernel_size, Ordering::AcqRel);
-                if current >= kernel_size {
-                    break; // Successfully consumed cores
-                } else {
-                    // Race condition occurred, restore cores and retry
-                    state
-                        .available_cuda_cores
-                        .fetch_add(kernel_size, Ordering::AcqRel);
-                }
+            if available > 0 {
+                break;
             }
-
-            // Wait for cores to become available
-            guard = cvar
-                .wait_timeout(guard, Duration::from_millis(10))
-                .expect("poisoned")
-                .0;
         }
+        state.fetch_sub_available_cores(kernel_size);
     }
 
     /// Get pod memory usage from shared memory
-    pub(crate) fn get_pod_memory_usage(&self, device_idx: u32) -> Result<(u64, u64), Error> {
+    pub(crate) fn get_pod_memory_usage(&self, device_uuid: &str) -> Result<(u64, u64), Error> {
         let handle = self
             .shared_memory_handles
-            .get(&device_idx)
-            .ok_or(Error::DeviceNotConfigured(device_idx))?;
+            .get(device_uuid)
+            .ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))?;
 
         let state = handle.get_state();
         let used = state.get_pod_memory_used();
@@ -219,36 +149,44 @@ impl Limiter {
         Ok((used, limit))
     }
 
-    /// Get memory info for NVML hooks (total, used, free)
-    #[allow(dead_code)]
-    pub(crate) fn get_memory_info(&self, device_idx: u32) -> Result<(u64, u64, u64), Error> {
-        let handle = self
-            .shared_memory_handles
-            .get(&device_idx)
-            .ok_or(Error::DeviceNotConfigured(device_idx))?;
+    /// Get the memory limit for a specific device
+    pub(crate) fn get_pod_memory_usage_cu(&self, cu_device: CUdevice) -> Result<(u64, u64), Error> {
+        let device_uuid = self
+            .cu_device_mapping
+            .get(&cu_device)
+            .ok_or(Error::InvalidCuDevice(cu_device))?;
 
-        let state = handle.get_state();
-        let total = state.get_mem_limit();
-        let used = state.get_pod_memory_used();
-        let free = total.saturating_sub(used);
-
-        Ok((total, used, free))
+        self.get_pod_memory_usage(device_uuid)
     }
-
-    /// Get memory limit for a device
-    pub(crate) fn get_mem_limit(&self, device_idx: u32) -> Result<u64, Error> {
-        let handle = self
-            .shared_memory_handles
-            .get(&device_idx)
-            .ok_or(Error::DeviceNotConfigured(device_idx))?;
-
-        let state = handle.get_state();
-        Ok(state.get_mem_limit())
+    /// Get the NVML device handle for a specific device
+    pub(crate) fn device_uuid_by_handle(
+        &self,
+        device_handle: nvmlDevice_t,
+    ) -> Result<Option<String>, NvmlError> {
+        for idx in 0..self.device_count {
+            let dev = self.nvml.device_by_index(idx);
+            match dev {
+                Ok(dev) => {
+                    let handle = unsafe { dev.handle() };
+                    if handle == device_handle {
+                        return Ok(Some(dev.uuid()?));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to get device by index {}: {}, skipped", idx, e);
+                    continue;
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Get block dimensions for a device
-    pub(crate) fn get_block_dimensions(&self, device_idx: u32) -> Result<(u32, u32, u32), Error> {
-        let device = self.get_device(device_idx)?;
+    pub(crate) fn get_block_dimensions(&self, device_idx: i32) -> Result<(u32, u32, u32), Error> {
+        let device = self
+            .current_devices_dim
+            .get(&device_idx)
+            .ok_or_else(|| Error::DeviceDimNotConfigured(device_idx))?;
         Ok((
             device.block_x.load(Ordering::Acquire),
             device.block_y.load(Ordering::Acquire),
@@ -259,12 +197,15 @@ impl Limiter {
     /// Set block dimensions for a device
     pub(crate) fn set_block_dimensions(
         &self,
-        device_idx: u32,
+        device_idx: i32,
         x: u32,
         y: u32,
         z: u32,
     ) -> Result<(), Error> {
-        let device = self.get_device(device_idx)?;
+        let device = self
+            .current_devices_dim
+            .get(&device_idx)
+            .ok_or_else(|| Error::DeviceDimNotConfigured(device_idx))?;
 
         device.block_x.store(x, Ordering::Release);
         device.block_y.store(y, Ordering::Release);
@@ -278,12 +219,12 @@ impl Limiter {
 #[allow(dead_code)]
 pub(crate) trait SharedMemory {
     /// Gets a reference to the shared device state
-    fn get_state(&self) -> &SharedDeviceState;
+    fn get_state(&self) -> &SharedDeviceInfoV1;
 }
 
 /// Implementation of SharedMemory trait for SharedMemoryHandle
 impl SharedMemory for SharedMemoryHandle {
-    fn get_state(&self) -> &SharedDeviceState {
+    fn get_state(&self) -> &SharedDeviceInfoV1 {
         self.get_state()
     }
 }
@@ -293,31 +234,26 @@ pub(crate) fn get_pod_identifier() -> Result<String, Error> {
     let name = std::env::var("POD_NAME").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
     let namespace =
         std::env::var("POD_NAMESPACE").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
-    Ok(format!("{}_{}", namespace, name))
+    Ok(format!("{namespace}_{name}"))
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use utils::shared_memory::SharedDeviceState;
+    use utils::shared_memory::SharedDeviceInfoV1;
 
     use super::*;
 
     /// Mock implementation of SharedMemory for testing
     pub struct MockSharedMemory {
-        state: Arc<SharedDeviceState>,
+        state: Arc<SharedDeviceInfoV1>,
     }
 
     impl MockSharedMemory {
         /// Create a new MockSharedMemory with specified values
-        pub fn new(device_idx: u32, total_cores: u32, up_limit: u32, mem_limit: u64) -> Self {
-            let state = Arc::new(SharedDeviceState::new(
-                device_idx,
-                total_cores,
-                up_limit,
-                mem_limit,
-            ));
+        pub fn new(total_cores: u32, up_limit: u32, mem_limit: u64) -> Self {
+            let state = Arc::new(SharedDeviceInfoV1::new(total_cores, up_limit, mem_limit));
             Self { state }
         }
 
@@ -339,14 +275,14 @@ mod tests {
     }
 
     impl SharedMemory for MockSharedMemory {
-        fn get_state(&self) -> &SharedDeviceState {
+        fn get_state(&self) -> &SharedDeviceInfoV1 {
             &self.state
         }
     }
 
     #[test]
     fn test_memory_info_reporting() {
-        let mock = MockSharedMemory::new(0, 1000, 80, 1024 * 1024 * 1024); // 1GB limit
+        let mock = MockSharedMemory::new(1000, 80, 1024 * 1024 * 1024); // 1GB limit
         mock.set_pod_memory_used(512 * 1024 * 1024); // 512MB used
 
         let state = mock.get_state();
@@ -362,7 +298,7 @@ mod tests {
     #[test]
     fn test_memory_info_reporting_edge_cases() {
         // Test when used memory equals total memory
-        let mock = MockSharedMemory::new(0, 1000, 80, 1024);
+        let mock = MockSharedMemory::new(1000, 80, 1024);
         mock.set_pod_memory_used(1024);
 
         let state = mock.get_state();
@@ -384,13 +320,12 @@ mod tests {
 
     #[test]
     fn test_shared_memory_trait_consistency() {
-        let mock = MockSharedMemory::new(1, 2048, 90, 2048 * 1024 * 1024);
+        let mock = MockSharedMemory::new(2048, 90, 2048 * 1024 * 1024);
         mock.set_available_cores(1500);
         mock.set_pod_memory_used(1024 * 1024 * 1024);
 
         let state = mock.get_state();
 
-        assert_eq!(state.get_device_idx(), 1, "Device index should match");
         assert_eq!(state.get_total_cores(), 2048, "Total cores should match");
         assert_eq!(state.get_up_limit(), 90, "Up limit should match");
         assert_eq!(

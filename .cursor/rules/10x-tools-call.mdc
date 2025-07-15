@@ -10,7 +10,7 @@ alwaysApply: true
 
    * If it doesn't exist, create it with the following content:
 
-     ```python
+     ```python3
      # userinput.py
      user_input = input("prompt: ")
      ```
@@ -22,7 +22,7 @@ alwaysApply: true
    * Run:
 
      ```bash
-     python userinput.py
+     python3 userinput.py
      ```
    * The terminal should be opened in the chat window itself.
 

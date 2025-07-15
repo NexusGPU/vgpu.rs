@@ -1,18 +1,13 @@
-use std::os::raw::c_uint;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 pub(crate) mod gpu;
 pub(crate) mod mem;
 pub(crate) mod nvml;
 
-// 添加缺少的类型定义
-#[repr(transparent)]
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub(crate) struct CUdeviceptrV1(pub c_uint);
+pub static GLOBAL_DEVICE_UUIDS: OnceLock<HashMap<i32, String>> = OnceLock::new();
 
-// 定义 CudaArrayDescriptor 别名
-pub(crate) use cudarc::driver::sys::CUDA_ARRAY_DESCRIPTOR as CudaArrayDescriptor;
-
-/// macro: get current device and execute expression
+/// macro: get current device UUID and execute expression
 #[macro_export]
 macro_rules! with_device {
     ($expr:expr) => {{
@@ -20,12 +15,20 @@ macro_rules! with_device {
         unsafe {
             // Call the CUDA API to get the current device
             let result = ::cudarc::driver::sys::cuCtxGetDevice(&mut device as *mut i32);
-
             if result != ::cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
                 panic!("Failed to get current CUDA device: error code {:?}", result);
             }
+
+            let device_uuid = $crate::detour::GLOBAL_DEVICE_UUIDS
+                .get()
+                .unwrap()
+                .get(&device);
+            if device_uuid.is_none() {
+                panic!("Device UUID not found for device {}", device);
+            }
+
+            $expr(device, device_uuid.unwrap())
         }
-        $expr(device as u32)
     }};
 }
 

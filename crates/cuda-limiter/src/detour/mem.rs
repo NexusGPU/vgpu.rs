@@ -1,10 +1,10 @@
 use std::ffi::c_uint;
-use std::ffi::c_ulonglong;
 
 use cudarc::driver::sys::CUarray;
 use cudarc::driver::sys::CUarray_format;
 use cudarc::driver::sys::CUdevice;
 use cudarc::driver::sys::CUdeviceptr;
+use cudarc::driver::sys::CUmemGenericAllocationHandle;
 use cudarc::driver::sys::CUmipmappedArray;
 use cudarc::driver::sys::CUresult;
 use cudarc::driver::sys::CUDA_ARRAY3D_DESCRIPTOR;
@@ -16,9 +16,7 @@ use utils::hooks::HookManager;
 use utils::replace_symbol;
 
 use crate::detour::round_up;
-use crate::detour::{CUdeviceptrV1, CudaArrayDescriptor}; // 添加导入
 use crate::global_trap;
-use crate::limiter::Error;
 use crate::with_device;
 use crate::GLOBAL_LIMITER;
 
@@ -34,12 +32,12 @@ use crate::GLOBAL_LIMITER;
 macro_rules! check_and_alloc {
     ($request_size:expr, $alloc_name:expr, $alloc_fn:expr) => {{
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-        let result = with_device!(|device| { limiter.get_pod_memory_usage(device) });
+        let result = with_device!(|_, device_uuid| { limiter.get_pod_memory_usage(device_uuid) });
 
         match result {
             Ok((used, mem_limit)) if used.saturating_add($request_size) > mem_limit => {
                 tracing::warn!(
-                    "Pod memory allocation denied ({}): pod_used ({}) + request ({}) > limit ({})",
+                    "Allocation denied by limiter ({}): used ({}) + request ({}) > limit ({})",
                     $alloc_name,
                     used,
                     $request_size,
@@ -48,7 +46,10 @@ macro_rules! check_and_alloc {
                 CUresult::CUDA_ERROR_OUT_OF_MEMORY
             }
             Ok(_) => cuda_alloc_with_retry($request_size, || $alloc_fn()),
-            Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
+            Err(e) => {
+                tracing::error!("Failed to get pod memory usage: {e}");
+                CUresult::CUDA_ERROR_UNKNOWN
+            }
         }
     }};
 }
@@ -109,7 +110,7 @@ pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u6
 }
 
 #[hook_fn]
-pub(crate) unsafe fn cu_mem_alloc_detour(dptr: *mut CUdeviceptrV1, bytesize: u64) -> CUresult {
+pub(crate) unsafe fn cu_mem_alloc_detour(dptr: *mut CUdeviceptr, bytesize: u64) -> CUresult {
     let request_size = bytesize;
     check_and_alloc!(request_size, "cuMemAlloc", || {
         FN_CU_MEM_ALLOC(dptr, bytesize)
@@ -144,7 +145,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_v2_detour(
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_alloc_pitch_detour(
-    dptr: *mut CUdeviceptrV1,
+    dptr: *mut CUdeviceptr,
     p_pitch: *mut usize,
     width_in_bytes: usize,
     height: usize,
@@ -159,7 +160,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_array_create_v2_detour(
     p_handle: *mut CUarray,
-    p_allocate_array: *const CudaArrayDescriptor,
+    p_allocate_array: *const CUDA_ARRAY_DESCRIPTOR,
 ) -> CUresult {
     let request_size = allocate_array_request_size(p_allocate_array);
     check_and_alloc!(request_size, "cuArrayCreate_v2", || {
@@ -221,7 +222,7 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_create_detour(
-    handle: *mut c_ulonglong,
+    handle: *mut CUmemGenericAllocationHandle,
     size: u64,
     prop: *const u64,
     flags: c_uint,
@@ -233,10 +234,10 @@ pub(crate) unsafe fn cu_mem_create_detour(
 }
 
 #[hook_fn]
-pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, _device: CUdevice) -> CUresult {
+pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, device: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    match with_device!(|device_idx| { limiter.get_mem_limit(device_idx) }) {
-        Ok(limit) => {
+    match limiter.get_pod_memory_usage_cu(device) {
+        Ok((_, limit)) => {
             *bytes = limit;
             CUresult::CUDA_SUCCESS
         }
@@ -245,10 +246,10 @@ pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, _device: CUd
 }
 
 #[hook_fn]
-pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, _device: CUdevice) -> CUresult {
+pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, device: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    match with_device!(|device_idx| { limiter.get_mem_limit(device_idx) }) {
-        Ok(limit) => {
+    match limiter.get_pod_memory_usage_cu(device) {
+        Ok((_, limit)) => {
             *bytes = limit;
             CUresult::CUDA_SUCCESS
         }
@@ -258,36 +259,32 @@ pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, _device: CUdevi
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let result = with_device!(|device| {
-        let (used, mem_limit) = limiter.get_pod_memory_usage(device)?;
-        Ok::<(u64, u64), Error>((mem_limit, used))
-    });
-
-    match result {
-        Ok((mem_limit, used)) => {
-            *free = mem_limit.saturating_sub(used);
-            *total = mem_limit;
-            CUresult::CUDA_SUCCESS
+    with_device!(|_, device_uuid| {
+        let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+        match limiter.get_pod_memory_usage(device_uuid) {
+            Ok((used, mem_limit)) => {
+                *total = mem_limit;
+                *free = mem_limit - used;
+                CUresult::CUDA_SUCCESS
+            }
+            Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
         }
-        Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
-    }
+    })
 }
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    match with_device!(|device| {
-        let (used, mem_limit) = limiter.get_pod_memory_usage(device)?;
-        Ok::<(u64, u64), Error>((mem_limit, used))
-    }) {
-        Ok((mem_limit, used)) => {
-            *free = mem_limit.saturating_sub(used);
-            *total = mem_limit;
-            CUresult::CUDA_SUCCESS
+    with_device!(|_, device_uuid| {
+        let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+        match limiter.get_pod_memory_usage(device_uuid) {
+            Ok((used, mem_limit)) => {
+                *total = mem_limit;
+                *free = mem_limit - used;
+                CUresult::CUDA_SUCCESS
+            }
+            Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
         }
-        Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
-    }
+    })
 }
 
 /// Enables hooks for CUDA memory management functions.

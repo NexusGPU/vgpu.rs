@@ -54,7 +54,7 @@ pub async fn unregister_worker_from_limiter_coordinator(
     container_name: &str,
     container_pid: u32,
 ) -> Result<()> {
-    let pod_identifier = &format!("{}_{}", pod_namespace, pod_name);
+    let pod_identifier = &format!("{pod_namespace}_{pod_name}");
     limiter_coordinator.unregister_device(pod_identifier, container_name, container_pid)?;
 
     tracing::info!(

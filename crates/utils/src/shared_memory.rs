@@ -17,10 +17,10 @@ use shared_memory::ShmemError;
 use tracing::info;
 use tracing::warn;
 
-/// Device state stored in shared memory.
+/// Device state stored in shared memory for a single device.
 #[repr(C)]
 #[derive(Debug)]
-pub struct SharedDeviceState {
+pub struct SharedDeviceInfoV1 {
     /// Currently available CUDA cores.
     pub available_cuda_cores: AtomicI32,
     /// Utilization limit percentage (0-100).
@@ -29,23 +29,20 @@ pub struct SharedDeviceState {
     pub mem_limit: AtomicU64,
     /// Total number of CUDA cores.
     pub total_cuda_cores: AtomicU32,
-    /// Device index.
-    pub device_idx: AtomicU32,
     /// Current pod memory usage in bytes.
     pub pod_memory_used: AtomicU64,
     /// Last memory update timestamp.
     pub last_memory_update: AtomicU64,
 }
 
-impl SharedDeviceState {
-    /// Creates a new `SharedDeviceState`.
-    pub fn new(device_idx: u32, total_cuda_cores: u32, up_limit: u32, mem_limit: u64) -> Self {
+impl SharedDeviceInfoV1 {
+    /// Creates a new SharedDeviceStateV1 instance.
+    pub fn new(total_cuda_cores: u32, up_limit: u32, mem_limit: u64) -> Self {
         Self {
             available_cuda_cores: AtomicI32::new(0),
             up_limit: AtomicU32::new(up_limit),
             mem_limit: AtomicU64::new(mem_limit),
             total_cuda_cores: AtomicU32::new(total_cuda_cores),
-            device_idx: AtomicU32::new(device_idx),
             pod_memory_used: AtomicU64::new(0),
             last_memory_update: AtomicU64::new(0),
         }
@@ -58,7 +55,13 @@ impl SharedDeviceState {
 
     /// Sets the number of available CUDA cores.
     pub fn set_available_cores(&self, cores: i32) {
-        self.available_cuda_cores.store(cores, Ordering::Release);
+        self.available_cuda_cores.store(cores, Ordering::Release)
+    }
+
+    /// Subtracts the number of available CUDA cores.
+    pub fn fetch_sub_available_cores(&self, cores: i32) -> i32 {
+        self.available_cuda_cores
+            .fetch_sub(cores, Ordering::Release)
     }
 
     /// Gets the utilization limit.
@@ -68,7 +71,7 @@ impl SharedDeviceState {
 
     /// Sets the utilization limit.
     pub fn set_up_limit(&self, limit: u32) {
-        self.up_limit.store(limit, Ordering::Release);
+        self.up_limit.store(limit, Ordering::Release)
     }
 
     /// Gets the memory limit.
@@ -78,17 +81,12 @@ impl SharedDeviceState {
 
     /// Sets the memory limit.
     pub fn set_mem_limit(&self, limit: u64) {
-        self.mem_limit.store(limit, Ordering::Release);
+        self.mem_limit.store(limit, Ordering::Release)
     }
 
     /// Gets the total number of CUDA cores.
     pub fn get_total_cores(&self) -> u32 {
         self.total_cuda_cores.load(Ordering::Acquire)
-    }
-
-    /// Gets the device index.
-    pub fn get_device_idx(&self) -> u32 {
-        self.device_idx.load(Ordering::Acquire)
     }
 
     /// Gets the pod memory usage.
@@ -105,6 +103,256 @@ impl SharedDeviceState {
     /// Gets the last memory update timestamp.
     pub fn get_last_memory_update(&self) -> u64 {
         self.last_memory_update.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug)]
+pub enum SharedDeviceInfo {
+    V1(SharedDeviceInfoV1),
+}
+
+impl SharedDeviceInfo {
+    /// Creates a new SharedDeviceInfo instance with V1 format.
+    pub fn new(total_cuda_cores: u32, up_limit: u32, mem_limit: u64) -> Self {
+        Self::V1(SharedDeviceInfoV1::new(
+            total_cuda_cores,
+            up_limit,
+            mem_limit,
+        ))
+    }
+
+    /// Gets the number of available CUDA cores.
+    pub fn get_available_cores(&self) -> i32 {
+        match self {
+            Self::V1(info) => info.get_available_cores(),
+        }
+    }
+
+    /// Sets the number of available CUDA cores.
+    pub fn set_available_cores(&self, cores: i32) {
+        match self {
+            Self::V1(info) => info.set_available_cores(cores),
+        }
+    }
+
+    /// Subtracts the number of available CUDA cores.
+    pub fn fetch_sub_available_cores(&self, cores: i32) -> i32 {
+        match self {
+            Self::V1(info) => info.fetch_sub_available_cores(cores),
+        }
+    }
+
+    /// Gets the utilization limit.
+    pub fn get_up_limit(&self) -> u32 {
+        match self {
+            Self::V1(info) => info.get_up_limit(),
+        }
+    }
+
+    /// Sets the utilization limit.
+    pub fn set_up_limit(&self, limit: u32) {
+        match self {
+            Self::V1(info) => info.set_up_limit(limit),
+        }
+    }
+
+    /// Gets the memory limit.
+    pub fn get_mem_limit(&self) -> u64 {
+        match self {
+            Self::V1(info) => info.get_mem_limit(),
+        }
+    }
+
+    /// Sets the memory limit.
+    pub fn set_mem_limit(&self, limit: u64) {
+        match self {
+            Self::V1(info) => info.set_mem_limit(limit),
+        }
+    }
+
+    /// Gets the total number of CUDA cores.
+    pub fn get_total_cores(&self) -> u32 {
+        match self {
+            Self::V1(info) => info.get_total_cores(),
+        }
+    }
+
+    /// Gets the pod memory usage.
+    pub fn get_pod_memory_used(&self) -> u64 {
+        match self {
+            Self::V1(info) => info.get_pod_memory_used(),
+        }
+    }
+
+    /// Updates the pod memory usage and timestamp.
+    pub fn update_pod_memory_used(&self, used: u64, timestamp: u64) {
+        match self {
+            Self::V1(info) => info.update_pod_memory_used(used, timestamp),
+        }
+    }
+
+    /// Gets the last memory update timestamp.
+    pub fn get_last_memory_update(&self) -> u64 {
+        match self {
+            Self::V1(info) => info.get_last_memory_update(),
+        }
+    }
+}
+
+/// Hypervisor state containing multiple devices and health information.
+#[repr(C)]
+#[derive(Debug)]
+pub struct SharedDeviceState {
+    /// Map of device UUID to device state.
+    pub devices: RwLock<HashMap<String, SharedDeviceInfo>>,
+    /// Last heartbeat timestamp from hypervisor (for health monitoring).
+    pub last_heartbeat: AtomicU64,
+}
+
+impl SharedDeviceState {
+    /// Creates a new SharedDeviceState instance.
+    pub fn new() -> Self {
+        Self {
+            devices: RwLock::new(HashMap::new()),
+            last_heartbeat: AtomicU64::new(0),
+        }
+    }
+
+    /// Gets the current CUDA device UUID.
+    pub fn get_current_device_uuid() -> Result<String> {
+        let mut device: i32 = 0;
+        unsafe {
+            // Call the CUDA API to get the current device
+            let result = cudarc::driver::sys::cuCtxGetDevice(&mut device as *mut i32);
+            if result != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
+                return Err(anyhow::anyhow!(
+                    "Failed to get current CUDA device: error code {:?}",
+                    result
+                ));
+            }
+
+            // Get device UUID
+            let mut uuid: cudarc::driver::sys::CUuuid_st =
+                cudarc::driver::sys::CUuuid_st::default();
+            let uuid_result = cudarc::driver::sys::cuDeviceGetUuid(
+                &mut uuid as *mut cudarc::driver::sys::CUuuid_st,
+                device,
+            );
+            if uuid_result != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
+                return Err(anyhow::anyhow!(
+                    "Failed to get CUDA device UUID: error code {:?}",
+                    uuid_result
+                ));
+            }
+
+            // Convert UUID to string
+            let uuid_str = format!(
+                "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                uuid.bytes[0], uuid.bytes[1], uuid.bytes[2], uuid.bytes[3],
+                uuid.bytes[4], uuid.bytes[5], uuid.bytes[6], uuid.bytes[7],
+                uuid.bytes[8], uuid.bytes[9], uuid.bytes[10], uuid.bytes[11],
+                uuid.bytes[12], uuid.bytes[13], uuid.bytes[14], uuid.bytes[15]
+            );
+
+            Ok(uuid_str)
+        }
+    }
+
+    /// Adds or updates a device in the state.
+    pub fn add_device(&self, device_uuid: String, device_info: SharedDeviceInfo) {
+        let mut devices = self.devices.write().unwrap();
+        devices.insert(device_uuid, device_info);
+    }
+
+    /// Removes a device from the state.
+    pub fn remove_device(&self, device_uuid: &str) -> Option<SharedDeviceInfo> {
+        let mut devices = self.devices.write().unwrap();
+        devices.remove(device_uuid)
+    }
+
+    /// Checks if a device exists by UUID.
+    pub fn has_device(&self, device_uuid: &str) -> bool {
+        let devices = self.devices.read().unwrap();
+        devices.contains_key(device_uuid)
+    }
+
+    /// Gets a list of all device UUIDs.
+    pub fn get_device_uuids(&self) -> Vec<String> {
+        let devices = self.devices.read().unwrap();
+        devices.keys().cloned().collect()
+    }
+
+    /// Gets the number of devices.
+    pub fn device_count(&self) -> usize {
+        let devices = self.devices.read().unwrap();
+        devices.len()
+    }
+
+    /// Updates the heartbeat timestamp.
+    pub fn update_heartbeat(&self, timestamp: u64) {
+        self.last_heartbeat.store(timestamp, Ordering::Release);
+    }
+
+    /// Gets the last heartbeat timestamp.
+    pub fn get_last_heartbeat(&self) -> u64 {
+        self.last_heartbeat.load(Ordering::Acquire)
+    }
+
+    /// Checks if the hypervisor is healthy based on heartbeat timeout.
+    /// Returns true if the last heartbeat is within the specified timeout.
+    pub fn is_healthy(&self, timeout_seconds: u64) -> bool {
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last_heartbeat = self.get_last_heartbeat();
+
+        if last_heartbeat == 0 {
+            // No heartbeat recorded yet
+            return false;
+        }
+
+        current_time - last_heartbeat <= timeout_seconds
+    }
+
+    /// Executes a function on the current CUDA device if it exists.
+    /// This provides thread-safe access to device operations for the current CUDA device.
+    pub fn with_current_device<F, R>(&self, f: F) -> Result<Option<R>>
+    where F: FnOnce(&SharedDeviceInfo) -> R {
+        let device_uuid = Self::get_current_device_uuid()?;
+        let devices = self.devices.read().unwrap();
+        Ok(devices.get(&device_uuid).map(f))
+    }
+
+    /// Executes a mutable function on the current CUDA device if it exists.
+    /// This provides thread-safe mutable access to device operations for the current CUDA device.
+    pub fn with_current_device_mut<F, R>(&self, f: F) -> Result<Option<R>>
+    where F: FnOnce(&mut SharedDeviceInfo) -> R {
+        let device_uuid = Self::get_current_device_uuid()?;
+        let mut devices = self.devices.write().unwrap();
+        Ok(devices.get_mut(&device_uuid).map(f))
+    }
+
+    /// Executes a function on a device by UUID if it exists.
+    /// This provides thread-safe access to device operations.
+    pub fn with_device_by_uuid<F, R>(&self, device_uuid: &str, f: F) -> Option<R>
+    where F: FnOnce(&SharedDeviceInfo) -> R {
+        let devices = self.devices.read().unwrap();
+        devices.get(device_uuid).map(f)
+    }
+
+    /// Executes a mutable function on a device by UUID if it exists.
+    /// This provides thread-safe mutable access to device operations.
+    pub fn with_device_by_uuid_mut<F, R>(&self, device_uuid: &str, f: F) -> Option<R>
+    where F: FnOnce(&mut SharedDeviceInfo) -> R {
+        let mut devices = self.devices.write().unwrap();
+        devices.get_mut(device_uuid).map(f)
+    }
+}
+
+impl Default for SharedDeviceState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -149,8 +397,7 @@ impl ThreadSafeSharedMemoryManager {
         // Initialize the shared memory data.
         let ptr = shmem.get_ptr();
         unsafe {
-            ptr.write(SharedDeviceState::new(
-                config.device_idx,
+            ptr.write(SharedDeviceInfoV1::new(
                 config.total_cuda_cores,
                 config.up_limit,
                 config.mem_limit,
@@ -170,7 +417,7 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Gets a pointer to the shared memory by its identifier.
-    pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut SharedDeviceState> {
+    pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut SharedDeviceInfoV1> {
         let memories = self.active_memories.read().unwrap();
 
         if let Some((shmem, _)) = memories.get(identifier) {
@@ -228,19 +475,19 @@ unsafe impl Sync for ThreadSafeSharedMemoryManager {}
 /// Safely access shared memory, automatically handling the segment's lifecycle.
 pub struct SharedMemoryHandle {
     _shmem: Shmem,
-    ptr: *mut SharedDeviceState,
+    ptr: *mut SharedDeviceInfoV1,
 }
 
 impl SharedMemoryHandle {
     /// Opens an existing shared memory segment.
     pub fn open(identifier: &str) -> Result<Self> {
         let shmem = ShmemConf::new()
-            .size(std::mem::size_of::<SharedDeviceState>())
+            .size(std::mem::size_of::<SharedDeviceInfoV1>())
             .os_id(identifier)
             .open()
             .context("Failed to open shared memory")?;
 
-        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
+        let ptr = shmem.as_ptr() as *mut SharedDeviceInfoV1;
 
         Ok(Self { _shmem: shmem, ptr })
     }
@@ -248,7 +495,7 @@ impl SharedMemoryHandle {
     /// Creates a new shared memory segment.
     pub fn create(identifier: &str, config: &DeviceConfig) -> Result<Self> {
         let shmem = match ShmemConf::new()
-            .size(std::mem::size_of::<SharedDeviceState>())
+            .size(std::mem::size_of::<SharedDeviceInfoV1>())
             .os_id(identifier)
             .create()
         {
@@ -256,7 +503,7 @@ impl SharedMemoryHandle {
             Err(ShmemError::LinkExists) => {
                 // If it already exists, try to open it.
                 ShmemConf::new()
-                    .size(std::mem::size_of::<SharedDeviceState>())
+                    .size(std::mem::size_of::<SharedDeviceInfoV1>())
                     .os_id(identifier)
                     .open()
                     .context("Failed to open existing shared memory")?
@@ -264,12 +511,11 @@ impl SharedMemoryHandle {
             Err(e) => return Err(anyhow::anyhow!("Failed to create shared memory: {}", e)),
         };
 
-        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
+        let ptr = shmem.as_ptr() as *mut SharedDeviceInfoV1;
 
         // Initialize the shared memory data.
         unsafe {
-            ptr.write(SharedDeviceState::new(
-                config.device_idx,
+            ptr.write(SharedDeviceInfoV1::new(
                 config.total_cuda_cores,
                 config.up_limit,
                 config.mem_limit,
@@ -278,7 +524,6 @@ impl SharedMemoryHandle {
 
         info!(
             identifier = %identifier,
-            device_idx = config.device_idx,
             "Created shared memory segment"
         );
 
@@ -286,12 +531,12 @@ impl SharedMemoryHandle {
     }
 
     /// Gets a pointer to the shared device state.
-    pub fn get_ptr(&self) -> *mut SharedDeviceState {
+    pub fn get_ptr(&self) -> *mut SharedDeviceInfoV1 {
         self.ptr
     }
 
     /// Gets a reference to the shared device state.
-    pub fn get_state(&self) -> &SharedDeviceState {
+    pub fn get_state(&self) -> &SharedDeviceInfoV1 {
         unsafe { &*self.ptr }
     }
 }
@@ -331,84 +576,169 @@ mod tests {
 
     #[test]
     fn shared_device_state_creation() {
-        let state = SharedDeviceState::new(
-            TEST_DEVICE_IDX,
-            TEST_TOTAL_CORES,
-            TEST_UP_LIMIT,
-            TEST_MEM_LIMIT,
+        let state = SharedDeviceState::new();
+
+        // Test initial state
+        assert_eq!(state.device_count(), 0, "Should start with no devices");
+        assert_eq!(
+            state.get_last_heartbeat(),
+            0,
+            "Should start with no heartbeat"
+        );
+        assert!(
+            !state.is_healthy(30),
+            "Should not be healthy without heartbeat"
         );
 
+        // Add a device
+        let device_state = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
+        let device_uuid = "test-device-uuid".to_string();
+        state.add_device(device_uuid.clone(), device_state);
+
+        assert_eq!(state.device_count(), 1, "Should have one device");
+        assert!(state.has_device(&device_uuid), "Should contain the device");
+
+        // Test heartbeat
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        state.update_heartbeat(timestamp);
         assert_eq!(
-            state.get_device_idx(),
-            TEST_DEVICE_IDX,
-            "Device index should match initialization value"
+            state.get_last_heartbeat(),
+            timestamp,
+            "Heartbeat should be updated"
         );
-        assert_eq!(
-            state.get_total_cores(),
-            TEST_TOTAL_CORES,
-            "Total cores should match initialization value"
+        assert!(
+            state.is_healthy(30),
+            "Should be healthy with recent heartbeat"
         );
+    }
+
+    #[test]
+    fn shared_device_state_device_operations() {
+        let state = SharedDeviceState::new();
+        let device_uuid = "test-device-uuid".to_string();
+
+        // Add device
+        let device_state = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
+        state.add_device(device_uuid.clone(), device_state);
+
+        // Test device operations using with_device_by_uuid
+        let available_cores =
+            state.with_device_by_uuid(&device_uuid, |device| device.get_available_cores());
         assert_eq!(
-            state.get_up_limit(),
-            TEST_UP_LIMIT,
-            "Up limit should match initialization value"
+            available_cores,
+            Some(0),
+            "Available cores should be 0 initially"
         );
+
+        // Test mutable operations using with_device_by_uuid_mut
+        let result = state.with_device_by_uuid_mut(&device_uuid, |device| {
+            device.set_available_cores(100);
+            device.get_available_cores()
+        });
         assert_eq!(
-            state.get_mem_limit(),
-            TEST_MEM_LIMIT,
-            "Memory limit should match initialization value"
+            result,
+            Some(100),
+            "Available cores should be updated to 100"
         );
+
+        // Test device removal
+        let removed_device = state.remove_device(&device_uuid);
+        assert!(removed_device.is_some(), "Should return the removed device");
         assert_eq!(
-            state.get_available_cores(),
+            state.device_count(),
             0,
-            "Available cores should be initialized to 0"
+            "Should have no devices after removal"
+        );
+        assert!(
+            !state.has_device(&device_uuid),
+            "Should not contain the device after removal"
+        );
+    }
+
+    #[test]
+    fn shared_device_state_multiple_devices() {
+        let state = SharedDeviceState::new();
+
+        // Add multiple devices
+        for i in 0..3 {
+            let device_uuid = format!("device-{}", i);
+            let device_state = SharedDeviceInfo::new(
+                1024 + i as u32 * 512,
+                80 + i as u32 * 5,
+                (1024 + i as u64 * 512) * 1024 * 1024,
+            );
+            state.add_device(device_uuid, device_state);
+        }
+
+        assert_eq!(state.device_count(), 3, "Should have 3 devices");
+
+        let device_uuids = state.get_device_uuids();
+        assert_eq!(device_uuids.len(), 3, "Should return 3 device UUIDs");
+
+        // Test operations on specific devices
+        let cores = state.with_device_by_uuid("device-1", |device| device.get_total_cores());
+        assert_eq!(
+            cores,
+            Some(1024 + 512),
+            "Device 1 should have correct total cores"
+        );
+
+        // Update available cores for device-2
+        state.with_device_by_uuid_mut("device-2", |device| {
+            device.set_available_cores(256);
+        });
+
+        let available_cores =
+            state.with_device_by_uuid("device-2", |device| device.get_available_cores());
+        assert_eq!(
+            available_cores,
+            Some(256),
+            "Device 2 should have updated available cores"
         );
     }
 
     #[test]
     fn shared_device_state_atomic_operations() {
-        let state = SharedDeviceState::new(
-            TEST_DEVICE_IDX,
-            TEST_TOTAL_CORES,
-            TEST_UP_LIMIT,
-            TEST_MEM_LIMIT,
-        );
+        let device_state = SharedDeviceInfoV1::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
 
         // Test available cores operations
-        state.set_available_cores(512);
+        device_state.set_available_cores(512);
         assert_eq!(
-            state.get_available_cores(),
+            device_state.get_available_cores(),
             512,
             "Available cores should be updated correctly"
         );
 
-        state.set_available_cores(-100);
+        device_state.set_available_cores(-100);
         assert_eq!(
-            state.get_available_cores(),
+            device_state.get_available_cores(),
             -100,
             "Available cores should support negative values"
         );
 
         // Test up limit operations
-        state.set_up_limit(90);
+        device_state.set_up_limit(90);
         assert_eq!(
-            state.get_up_limit(),
+            device_state.get_up_limit(),
             90,
             "Up limit should be updated correctly"
         );
 
-        state.set_up_limit(0);
+        device_state.set_up_limit(0);
         assert_eq!(
-            state.get_up_limit(),
+            device_state.get_up_limit(),
             0,
             "Up limit should support zero value"
         );
 
         // Test memory limit operations
         let new_mem_limit = 2 * 1024 * 1024 * 1024; // 2GB
-        state.set_mem_limit(new_mem_limit);
+        device_state.set_mem_limit(new_mem_limit);
         assert_eq!(
-            state.get_mem_limit(),
+            device_state.get_mem_limit(),
             new_mem_limit,
             "Memory limit should be updated correctly"
         );
@@ -416,28 +746,38 @@ mod tests {
 
     #[test]
     fn shared_device_state_concurrent_access() {
-        let state = Arc::new(SharedDeviceState::new(
-            TEST_DEVICE_IDX,
-            TEST_TOTAL_CORES,
-            TEST_UP_LIMIT,
-            TEST_MEM_LIMIT,
-        ));
+        let state = Arc::new(SharedDeviceState::new());
+        let device_uuid = "test-device-uuid".to_string();
+
+        // Add device to the state
+        let device_state = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
+        state.add_device(device_uuid.clone(), device_state);
+
         let mut handles = vec![];
 
         // Spawn multiple threads to test atomic operations
         for i in 0..10 {
             let state_clone = Arc::clone(&state);
+            let device_uuid_clone = device_uuid.clone();
             let handle = thread::spawn(move || {
                 for j in 0..100 {
                     let value = i * 100 + j;
-                    state_clone.set_available_cores(value);
-                    let read_value = state_clone.get_available_cores();
-                    // Since we are accessing concurrently, the read value may not be the one just set,
-                    // but it should be a valid value set by one of the threads.
-                    assert!(
-                        (0..1000).contains(&read_value),
-                        "Read value should be within expected range"
-                    );
+                    state_clone.with_device_by_uuid_mut(&device_uuid_clone, |device| {
+                        device.set_available_cores(value);
+                    });
+
+                    if let Some(read_value) = state_clone
+                        .with_device_by_uuid(&device_uuid_clone, |device| {
+                            device.get_available_cores()
+                        })
+                    {
+                        // Since we are accessing concurrently, the read value may not be the one just set,
+                        // but it should be a valid value set by one of the threads.
+                        assert!(
+                            (0..1000).contains(&read_value),
+                            "Read value should be within expected range"
+                        );
+                    }
                 }
             });
             handles.push(handle);
@@ -449,11 +789,14 @@ mod tests {
         }
 
         // Final state should be one of the values set by the threads
-        let final_value = state.get_available_cores();
-        assert!(
-            (0..1000).contains(&final_value),
-            "Final value should be within expected range"
-        );
+        if let Some(final_value) =
+            state.with_device_by_uuid(&device_uuid, |device| device.get_available_cores())
+        {
+            assert!(
+                (0..1000).contains(&final_value),
+                "Final value should be within expected range"
+            );
+        }
     }
 
     #[test]
@@ -466,11 +809,6 @@ mod tests {
             .expect("should create shared memory handle successfully");
 
         let state = handle.get_state();
-        assert_eq!(
-            state.get_device_idx(),
-            TEST_DEVICE_IDX,
-            "Device index should match configuration"
-        );
         assert_eq!(
             state.get_total_cores(),
             TEST_TOTAL_CORES,
@@ -486,17 +824,6 @@ mod tests {
             TEST_MEM_LIMIT,
             "Memory limit should match configuration"
         );
-
-        // Test pointer access
-        let ptr = handle.get_ptr();
-        unsafe {
-            let state_from_ptr = &*ptr;
-            assert_eq!(
-                state_from_ptr.get_device_idx(),
-                TEST_DEVICE_IDX,
-                "Device index from pointer should match"
-            );
-        }
     }
 
     #[test]
@@ -513,11 +840,6 @@ mod tests {
             .expect("should open existing shared memory successfully");
 
         let state = handle2.get_state();
-        assert_eq!(
-            state.get_device_idx(),
-            TEST_DEVICE_IDX,
-            "Device index should match original configuration"
-        );
         assert_eq!(
             state.get_total_cores(),
             TEST_TOTAL_CORES,
@@ -590,30 +912,24 @@ mod tests {
             total_cuda_cores: u32::MAX,
         };
 
-        let state = SharedDeviceState::new(
-            max_config.device_idx,
+        let device_state = SharedDeviceInfoV1::new(
             max_config.total_cuda_cores,
             max_config.up_limit,
             max_config.mem_limit,
         );
 
         assert_eq!(
-            state.get_device_idx(),
-            u32::MAX,
-            "Should handle maximum u32 value"
-        );
-        assert_eq!(
-            state.get_total_cores(),
+            device_state.get_total_cores(),
             u32::MAX,
             "Should handle maximum u32 value for cores"
         );
         assert_eq!(
-            state.get_up_limit(),
+            device_state.get_up_limit(),
             u32::MAX,
             "Should handle maximum u32 value for limit"
         );
         assert_eq!(
-            state.get_mem_limit(),
+            device_state.get_mem_limit(),
             u64::MAX,
             "Should handle maximum u64 value for memory"
         );
@@ -626,29 +942,31 @@ mod tests {
             total_cuda_cores: 0,
         };
 
-        let state = SharedDeviceState::new(
-            min_config.device_idx,
+        let device_state = SharedDeviceInfoV1::new(
             min_config.total_cuda_cores,
             min_config.up_limit,
             min_config.mem_limit,
         );
 
-        assert_eq!(state.get_device_idx(), 0, "Should handle minimum value");
-        assert_eq!(state.get_total_cores(), 0, "Should handle zero cores");
-        assert_eq!(state.get_up_limit(), 0, "Should handle zero limit");
-        assert_eq!(state.get_mem_limit(), 0, "Should handle zero memory");
+        assert_eq!(
+            device_state.get_total_cores(),
+            0,
+            "Should handle zero cores"
+        );
+        assert_eq!(device_state.get_up_limit(), 0, "Should handle zero limit");
+        assert_eq!(device_state.get_mem_limit(), 0, "Should handle zero memory");
 
         // Test available cores with extreme values
-        state.set_available_cores(i32::MAX);
+        device_state.set_available_cores(i32::MAX);
         assert_eq!(
-            state.get_available_cores(),
+            device_state.get_available_cores(),
             i32::MAX,
             "Should handle maximum i32 value"
         );
 
-        state.set_available_cores(i32::MIN);
+        device_state.set_available_cores(i32::MIN);
         assert_eq!(
-            state.get_available_cores(),
+            device_state.get_available_cores(),
             i32::MIN,
             "Should handle minimum i32 value"
         );
@@ -934,8 +1252,8 @@ mod tests {
         assert!(manager.contains(&identifier));
         let ptr = manager.get_shared_memory(&identifier).unwrap();
         unsafe {
-            let state = &*ptr;
-            assert_eq!(state.get_device_idx(), config.device_idx);
+            let device_info = &*ptr;
+            assert_eq!(device_info.get_mem_limit(), config.mem_limit);
         }
 
         // Cleanup
@@ -1011,14 +1329,14 @@ mod tests {
             let identifier_clone = identifier.clone();
             let handle = thread::spawn(move || {
                 let handle = SharedMemoryHandle::open(&identifier_clone).unwrap();
-                let state = handle.get_state();
+                let device_info = handle.get_state();
 
                 // Write a unique value from this thread
-                state.set_available_cores(i);
+                device_info.set_available_cores(i);
                 thread::sleep(Duration::from_millis(20)); // Allow time for other threads to see it
 
                 // Read the value and see if it has been changed by another thread
-                let value = state.get_available_cores();
+                let value = device_info.get_available_cores();
                 (i, value)
             });
             handles.push(handle);
@@ -1038,5 +1356,66 @@ mod tests {
 
         // Cleanup
         manager.cleanup(&identifier).unwrap();
+    }
+
+    #[test]
+    fn test_new_shared_device_state_structure() {
+        let state = SharedDeviceState::new();
+
+        // Test initial state
+        assert_eq!(state.device_count(), 0);
+        assert_eq!(state.get_last_heartbeat(), 0);
+        assert!(state.get_device_uuids().is_empty());
+
+        // Add devices with different UUIDs
+        let device1 = SharedDeviceInfo::new(1024, 80, 1024 * 1024 * 1024);
+        let device2 = SharedDeviceInfo::new(2048, 90, 2048 * 1024 * 1024);
+
+        state.add_device("gpu-0".to_string(), device1);
+        state.add_device("gpu-1".to_string(), device2);
+
+        // Test device management
+        assert_eq!(state.device_count(), 2);
+        assert!(state.has_device("gpu-0"));
+        assert!(state.has_device("gpu-1"));
+        assert!(!state.has_device("gpu-2"));
+
+        let device_uuids = state.get_device_uuids();
+        assert_eq!(device_uuids.len(), 2);
+        assert!(device_uuids.contains(&"gpu-0".to_string()));
+        assert!(device_uuids.contains(&"gpu-1".to_string()));
+
+        // Test device operations
+        state.with_device_by_uuid_mut("gpu-0", |device| {
+            device.set_available_cores(100);
+        });
+
+        let cores = state.with_device_by_uuid("gpu-0", |device| device.get_available_cores());
+        assert_eq!(cores, Some(100));
+
+        // Test heartbeat functionality
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        state.update_heartbeat(now);
+        assert_eq!(state.get_last_heartbeat(), now);
+        assert!(state.is_healthy(30)); // Should be healthy within 30 seconds
+
+        // Test unhealthy state with old heartbeat
+        state.update_heartbeat(now - 60); // 60 seconds ago
+        assert!(!state.is_healthy(30)); // Should be unhealthy
+
+        // Test device removal
+        let removed = state.remove_device("gpu-0");
+        assert!(removed.is_some());
+        assert_eq!(state.device_count(), 1);
+        assert!(!state.has_device("gpu-0"));
+        assert!(state.has_device("gpu-1"));
+
+        // Test with_device_by_uuid on removed device
+        let result = state.with_device_by_uuid("gpu-0", |device| device.get_available_cores());
+        assert_eq!(result, None);
     }
 }
