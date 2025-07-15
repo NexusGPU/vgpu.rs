@@ -24,6 +24,7 @@
                 "GPU_NODE_NAME": "gpu-2"
             },
             "args": [
+                "daemon",
                 "--gpu-metrics-file",
                 "logs/metrics.log",
                 "--kubelet-device-state-path",

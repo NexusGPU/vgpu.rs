@@ -200,7 +200,7 @@ impl GpuDeviceStateWatcher {
         let device_state = self.read_device_state_file().await?;
 
         // Extract current device IDs from PodDeviceEntries
-        let current_device_ids = self.extract_device_ids(&device_state)?;
+        let current_device_ids = self.extract_device_ids(&device_state, resource_to_system_map)?;
 
         // Find added and removed devices
         let added_devices: HashSet<_> =
@@ -269,13 +269,17 @@ impl GpuDeviceStateWatcher {
     fn extract_device_ids(
         &self,
         device_state: &KubeletDeviceState,
+        resource_to_system_map: &HashMap<String, String>,
     ) -> Result<HashSet<String>, Report<KubernetesError>> {
         let mut device_ids = HashSet::new();
 
         for entry in &device_state.data.pod_device_entries {
-            for device_list in entry.device_ids.values() {
-                for device_id in device_list {
-                    device_ids.insert(device_id.to_lowercase());
+            // just extract GPU devices from resource allocation state
+            if resource_to_system_map.contains_key(&entry.resource_name) {
+                for device_list in entry.device_ids.values() {
+                    for device_id in device_list {
+                        device_ids.insert(device_id.to_lowercase());
+                    }
                 }
             }
         }
@@ -662,7 +666,8 @@ mod tests {
         let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
         let device_state = create_test_device_state();
 
-        let result = watcher.extract_device_ids(&device_state);
+        let resource_system_map = GpuDeviceStateWatcher::create_resource_system_map();
+        let result = watcher.extract_device_ids(&device_state, &resource_system_map);
 
         assert!(result.is_ok(), "should successfully extract device IDs");
         let device_ids = result.unwrap();
@@ -678,7 +683,8 @@ mod tests {
         let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
         let device_state = create_empty_device_state();
 
-        let result = watcher.extract_device_ids(&device_state);
+        let resource_system_map = GpuDeviceStateWatcher::create_resource_system_map();
+        let result = watcher.extract_device_ids(&device_state, &resource_system_map);
 
         assert!(
             result.is_ok(),
@@ -725,7 +731,8 @@ mod tests {
             checksum: 12345,
         };
 
-        let result = watcher.extract_device_ids(&device_state);
+        let resource_system_map = GpuDeviceStateWatcher::create_resource_system_map();
+        let result = watcher.extract_device_ids(&device_state, &resource_system_map);
 
         assert!(
             result.is_ok(),
@@ -976,7 +983,8 @@ mod tests {
             checksum: 54321,
         };
 
-        let result = watcher.extract_device_ids(&device_state);
+        let resource_system_map = GpuDeviceStateWatcher::create_resource_system_map();
+        let result = watcher.extract_device_ids(&device_state, &resource_system_map);
         assert!(result.is_ok(), "should handle complex device ID structure");
 
         let device_ids = result.unwrap();
