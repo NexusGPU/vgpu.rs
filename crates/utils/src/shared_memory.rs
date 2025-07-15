@@ -236,7 +236,7 @@ impl SharedMemoryHandle {
     pub fn open(identifier: &str) -> Result<Self> {
         let shmem = ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .flink(identifier)
+            .os_id(identifier)
             .open()
             .context("Failed to open shared memory")?;
 
@@ -249,7 +249,7 @@ impl SharedMemoryHandle {
     pub fn create(identifier: &str, config: &DeviceConfig) -> Result<Self> {
         let shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .flink(identifier)
+            .os_id(identifier)
             .create()
         {
             Ok(shmem) => shmem,
@@ -257,7 +257,7 @@ impl SharedMemoryHandle {
                 // If it already exists, try to open it.
                 ShmemConf::new()
                     .size(std::mem::size_of::<SharedDeviceState>())
-                    .flink(identifier)
+                    .os_id(identifier)
                     .open()
                     .context("Failed to open existing shared memory")?
             }

@@ -52,10 +52,7 @@ pub enum Commands {
 
 #[derive(Parser)]
 pub struct ShowShmArgs {
-    #[arg(
-        long,
-        help = "Shared memory identifier",
-    )]
+    #[arg(long, help = "Shared memory identifier")]
     pub shm_identifier: String,
 }
 
