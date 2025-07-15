@@ -42,9 +42,21 @@ pub struct Cli {
 pub enum Commands {
     /// Run hypervisor daemon
     Daemon(Box<DaemonArgs>),
-    /// Mount shared memory
+    /// Mount shared memory to host path
     #[command(name = "mount-shm")]
     MountShm(MountShmArgs),
+    /// Show shared memory state
+    #[command(name = "show-shm")]
+    ShowShm(ShowShmArgs),
+}
+
+#[derive(Parser)]
+pub struct ShowShmArgs {
+    #[arg(
+        long,
+        help = "Shared memory identifier",
+    )]
+    pub shm_identifier: String,
 }
 
 #[derive(Parser)]

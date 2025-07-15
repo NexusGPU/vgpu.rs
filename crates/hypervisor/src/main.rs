@@ -45,7 +45,16 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Daemon(daemon_args) => run_daemon(*daemon_args).await,
         Commands::MountShm(mount_shm_args) => run_mount_shm(mount_shm_args).await,
+        Commands::ShowShm(show_shm_args) => run_show_shm(show_shm_args).await,
     }
+}
+async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
+    use utils::shared_memory::SharedMemoryHandle;
+    let handle = SharedMemoryHandle::open(&show_shm_args.shm_identifier)
+        .context("Failed to open shared memory")?;
+    let state = handle.get_state();
+    tracing::info!("Shared memory state: {:?}", state);
+    Ok(())
 }
 
 async fn run_daemon(daemon_args: crate::config::DaemonArgs) -> Result<()> {
