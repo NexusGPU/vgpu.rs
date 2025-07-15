@@ -126,7 +126,7 @@ impl WorkerManager {
 
     /// Handle a pod creation event.
     pub async fn handle_pod_created(&self, pod_info: TensorFusionPodInfo) -> Result<()> {
-        let worker_key = format!("{}/{}", pod_info.0.namespace, pod_info.0.pod_name);
+        let worker_key = format!("{}_{}", pod_info.0.namespace, pod_info.0.pod_name);
         info!("Processing pod creation: {worker_key}");
 
         // Store worker info in registry
@@ -216,7 +216,7 @@ impl WorkerManager {
         container_pid: u32,
         gpu_observer: Arc<GpuObserver>,
     ) -> Result<()> {
-        let worker_key = format!("{namespace}/{pod_name}");
+        let worker_key = format!("{namespace}_{pod_name}");
 
         info!("associate_discovered_worker started for {worker_key} host_pid={host_pid}");
 
@@ -312,7 +312,7 @@ impl WorkerManager {
         pod_info: TensorFusionPodInfo,
         node_name: Option<String>,
     ) -> Result<()> {
-        let worker_key = format!("{namespace}/{pod_name}");
+        let worker_key = format!("{namespace}_{pod_name}");
         info!("Processing pod update: {worker_key}");
 
         // For now, treat update the same as creation
@@ -336,7 +336,7 @@ impl WorkerManager {
 
     /// Handle a pod deletion event.
     pub async fn handle_pod_deleted(&self, pod_name: &str, namespace: &str) -> Result<()> {
-        let worker_key = format!("{namespace}/{pod_name}");
+        let worker_key = format!("{namespace}_{pod_name}");
         info!("Processing pod deletion: {worker_key}");
 
         {

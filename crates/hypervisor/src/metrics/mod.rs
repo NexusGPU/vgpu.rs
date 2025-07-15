@@ -161,7 +161,7 @@ pub(crate) async fn run_metrics(
                                     continue;
                                 }
                                 let worker_info = worker_entry.unwrap().info;
-                                let pod_identifier = format!("{}:{}", worker_info.namespace, worker_info.pod_name);
+                                let pod_identifier = format!("{}_{}", worker_info.namespace, worker_info.pod_name);
                                 let acc = worker_acc.entry(pod_identifier).or_default();
                                 acc.memory_bytes += resources.memory_bytes;
                                 acc.compute_percentage += resources.compute_percentage as f64;

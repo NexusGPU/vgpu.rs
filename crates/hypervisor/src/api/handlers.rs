@@ -53,7 +53,7 @@ pub async fn get_worker_info(
     );
 
     let registry = worker_registry.read().await;
-    let worker_key = format!("{namespace}/{pod_name}");
+    let worker_key = format!("{namespace}_{pod_name}");
 
     // First, check if the worker exists for this pod
     let Some(worker_entry) = registry.get(&worker_key) else {
@@ -339,8 +339,8 @@ mod tests {
         let container_name = "container1";
         let container_pid = 100u32;
 
-        let worker_key = format!("{namespace}/{pod_name}");
-        assert_eq!(worker_key, "test-namespace/test-pod");
+        let worker_key = format!("{namespace}_{pod_name}");
+        assert_eq!(worker_key, "test-namespace_test-pod");
 
         let container_info = entry.get_container(container_name).unwrap();
         let host_pid = container_info

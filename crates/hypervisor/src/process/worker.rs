@@ -38,7 +38,7 @@ impl TensorFusionWorker {
         pod_name: String,
         command_dispatcher: Arc<CommandDispatcher>,
     ) -> TensorFusionWorker {
-        let name = format!("{namespace}/{pod_name}");
+        let name = format!("{namespace}_{pod_name}");
         Self {
             id,
             qos_level,
