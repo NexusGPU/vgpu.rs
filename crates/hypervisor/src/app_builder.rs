@@ -88,7 +88,7 @@ impl ApplicationBuilder {
         let device_plugin = GpuDevicePlugin::new(
             endpoint,
             "tensor-fusion.ai/shm".to_string(),
-            "/dev/shm".to_string(),
+            self.daemon_args.device_shm_host_path.clone(),
             false,
             false,
         );

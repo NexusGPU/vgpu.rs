@@ -158,6 +158,14 @@ pub struct DaemonArgs {
 
     #[arg(
         long,
+        help = "device shm host path",
+        env = "DEVICE_SHM_HOST_PATH",
+        default_value = "/run/tensor-fusion/shm"
+    )]
+    pub device_shm_host_path: String,
+
+    #[arg(
+        long,
         help = "device plugin socket path",
         env = "DEVICE_PLUGIN_SOCKET_PATH",
         default_value = "/var/lib/kubelet/device-plugins/tensor-fusion.sock"
