@@ -117,16 +117,10 @@ pub struct DeviceConfig {
     pub total_cuda_cores: u32,
 }
 
-/// Manages shared memory segments.
-pub struct SharedMemoryManager {
-    /// Shared memory map: identifier -> Shmem
-    shared_memories: RwLock<HashMap<String, Shmem>>,
-}
-
 /// A thread-safe shared memory manager.
 pub struct ThreadSafeSharedMemoryManager {
     /// Active shared memory segments: identifier -> (Shmem, DeviceConfig)
-    active_memories: RwLock<HashMap<String, (Shmem, DeviceConfig)>>,
+    active_memories: RwLock<HashMap<String, (SharedMemoryHandle, DeviceConfig)>>,
 }
 
 impl ThreadSafeSharedMemoryManager {
@@ -149,27 +143,11 @@ impl ThreadSafeSharedMemoryManager {
         if memories.contains_key(identifier) {
             return Ok(());
         }
-
         // Create a new shared memory segment.
-        let shmem = match ShmemConf::new()
-            .size(std::mem::size_of::<SharedDeviceState>())
-            .flink(identifier)
-            .create()
-        {
-            Ok(shmem) => shmem,
-            Err(ShmemError::LinkExists) => {
-                // If it already exists, try to open it.
-                ShmemConf::new()
-                    .size(std::mem::size_of::<SharedDeviceState>())
-                    .flink(identifier)
-                    .open()
-                    .context("Failed to open existing shared memory")?
-            }
-            Err(e) => return Err(anyhow::anyhow!("Failed to create shared memory: {}", e)),
-        };
+        let shmem = SharedMemoryHandle::create(identifier, config)?;
 
         // Initialize the shared memory data.
-        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
+        let ptr = shmem.get_ptr();
         unsafe {
             ptr.write(SharedDeviceState::new(
                 config.device_idx,
@@ -196,7 +174,7 @@ impl ThreadSafeSharedMemoryManager {
         let memories = self.active_memories.read().unwrap();
 
         if let Some((shmem, _)) = memories.get(identifier) {
-            let ptr = shmem.as_ptr() as *mut SharedDeviceState;
+            let ptr = shmem.get_ptr();
             Ok(ptr)
         } else {
             Err(anyhow::anyhow!("Shared memory not found: {}", identifier))
@@ -247,112 +225,6 @@ impl Default for ThreadSafeSharedMemoryManager {
 unsafe impl Send for ThreadSafeSharedMemoryManager {}
 unsafe impl Sync for ThreadSafeSharedMemoryManager {}
 
-impl SharedMemoryManager {
-    /// Creates a new shared memory manager.
-    pub fn new() -> Self {
-        Self {
-            shared_memories: RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// Creates or gets a shared memory segment.
-    pub fn create_or_get_shared_memory(
-        &self,
-        identifier: &str,
-        config: &DeviceConfig,
-    ) -> Result<()> {
-        let mut memories = self.shared_memories.write().unwrap();
-
-        // Check if the segment already exists.
-        if memories.contains_key(identifier) {
-            return Ok(());
-        }
-
-        // Create a new shared memory segment.
-        let shmem = match ShmemConf::new()
-            .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
-            .create()
-        {
-            Ok(shmem) => shmem,
-            Err(ShmemError::LinkExists) => {
-                // If it already exists, try to open it.
-                ShmemConf::new()
-                    .size(std::mem::size_of::<SharedDeviceState>())
-                    .os_id(identifier)
-                    .open()
-                    .context("Failed to open existing shared memory")?
-            }
-            Err(e) => return Err(anyhow::anyhow!("Failed to create shared memory: {}", e)),
-        };
-
-        // Initialize the shared memory data.
-        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
-        unsafe {
-            ptr.write(SharedDeviceState::new(
-                config.device_idx,
-                config.total_cuda_cores,
-                config.up_limit,
-                config.mem_limit,
-            ));
-        }
-
-        memories.insert(identifier.to_string(), shmem);
-
-        info!(
-            identifier = %identifier,
-            device_idx = config.device_idx,
-            "Created shared memory segment"
-        );
-
-        Ok(())
-    }
-
-    /// Gets a pointer to the shared memory by its identifier.
-    pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut SharedDeviceState> {
-        let memories = self.shared_memories.read().unwrap();
-
-        if let Some(shmem) = memories.get(identifier) {
-            let ptr = shmem.as_ptr() as *mut SharedDeviceState;
-            Ok(ptr)
-        } else {
-            Err(anyhow::anyhow!("Shared memory not found: {}", identifier))
-        }
-    }
-
-    /// Cleans up a shared memory segment.
-    pub fn cleanup(&self, identifier: &str) -> Result<()> {
-        let mut memories = self.shared_memories.write().unwrap();
-
-        if let Some(shmem) = memories.remove(identifier) {
-            drop(shmem);
-            info!(identifier = %identifier, "Cleaned up shared memory segment");
-        } else {
-            warn!(identifier = %identifier, "Attempted to cleanup non-existent shared memory");
-        }
-
-        Ok(())
-    }
-
-    /// Checks if a shared memory segment exists.
-    pub fn contains(&self, identifier: &str) -> bool {
-        let memories = self.shared_memories.read().unwrap();
-        memories.contains_key(identifier)
-    }
-
-    /// Gets all shared memory identifiers.
-    pub fn get_all_identifiers(&self) -> Vec<String> {
-        let memories = self.shared_memories.read().unwrap();
-        memories.keys().cloned().collect()
-    }
-}
-
-impl Default for SharedMemoryManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Safely access shared memory, automatically handling the segment's lifecycle.
 pub struct SharedMemoryHandle {
     _shmem: Shmem,
@@ -364,7 +236,7 @@ impl SharedMemoryHandle {
     pub fn open(identifier: &str) -> Result<Self> {
         let shmem = ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
+            .flink(identifier)
             .open()
             .context("Failed to open shared memory")?;
 
@@ -377,7 +249,7 @@ impl SharedMemoryHandle {
     pub fn create(identifier: &str, config: &DeviceConfig) -> Result<Self> {
         let shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
+            .flink(identifier)
             .create()
         {
             Ok(shmem) => shmem,
@@ -385,7 +257,7 @@ impl SharedMemoryHandle {
                 // If it already exists, try to open it.
                 ShmemConf::new()
                     .size(std::mem::size_of::<SharedDeviceState>())
-                    .os_id(identifier)
+                    .flink(identifier)
                     .open()
                     .context("Failed to open existing shared memory")?
             }
@@ -581,174 +453,6 @@ mod tests {
         assert!(
             (0..1000).contains(&final_value),
             "Final value should be within expected range"
-        );
-    }
-
-    #[test]
-    fn shared_memory_manager_creation() {
-        let manager = SharedMemoryManager::new();
-        assert_eq!(
-            manager.get_all_identifiers().len(),
-            0,
-            "New manager should have no shared memories"
-        );
-        assert!(
-            !manager.contains("non_existent"),
-            "Manager should not contain non-existent identifier"
-        );
-    }
-
-    #[test]
-    fn shared_memory_manager_create_and_access() {
-        let manager = SharedMemoryManager::new();
-        let config = create_test_config();
-        let identifier = create_unique_identifier("create_access");
-
-        // Create shared memory
-        manager
-            .create_or_get_shared_memory(&identifier, &config)
-            .expect("should create shared memory successfully");
-
-        assert!(
-            manager.contains(&identifier),
-            "Manager should contain created identifier"
-        );
-        assert_eq!(
-            manager.get_all_identifiers().len(),
-            1,
-            "Manager should have one shared memory"
-        );
-
-        // Access shared memory
-        let ptr = manager
-            .get_shared_memory(&identifier)
-            .expect("should retrieve shared memory pointer");
-
-        unsafe {
-            let state = &*ptr;
-            assert_eq!(
-                state.get_device_idx(),
-                TEST_DEVICE_IDX,
-                "Device index should match configuration"
-            );
-            assert_eq!(
-                state.get_total_cores(),
-                TEST_TOTAL_CORES,
-                "Total cores should match configuration"
-            );
-        }
-
-        // Cleanup
-        manager
-            .cleanup(&identifier)
-            .expect("should cleanup shared memory successfully");
-
-        assert!(
-            !manager.contains(&identifier),
-            "Manager should not contain cleaned up identifier"
-        );
-    }
-
-    #[test]
-    fn shared_memory_manager_duplicate_creation() {
-        let manager = SharedMemoryManager::new();
-        let config = create_test_config();
-        let identifier = create_unique_identifier("duplicate");
-
-        // Create shared memory twice
-        manager
-            .create_or_get_shared_memory(&identifier, &config)
-            .expect("should create shared memory successfully");
-
-        manager
-            .create_or_get_shared_memory(&identifier, &config)
-            .expect("should handle duplicate creation gracefully");
-
-        assert_eq!(
-            manager.get_all_identifiers().len(),
-            1,
-            "Manager should still have only one shared memory"
-        );
-
-        // Cleanup
-        manager
-            .cleanup(&identifier)
-            .expect("should cleanup shared memory successfully");
-    }
-
-    #[test]
-    fn shared_memory_manager_multiple_memories() {
-        let manager = SharedMemoryManager::new();
-        let config = create_test_config();
-        let identifiers = vec![
-            create_unique_identifier("multi_1"),
-            create_unique_identifier("multi_2"),
-            create_unique_identifier("multi_3"),
-        ];
-
-        // Create multiple shared memories
-        for identifier in &identifiers {
-            manager
-                .create_or_get_shared_memory(identifier, &config)
-                .expect("should create shared memory successfully");
-        }
-
-        assert_eq!(
-            manager.get_all_identifiers().len(),
-            3,
-            "Manager should have three shared memories"
-        );
-
-        // Verify each shared memory
-        for identifier in &identifiers {
-            assert!(
-                manager.contains(identifier),
-                "Manager should contain all created identifiers"
-            );
-            let ptr = manager
-                .get_shared_memory(identifier)
-                .expect("should retrieve shared memory pointer");
-
-            unsafe {
-                let state = &*ptr;
-                assert_eq!(
-                    state.get_device_idx(),
-                    TEST_DEVICE_IDX,
-                    "Device index should match configuration"
-                );
-            }
-        }
-
-        // Cleanup all
-        for identifier in &identifiers {
-            manager
-                .cleanup(identifier)
-                .expect("should cleanup shared memory successfully");
-        }
-
-        assert_eq!(
-            manager.get_all_identifiers().len(),
-            0,
-            "Manager should have no shared memories after cleanup"
-        );
-    }
-
-    #[test]
-    fn shared_memory_manager_error_handling() {
-        let manager = SharedMemoryManager::new();
-
-        // Try to access non-existent shared memory
-        let result = manager.get_shared_memory("non_existent");
-        assert!(
-            result.is_err(),
-            "Should return error for non-existent shared memory"
-        );
-
-        // Try to cleanup non-existent shared memory
-        let result = manager.cleanup("non_existent");
-        assert!(
-            result.is_ok(),
-            "Should handle cleanup of non-existent shared memory gracefully"
         );
     }
 

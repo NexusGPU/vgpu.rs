@@ -125,7 +125,7 @@ unsafe fn entry_point() {
     logging::init();
 
     // Get pod name from environment variable
-    let pod_name = match limiter::get_pod_name() {
+    let pod_identifier = match limiter::get_pod_identifier() {
         Ok(name) => name,
         Err(_) => {
             tracing::error!("Failed to get pod name from environment, cuda-limiter disabled");
@@ -164,7 +164,7 @@ unsafe fn entry_point() {
 
     let limiter = match Limiter::new(
         std::process::id(),
-        pod_name,
+        pod_identifier,
         config.device_configs.iter().map(|c| c.device_idx).collect(),
     ) {
         Ok(limiter) => limiter,

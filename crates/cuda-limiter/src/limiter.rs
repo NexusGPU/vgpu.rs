@@ -28,8 +28,8 @@ pub(crate) enum Error {
     #[allow(dead_code)]
     InvalidCuDevice(CUdevice),
 
-    #[error("Pod name not found in environment")]
-    PodNameNotFound,
+    #[error("Pod name or namespace not found in environment")]
+    PodNameOrNamespaceNotFound,
 
     #[error("Shared memory access failed: {0}")]
     SharedMemory(#[from] anyhow::Error),
@@ -97,7 +97,7 @@ pub(crate) struct Limiter {
     /// Process ID being monitored
     pub(crate) pid: u32,
     /// Pod name for shared memory access
-    pod_name: String,
+    pod_identifier: String,
     /// Information about each device
     pub(crate) devices: Vec<DeviceInfo>,
     /// Shared memory handles for each device
@@ -108,7 +108,7 @@ impl std::fmt::Debug for Limiter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Limiter")
             .field("pid", &self.pid)
-            .field("pod_name", &self.pod_name)
+            .field("identifier", &self.pod_identifier)
             .field("devices", &self.devices)
             .field(
                 "shared_memory_handles_count",
@@ -120,7 +120,11 @@ impl std::fmt::Debug for Limiter {
 
 impl Limiter {
     /// Creates a new Limiter instance
-    pub(crate) fn new(pid: u32, pod_name: String, device_indices: Vec<u32>) -> Result<Self, Error> {
+    pub(crate) fn new(
+        pid: u32,
+        pod_identifier: String,
+        device_indices: Vec<u32>,
+    ) -> Result<Self, Error> {
         let mut devices = Vec::new();
         let mut shared_memory_handles = HashMap::new();
 
@@ -138,13 +142,13 @@ impl Limiter {
 
             // Open shared memory for this device
             let shared_memory_handle =
-                SharedMemoryHandle::open(&pod_name).map_err(Error::SharedMemory)?;
+                SharedMemoryHandle::open(&pod_identifier).map_err(Error::SharedMemory)?;
             shared_memory_handles.insert(device_idx, shared_memory_handle);
         }
 
         Ok(Limiter {
             pid,
-            pod_name,
+            pod_identifier,
             devices,
             shared_memory_handles,
         })
@@ -285,8 +289,11 @@ impl SharedMemory for SharedMemoryHandle {
 }
 
 /// Get pod name from environment variable
-pub(crate) fn get_pod_name() -> Result<String, Error> {
-    std::env::var("POD_NAME").map_err(|_| Error::PodNameNotFound)
+pub(crate) fn get_pod_identifier() -> Result<String, Error> {
+    let name = std::env::var("POD_NAME").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
+    let namespace =
+        std::env::var("POD_NAMESPACE").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
+    Ok(format!("{}_{}", namespace, name))
 }
 
 #[cfg(test)]
