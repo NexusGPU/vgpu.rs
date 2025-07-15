@@ -153,7 +153,7 @@ impl ThreadSafeSharedMemoryManager {
         // Create a new shared memory segment.
         let shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
+            .flink(identifier)
             .create()
         {
             Ok(shmem) => shmem,
@@ -161,7 +161,7 @@ impl ThreadSafeSharedMemoryManager {
                 // If it already exists, try to open it.
                 ShmemConf::new()
                     .size(std::mem::size_of::<SharedDeviceState>())
-                    .os_id(identifier)
+                    .flink(identifier)
                     .open()
                     .context("Failed to open existing shared memory")?
             }

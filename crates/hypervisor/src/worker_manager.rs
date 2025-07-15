@@ -260,6 +260,7 @@ impl WorkerManager {
                     .insert(container_pid, host_pid);
 
                 // Clone entry for PID registry update (done after releasing main registry lock)
+                // TODO: remove this clone
                 let entry_clone = entry.clone();
 
                 (worker, entry_clone)
@@ -362,6 +363,7 @@ impl WorkerManager {
                             if let Err(e) = unregister_worker_from_limiter_coordinator(
                                 &self.limiter_coordinator,
                                 pod_name,
+                                namespace,
                                 container_name,
                                 *container_pid,
                             )

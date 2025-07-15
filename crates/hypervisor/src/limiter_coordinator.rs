@@ -123,7 +123,7 @@ const fn codec_normalize(x: u32) -> u32 {
 pub struct LimiterCoordinator {
     /// Shared memory manager.
     shared_memory_manager: Arc<ThreadSafeSharedMemoryManager>,
-    /// Active pod device usage: pod_name -> PodDeviceUsage
+    /// Active pod device usage: pod_identifier -> PodDeviceUsage
     active_pods: Arc<RwLock<HashMap<String, PodDeviceUsage>>>,
     /// Monitoring task handles for each device: device_idx -> JoinHandle
     device_watcher_tasks: RwLock<HashMap<u32, JoinHandle<()>>>,
@@ -186,7 +186,7 @@ impl LimiterCoordinator {
             let token = cancellation_token.clone();
 
             let task = tokio::spawn(async move {
-                let mut device_states: HashMap<String, (u64, i32)> = HashMap::new(); // pod_name -> (last_seen_timestamp, share)
+                let mut device_states: HashMap<String, (u64, i32)> = HashMap::new(); // pod_identifier -> (last_seen_timestamp, share)
                 let mut interval_timer = interval(watch_interval);
 
                 info!(
@@ -220,17 +220,17 @@ impl LimiterCoordinator {
                     }
 
                     // Monitor each pod.
-                    for (pod_name, pod_usage) in pods_for_device {
+                    for (pod_identifier, pod_usage) in pods_for_device {
                         let host_pids = pod_usage.get_host_pids();
 
                         if host_pids.is_empty() {
-                            debug!(pod_name = %pod_name, device_idx = device_idx, "No active processes to monitor");
+                            debug!(pod_identifier = %pod_identifier, device_idx = device_idx, "No active processes to monitor");
                             continue;
                         }
 
                         // Get or initialize device state.
                         let (last_seen_timestamp, current_share) = device_states
-                            .entry(pod_name.clone())
+                            .entry(pod_identifier.clone())
                             .or_insert((0, pod_usage.device_config.total_cuda_cores as i32));
 
                         // Get GPU utilization data.
@@ -255,7 +255,7 @@ impl LimiterCoordinator {
                                 // If the share value has changed, update the shared memory.
                                 if new_share != *current_share {
                                     match Self::update_shared_memory_state(
-                                        &pod_name,
+                                        &pod_identifier,
                                         utilization.user_current,
                                         new_share,
                                     )
@@ -263,7 +263,7 @@ impl LimiterCoordinator {
                                     {
                                         Ok(()) => {
                                             debug!(
-                                                pod_name = %pod_name,
+                                                pod_identifier = %pod_identifier,
                                                 device_idx = device_idx,
                                                 old_share = *current_share,
                                                 new_share = new_share,
@@ -275,7 +275,7 @@ impl LimiterCoordinator {
                                         }
                                         Err(e) => {
                                             error!(
-                                                pod_name = %pod_name,
+                                                pod_identifier = %pod_identifier,
                                                 device_idx = device_idx,
                                                 error = %e,
                                                 "Failed to update shared memory state"
@@ -284,7 +284,7 @@ impl LimiterCoordinator {
                                     }
                                 } else {
                                     debug!(
-                                        pod_name = %pod_name,
+                                        pod_identifier = %pod_identifier,
                                         device_idx = device_idx,
                                         share = *current_share,
                                         user_utilization = utilization.user_current,
@@ -295,7 +295,7 @@ impl LimiterCoordinator {
                             }
                             Err(e) => {
                                 error!(
-                                    pod_name = %pod_name,
+                                    pod_identifier = %pod_identifier,
                                     device_idx = device_idx,
                                     error = %e,
                                     "Failed to get GPU utilization"
@@ -312,7 +312,7 @@ impl LimiterCoordinator {
                                     .as_secs();
 
                                 match Self::update_pod_memory_usage(
-                                    &pod_name,
+                                    &pod_identifier,
                                     memory_used,
                                     timestamp,
                                 )
@@ -320,7 +320,7 @@ impl LimiterCoordinator {
                                 {
                                     Ok(()) => {
                                         debug!(
-                                            pod_name = %pod_name,
+                                            pod_identifier = %pod_identifier,
                                             device_idx = device_idx,
                                             memory_used = memory_used,
                                             "Updated pod memory usage"
@@ -328,7 +328,7 @@ impl LimiterCoordinator {
                                     }
                                     Err(e) => {
                                         error!(
-                                            pod_name = %pod_name,
+                                            pod_identifier = %pod_identifier,
                                             device_idx = device_idx,
                                             error = %e,
                                             "Failed to update pod memory usage"
@@ -338,7 +338,7 @@ impl LimiterCoordinator {
                             }
                             Err(e) => {
                                 error!(
-                                    pod_name = %pod_name,
+                                    pod_identifier = %pod_identifier,
                                     device_idx = device_idx,
                                     error = %e,
                                     "Failed to get pod memory usage"
@@ -365,31 +365,31 @@ impl LimiterCoordinator {
     /// Registers a device with the coordinator.
     pub fn register_device(
         &self,
-        pod_name: &str,
+        pod_identifier: &str,
         container_name: &str,
         container_pid: u32,
         host_pid: u32,
         config: DeviceConfig,
     ) -> Result<()> {
-        // Use the pod_name as the shared memory identifier.
-        let pod_name_str = pod_name.to_string();
+        // Use the pod_identifier as the shared memory identifier.
+        let pod_identifier = pod_identifier.to_string();
 
         // Create the shared memory.
         self.shared_memory_manager
-            .create_or_get_shared_memory(&pod_name_str, &config)?;
+            .create_or_get_shared_memory(&pod_identifier, &config)?;
 
         // Update the pod device usage.
         {
             let mut active_pods = self.active_pods.write().unwrap();
             let pod_usage = active_pods
-                .entry(pod_name_str.clone())
+                .entry(pod_identifier.clone())
                 .or_insert_with(|| PodDeviceUsage::new(config.clone()));
 
             pod_usage.add_container(container_name.to_string(), container_pid, host_pid);
         }
 
         info!(
-            pod_name = %pod_name,
+            pod_identifier = %pod_identifier,
             container_name = %container_name,
             container_pid = container_pid,
             host_pid = host_pid,
@@ -403,18 +403,18 @@ impl LimiterCoordinator {
     /// Unregisters a device from the coordinator.
     pub fn unregister_device(
         &self,
-        pod_name: &str,
+        pod_identifier: &str,
         container_name: &str,
         container_pid: u32,
     ) -> Result<()> {
-        let pod_name_str = pod_name.to_string();
+        let pod_identifier = pod_identifier.to_string();
 
         let should_cleanup = {
             let mut active_pods = self.active_pods.write().unwrap();
-            if let Some(pod_usage) = active_pods.get_mut(&pod_name_str) {
+            if let Some(pod_usage) = active_pods.get_mut(&pod_identifier) {
                 let is_empty = pod_usage.remove_container(container_name);
                 if is_empty {
-                    active_pods.remove(&pod_name_str);
+                    active_pods.remove(&pod_identifier);
                     true
                 } else {
                     false
@@ -426,16 +426,16 @@ impl LimiterCoordinator {
 
         if should_cleanup {
             // Clean up the shared memory.
-            self.shared_memory_manager.cleanup(&pod_name_str)?;
+            self.shared_memory_manager.cleanup(&pod_identifier)?;
 
             info!(
-                pod_name = %pod_name,
+                pod_identifier = %pod_identifier,
                 "Cleaned up pod shared memory"
             );
         }
 
         info!(
-            pod_name = %pod_name,
+            pod_identifier = %pod_identifier,
             container_name = %container_name,
             container_pid = container_pid,
             "Unregistered device from coordinator"
@@ -520,16 +520,16 @@ impl LimiterCoordinator {
 
     /// Updates the pod memory usage in shared memory.
     async fn update_pod_memory_usage(
-        pod_name: &str,
+        pod_identifier: &str,
         memory_used: u64,
         timestamp: u64,
     ) -> Result<()> {
         tokio::task::spawn_blocking({
-            let pod_name = pod_name.to_string();
+            let pod_identifier = pod_identifier.to_string();
             move || -> Result<()> {
                 use utils::shared_memory::SharedMemoryHandle;
-                let handle =
-                    SharedMemoryHandle::open(&pod_name).context("Failed to open shared memory")?;
+                let handle = SharedMemoryHandle::open(&pod_identifier)
+                    .context("Failed to open shared memory")?;
 
                 // Update the memory usage in shared memory
                 handle
@@ -618,17 +618,17 @@ impl LimiterCoordinator {
 
     /// Update shared memory state (asynchronous safe version)
     async fn update_shared_memory_state(
-        pod_name: &str,
+        pod_identifier: &str,
         user_current: u32,
         current_share: i32,
     ) -> Result<()> {
         tokio::task::spawn_blocking({
-            let pod_name = pod_name.to_string();
+            let pod_identifier = pod_identifier.to_string();
             move || -> Result<()> {
                 // Open shared memory in a blocking task
                 use utils::shared_memory::SharedMemoryHandle;
-                let handle =
-                    SharedMemoryHandle::open(&pod_name).context("Failed to open shared memory")?;
+                let handle = SharedMemoryHandle::open(&pod_identifier)
+                    .context("Failed to open shared memory")?;
 
                 let shared_state_ptr = handle.get_ptr();
 
@@ -795,8 +795,8 @@ mod tests {
         LimiterCoordinator::new(Duration::from_millis(100), 1) // Assume there is only one GPU device
     }
 
-    /// Create unique test pod name
-    fn create_unique_test_pod_name(test_name: &str) -> String {
+    /// Create unique test pod identifier
+    fn create_unique_test_pod_identifier(test_name: &str) -> String {
         use std::time::SystemTime;
         use std::time::UNIX_EPOCH;
         let timestamp = SystemTime::now()
@@ -810,16 +810,16 @@ mod tests {
     async fn test_single_pod_single_container() {
         let coordinator = create_test_coordinator();
         let config = create_test_device_config(0);
-        let pod_name = create_unique_test_pod_name("single-pod-single-container");
+        let pod_identifier = create_unique_test_pod_identifier("single-pod-single-container");
 
         // Register device
         coordinator
-            .register_device(&pod_name, "container-1", 1001, 12345, config.clone())
+            .register_device(&pod_identifier, "container-1", 1001, 12345, config.clone())
             .unwrap();
 
         // Unregister device
         coordinator
-            .unregister_device(&pod_name, "container-1", 1001)
+            .unregister_device(&pod_identifier, "container-1", 1001)
             .unwrap();
     }
 
@@ -827,22 +827,22 @@ mod tests {
     async fn test_multiple_containers() {
         let coordinator = create_test_coordinator();
         let config = create_test_device_config(0);
-        let pod_name = create_unique_test_pod_name("multiple-containers");
+        let pod_identifier = create_unique_test_pod_identifier("multiple-containers");
 
         // Register multiple containers
         coordinator
-            .register_device(&pod_name, "container-1", 1001, 12345, config.clone())
+            .register_device(&pod_identifier, "container-1", 1001, 12345, config.clone())
             .unwrap();
         coordinator
-            .register_device(&pod_name, "container-2", 1002, 12346, config.clone())
+            .register_device(&pod_identifier, "container-2", 1002, 12346, config.clone())
             .unwrap();
 
         // Unregister containers
         coordinator
-            .unregister_device(&pod_name, "container-1", 1001)
+            .unregister_device(&pod_identifier, "container-1", 1001)
             .unwrap();
         coordinator
-            .unregister_device(&pod_name, "container-2", 1002)
+            .unregister_device(&pod_identifier, "container-2", 1002)
             .unwrap();
     }
 }

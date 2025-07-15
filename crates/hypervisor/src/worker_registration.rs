@@ -21,14 +21,14 @@ pub async fn register_worker_to_limiter_coordinator(
     nvml: &Nvml,
 ) -> Result<()> {
     // Get pod info from the worker.
-    let pod_name = &worker.pod_name;
+    let pod_identifier = &format!("{}/{}", worker.namespace, worker.pod_name);
 
     // Create device config based on the worker's GPU info.
     let device_config = create_device_config_from_worker(worker, nvml).await?;
 
     // Register with the limiter coordinator.
     limiter_coordinator.register_device(
-        pod_name,
+        pod_identifier,
         container_name,
         container_pid,
         host_pid,
@@ -50,14 +50,16 @@ pub async fn register_worker_to_limiter_coordinator(
 pub async fn unregister_worker_from_limiter_coordinator(
     limiter_coordinator: &LimiterCoordinator,
     pod_name: &str,
+    pod_namespace: &str,
     container_name: &str,
     container_pid: u32,
 ) -> Result<()> {
-    limiter_coordinator.unregister_device(pod_name, container_name, container_pid)?;
+    let pod_identifier = &format!("{}/{}", pod_namespace, pod_name);
+    limiter_coordinator.unregister_device(pod_identifier, container_name, container_pid)?;
 
     tracing::info!(
-        "Unregistered worker (pod_name: {}, container_name: {}, container_pid: {}) from limiter coordinator",
-        pod_name,
+        "Unregistered worker (pod_identifier: {}, container_name: {}, container_pid: {}) from limiter coordinator",
+        pod_identifier,
         container_name,
         container_pid
     );
