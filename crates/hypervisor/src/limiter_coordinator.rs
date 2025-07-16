@@ -245,7 +245,7 @@ impl LimiterCoordinator {
                             .find(|config| config.device_idx == device_idx)
                             .expect("Device config must exist for filtered pod");
                         // **Stateless operation: Read current share from shared memory**
-                        let current_share = match Self::read_current_share_from_shared_memory(
+                        let current_share = match Self::get_available_cores(
                             &pod_identifier,
                             &device_config.device_uuid,
                         )
@@ -411,7 +411,7 @@ impl LimiterCoordinator {
         Ok(())
     }
 
-    /// Updates the pod memory usage in shared memory.
+    /// Updates the shared memory state efficiently without unnecessary blocking
     async fn update_shared_memory_state(
         pod_identifier: &str,
         device_uuid: &str,
@@ -419,46 +419,66 @@ impl LimiterCoordinator {
         new_share: Option<i32>,
         timestamp: u64,
     ) -> Result<()> {
-        tokio::task::spawn_blocking({
-            let pod_identifier = pod_identifier.to_string();
-            let device_uuid = device_uuid.to_string();
+        use utils::shared_memory::SharedMemoryHandle;
+        
+        // Simple shared memory operations don't need spawn_blocking
+        let handle = SharedMemoryHandle::open(pod_identifier)
+            .context("Failed to open shared memory")?;
+        let state = handle.get_state();
 
-            move || -> Result<()> {
-                use utils::shared_memory::SharedMemoryHandle;
-                let handle = SharedMemoryHandle::open(&pod_identifier)
-                    .context("Failed to open shared memory")?;
-                let state = handle.get_state();
-
-                // Update the memory usage in shared memory
-                if let Some(device) = state.devices.write().get_mut(&device_uuid) {
-                    if let Some(memory_used) = memory_used {
-                        device.update_pod_memory_used(memory_used);
-                    }
-                    if let Some(new_share) = new_share {
-                        // Get current state and total cores
-                        let total_cuda_cores = device.get_total_cores() as i32;
-                        let current_cores = device.get_available_cores();
-
-                        // Calculate the delta (difference) to apply
-                        let target_cores = new_share.max(0).min(total_cuda_cores);
-                        let delta = target_cores - current_cores;
-
-                        // Apply the delta to reach the target value
-                        device.fetch_add_available_cores(delta);
-                    }
-                } else {
-                    error!(
-                        pod_identifier = %pod_identifier,
-                        device_uuid = %device_uuid,
-                        "Device not found in shared memory"
-                    );
-                }
-                state.update_heartbeat(timestamp);
-                Ok(())
+        // Update the memory usage in shared memory
+        if state.has_device(device_uuid) {
+            if let Some(memory_used) = memory_used {
+                state.with_device_by_uuid_mut(device_uuid, |device| {
+                    device.set_pod_memory_used(memory_used);
+                });
             }
-        })
-        .await
-        .context("Blocking task failed")?
+            if let Some(new_share) = new_share {
+                state.with_device_by_uuid_mut(device_uuid, |device| {
+                    // Get current state and total cores
+                    let total_cuda_cores = device.get_total_cores() as i32;
+                    let current_cores = device.get_available_cores();
+
+                    // Calculate the delta (difference) to apply
+                    let target_cores = new_share.max(0).min(total_cuda_cores);
+                    let delta = target_cores - current_cores;
+
+                    // Apply the delta to reach the target value atomically
+                    device.fetch_add_available_cores(delta);
+                });
+            }
+        } else {
+            error!(
+                pod_identifier = %pod_identifier,
+                device_uuid = %device_uuid,
+                "Device not found in shared memory"
+            );
+        }
+        state.update_heartbeat(timestamp);
+        Ok(())
+    }
+
+    /// Gets available cores for a device efficiently
+    async fn get_available_cores(
+        pod_identifier: &str,
+        device_uuid: &str,
+    ) -> Result<i32> {
+        use utils::shared_memory::SharedMemoryHandle;
+        
+        let handle = SharedMemoryHandle::open(pod_identifier)
+            .context("Failed to open shared memory")?;
+        let state = handle.get_state();
+
+        if let Some(available_cores) = state.with_device_by_uuid(device_uuid, |device| {
+            device.get_available_cores()
+        }) {
+            Ok(available_cores)
+        } else {
+            anyhow::bail!(
+                "Device {} not found in shared memory for pod {}. This indicates a system state inconsistency.",
+                device_uuid, pod_identifier
+            );
+        }
     }
 
     /// Gets a complete snapshot of device state (utilization + memory)
@@ -524,36 +544,6 @@ impl LimiterCoordinator {
                         process_memories,
                         timestamp: newest_timestamp,
                     }))
-                }
-            }
-        })
-        .await
-        .context("Blocking task failed")?
-    }
-
-    /// Read current share value from shared memory
-    async fn read_current_share_from_shared_memory(
-        pod_identifier: &str,
-        device_uuid: &str,
-    ) -> Result<i32> {
-        tokio::task::spawn_blocking({
-            let pod_identifier = pod_identifier.to_string();
-            let device_uuid = device_uuid.to_string();
-
-            move || -> Result<i32> {
-                use utils::shared_memory::SharedMemoryHandle;
-                let handle = SharedMemoryHandle::open(&pod_identifier)
-                    .context("Failed to open shared memory")?;
-                let state = handle.get_state();
-
-                let devices_read = state.devices.read();
-                if let Some(device) = devices_read.get(&device_uuid) {
-                    Ok(device.get_available_cores())
-                } else {
-                    anyhow::bail!(
-                        "Device {} not found in shared memory for pod {}. This indicates a system state inconsistency.",
-                        device_uuid, pod_identifier
-                    );
                 }
             }
         })

@@ -114,26 +114,42 @@ impl Limiter {
         })
     }
 
-    /// Rate limiter that waits for available CUDA cores
-    pub(crate) fn rate_limiter(&self, device_uuid: &str, grids: u32, _blocks: u32) {
+    /// Rate limiter that waits for available CUDA cores with exponential backoff
+    pub(crate) fn rate_limiter(&self, device_uuid: &str, grids: u32, _blocks: u32) -> Result<(), Error> {
         let kernel_size = grids as i32;
 
         // Get shared memory handle for this device
-        let devices = self.shared_memory_handle.get_state().devices.read();
+        let state = self.shared_memory_handle.get_state();
 
-        // TODO: fallback
-        let device = devices
-            .get(device_uuid)
-            .ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))
-            .expect("device not configured");
+        // Check if device exists, return error instead of panic
+        if !state.has_device(device_uuid) {
+            return Err(Error::DeviceNotConfigured(device_uuid.to_string()));
+        }
+
+        // Exponential backoff parameters
+        let mut backoff_ms = 1;
+        const MAX_BACKOFF_MS: u64 = 100;
+        const BACKOFF_MULTIPLIER: u64 = 2;
 
         loop {
-            let available = device.get_available_cores();
-            if available > 0 {
+            let available = state.with_device_by_uuid(device_uuid, |device| {
+                device.get_available_cores()
+            }).ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))?;
+            
+            if available >= kernel_size {
+                // Successfully reserved cores
+                state.with_device_by_uuid_mut(device_uuid, |device| {
+                    device.fetch_sub_available_cores(kernel_size)
+                }).ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))?;
                 break;
             }
+            
+            // Wait with exponential backoff to avoid busy-waiting
+            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+            backoff_ms = (backoff_ms * BACKOFF_MULTIPLIER).min(MAX_BACKOFF_MS);
         }
-        device.fetch_sub_available_cores(kernel_size);
+        
+        Ok(())
     }
 
     pub(crate) fn get_device_count(&self) -> u32 {
@@ -142,16 +158,15 @@ impl Limiter {
 
     /// Get pod memory usage from shared memory
     pub(crate) fn get_pod_memory_usage(&self, device_uuid: &str) -> Result<(u64, u64), Error> {
-        let devices = self.shared_memory_handle.get_state().devices.read();
+        let state = self.shared_memory_handle.get_state();
 
-        let device = devices
-            .get(device_uuid)
-            .ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))?;
-
-        let used = device.get_pod_memory_used();
-        let limit = device.get_mem_limit();
-
-        Ok((used, limit))
+        if let Some((used, limit)) = state.with_device_by_uuid(device_uuid, |device| {
+            (device.get_pod_memory_used(), device.get_mem_limit())
+        }) {
+            Ok((used, limit))
+        } else {
+            Err(Error::DeviceNotConfigured(device_uuid.to_string()))
+        }
     }
 
     /// Get the memory limit for a specific device
@@ -256,24 +271,23 @@ fn uuid_to_string_formatted(uuid: &[u8; 16]) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use utils::shared_memory::SharedDeviceInfoV1;
+    use utils::shared_memory::SharedDeviceInfo;
 
     /// Trait for shared memory operations
-    #[allow(dead_code)]
     trait SharedMemory {
         /// Gets a reference to the shared device state
-        fn get_state(&self) -> &SharedDeviceInfoV1;
+        fn get_state(&self) -> &SharedDeviceInfo;
     }
 
     /// Mock implementation of SharedMemory for testing
     pub struct MockSharedMemory {
-        state: Arc<SharedDeviceInfoV1>,
+        state: Arc<SharedDeviceInfo>,
     }
 
     impl MockSharedMemory {
         /// Create a new MockSharedMemory with specified values
         pub fn new(total_cores: u32, up_limit: u32, mem_limit: u64) -> Self {
-            let state = Arc::new(SharedDeviceInfoV1::new(total_cores, up_limit, mem_limit));
+            let state = Arc::new(SharedDeviceInfo::new(total_cores, up_limit, mem_limit));
             Self { state }
         }
 
@@ -290,12 +304,12 @@ mod tests {
 
         /// Set pod memory used for testing
         pub fn set_pod_memory_used(&self, used: u64) {
-            self.state.update_pod_memory_used(used);
+            self.state.set_pod_memory_used(used);
         }
     }
 
     impl SharedMemory for MockSharedMemory {
-        fn get_state(&self) -> &SharedDeviceInfoV1 {
+        fn get_state(&self) -> &SharedDeviceInfo {
             &self.state
         }
     }
