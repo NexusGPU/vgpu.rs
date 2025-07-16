@@ -88,6 +88,7 @@ impl Limiter {
         let mut uuid_mapping = HashMap::new();
 
         for gpu_uuid in gpu_uuids {
+            let gpu_uuid = gpu_uuid.replace("gpu-", "GPU-");
             let device = nvml.device_by_uuid(gpu_uuid.as_str())?;
             let idx = device.index()?;
             let ctx = CudaContext::new(idx as usize)?;
