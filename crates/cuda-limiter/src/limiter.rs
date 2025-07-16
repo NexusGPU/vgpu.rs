@@ -65,8 +65,6 @@ pub(crate) struct Limiter {
     current_devices_dim: HashMap<i32, DeviceDim>,
     /// CUDA device mapping (CUdevice -> device_uuid)
     cu_device_mapping: HashMap<CUdevice, String>,
-    /// Device count
-    device_count: u32,
 }
 
 impl std::fmt::Debug for Limiter {
@@ -80,18 +78,22 @@ impl std::fmt::Debug for Limiter {
 
 impl Limiter {
     /// Creates a new Limiter instance
-    pub(crate) fn new(pid: u32, nvml: Nvml, pod_identifier: String) -> Result<Self, Error> {
+    pub(crate) fn new(
+        pid: u32,
+        nvml: Nvml,
+        pod_identifier: String,
+        gpu_uuids: &[String],
+    ) -> Result<Self, Error> {
         let mut cu_device_mapping = HashMap::new();
-        let device_count = nvml.device_count()?;
         let mut uuid_mapping = HashMap::new();
 
-        for idx in 0..device_count {
+        for gpu_uuid in gpu_uuids {
+            let device = nvml.device_by_uuid(gpu_uuid.as_str())?;
+            let idx = device.index()?;
             let ctx = CudaContext::new(idx as usize)?;
-            let device = nvml.device_by_index(idx)?;
-            let uuid = device.uuid()?;
-            uuid_mapping.insert(idx as i32, uuid.clone());
-            tracing::info!("Device {idx} UUID: {uuid}");
-            cu_device_mapping.insert(ctx.cu_device(), uuid);
+            uuid_mapping.insert(idx as i32, gpu_uuid.clone());
+            tracing::info!("Device {idx} UUID: {gpu_uuid}");
+            cu_device_mapping.insert(ctx.cu_device(), gpu_uuid.clone());
         }
         detour::GLOBAL_DEVICE_UUIDS
             .set(uuid_mapping)
@@ -105,7 +107,6 @@ impl Limiter {
             shared_memory_handle,
             nvml,
             cu_device_mapping,
-            device_count,
         })
     }
 
@@ -159,8 +160,8 @@ impl Limiter {
         &self,
         device_handle: nvmlDevice_t,
     ) -> Result<Option<String>, NvmlError> {
-        for idx in 0..self.device_count {
-            let dev = self.nvml.device_by_index(idx);
+        for (_, gpu_uuid) in self.cu_device_mapping.iter() {
+            let dev = self.nvml.device_by_uuid(gpu_uuid.as_str());
             match dev {
                 Ok(dev) => {
                     let handle = unsafe { dev.handle() };
@@ -169,7 +170,7 @@ impl Limiter {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to get device by index {}: {}, skipped", idx, e);
+                    tracing::warn!("Failed to get device by uuid {}: {}, skipped", gpu_uuid, e);
                     continue;
                 }
             }
