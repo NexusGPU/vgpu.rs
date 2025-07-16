@@ -206,14 +206,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: "!(*.dockerbuild)"
-
-
-      - name: Download tensor-fusion components
-        uses: actions/download-artifact@v4
-        with:
-          name: tensor-fusion-components
-          path: artifacts/tensor-fusion-components
+          pattern: "!*.dockerbuild"
 
       - name: Compress artifacts
         run: |
@@ -224,7 +217,6 @@ jobs:
           tar -czf tensor-fusion-components.tar.gz -C artifacts/tensor-fusion-components .
           tar -czf bootstrap-x64.tar.gz -C artifacts/bootstrap-linux-x64 bootstrap
           tar -czf bootstrap-arm64.tar.gz -C artifacts/bootstrap-linux-arm64 bootstrap
-
       
       - name: Add assets to manual release
         if: github.event_name == 'workflow_dispatch'
