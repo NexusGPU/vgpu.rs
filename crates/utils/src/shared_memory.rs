@@ -623,7 +623,7 @@ mod tests {
 
     #[test]
     fn shared_device_state_multiple_devices() {
-        let state = SharedDeviceState::new(&create_test_configs());
+        let state = SharedDeviceState::new(&[]);
 
         // Add multiple devices
         for i in 0..3 {
@@ -1227,8 +1227,10 @@ mod tests {
             .contains("Shared memory not found"));
 
         // Test getting config for non-existent memory
-        let memories = manager.active_memories.read();
-        assert!(!memories.contains_key(non_existent_id));
+        {
+            let memories = manager.active_memories.read();
+            assert!(!memories.contains_key(non_existent_id));
+        } // Read lock is dropped here
 
         // Test cleanup of non-existent memory (should not panic)
         let cleanup_result = manager.cleanup(non_existent_id);
