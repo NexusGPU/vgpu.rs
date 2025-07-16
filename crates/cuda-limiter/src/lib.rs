@@ -77,7 +77,7 @@ fn init_ngpu_library() {
                 return;
             }
         };
-
+        std::env::set_var("NVIDIA_VISIBLE_DEVICES", config.gpu_uuids.join(","));
         let limiter = match Limiter::new(config.host_pid, nvml, pod_identifier) {
             Ok(limiter) => limiter,
             Err(err) => {

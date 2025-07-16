@@ -22,6 +22,7 @@ pub(crate) struct DeviceLimit {
 pub struct DeviceConfigResult {
     #[allow(dead_code)]
     pub device_limit: DeviceLimit,
+    pub gpu_uuids: Vec<String>,
     pub host_pid: u32,
 }
 
@@ -121,6 +122,7 @@ fn fetch_device_configs_from_hypervisor(
     Ok(DeviceConfigResult {
         device_limit,
         host_pid: worker_info.host_pid,
+        gpu_uuids: worker_info.gpu_uuids.unwrap_or_default(),
     })
 }
 

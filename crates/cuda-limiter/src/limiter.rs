@@ -63,10 +63,8 @@ pub(crate) struct Limiter {
     nvml: Nvml,
     /// Device dimensions
     current_devices_dim: HashMap<i32, DeviceDim>,
-
     /// CUDA device mapping (CUdevice -> device_uuid)
     cu_device_mapping: HashMap<CUdevice, String>,
-
     /// Device count
     device_count: u32,
 }
