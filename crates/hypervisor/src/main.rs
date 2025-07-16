@@ -48,14 +48,63 @@ async fn main() -> Result<()> {
         Commands::ShowShm(show_shm_args) => run_show_shm(show_shm_args).await,
     }
 }
+
 async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
     use utils::shared_memory::SharedMemoryHandle;
     utils::logging::init();
 
+    tracing::info!("Attempting to open shared memory with identifier: {}", show_shm_args.shm_identifier);
+
     let handle = SharedMemoryHandle::open(&show_shm_args.shm_identifier)
         .context("Failed to open shared memory")?;
+    
+    tracing::info!("Successfully opened shared memory handle");
+    
+    // Get the raw pointer for validation
+    let ptr = handle.get_ptr();
+    
+    if ptr.is_null() {
+        tracing::error!("Shared memory pointer is null!");
+        return Err(anyhow::anyhow!("Shared memory pointer is null"));
+    }
+    
+    tracing::info!("Shared memory pointer is valid: {:p}", ptr);
+    
+    // Get the state safely
     let state = handle.get_state();
-    tracing::info!("Shared memory state: {:?}", state);
+    tracing::info!("Successfully accessed shared memory state");
+    
+    // Print basic information step by step
+    let device_count = state.device_count();
+    tracing::info!("Shared memory contains {} devices", device_count);
+    
+    let last_heartbeat = state.get_last_heartbeat();
+    tracing::info!("Last heartbeat timestamp: {}", last_heartbeat);
+    
+    let device_uuids = state.get_device_uuids();
+    tracing::info!("Device UUIDs: {:?}", device_uuids);
+    
+    // Try to check if the shared memory is healthy
+    let is_healthy = state.is_healthy(60); // 60 seconds timeout
+    tracing::info!("Shared memory health status (60s timeout): {}", is_healthy);
+    
+    // Print device details one by one
+    for uuid in &device_uuids {
+        if let Some(info) = state.with_device_by_uuid(uuid, |device| {
+            format!("UUID: {}, Available cores: {}, Total cores: {}, Up limit: {}%, Memory limit: {} bytes, Pod memory used: {} bytes",
+                uuid,
+                device.get_available_cores(),
+                device.get_total_cores(),
+                device.get_up_limit(),
+                device.get_mem_limit(),
+                device.get_pod_memory_used()
+            )
+        }) {
+            tracing::info!("Device info: {}", info);
+        }
+    }
+    
+    tracing::info!("Successfully completed shared memory inspection");
     Ok(())
 }
 
