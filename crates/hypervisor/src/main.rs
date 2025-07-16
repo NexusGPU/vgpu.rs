@@ -50,6 +50,8 @@ async fn main() -> Result<()> {
 }
 async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
     use utils::shared_memory::SharedMemoryHandle;
+    utils::logging::init();
+    
     let handle = SharedMemoryHandle::open(&show_shm_args.shm_identifier)
         .context("Failed to open shared memory")?;
     let state = handle.get_state();
@@ -74,6 +76,8 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
+    
+    utils::logging::init();
 
     tracing::info!("mount point: {:?}", mount_shm_args.mount_point);
     tracing::info!("size: {} MB", mount_shm_args.size_mb);
