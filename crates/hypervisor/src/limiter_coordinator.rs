@@ -7,15 +7,14 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::error::NvmlError;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
-use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use tracing::warn;
 use utils::shared_memory::DeviceConfig;
 use utils::shared_memory::ThreadSafeSharedMemoryManager;
 
@@ -54,13 +53,50 @@ impl PodDeviceUsage {
     }
 }
 
-/// GPU utilization statistics.
+/// Per-process utilization data
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessUtilization {
+    pub sm_util: u32,
+    pub codec_util: u32,
+}
+
+/// Pod-level utilization summary
 #[derive(Debug, Default, Clone, Copy)]
-struct Utilization {
-    /// Utilization of the current process.
-    user_current: u32,
-    /// Total system utilization.
-    sys_current: u32,
+pub struct PodUtilization {
+    pub total_utilization: u32, // Sum of SM + codec utilization for all processes in pod
+}
+
+/// Complete snapshot of device state including utilization and memory
+#[derive(Debug, Clone)]
+pub struct DeviceSnapshot {
+    // pid -> utilization
+    pub process_utilizations: HashMap<u32, ProcessUtilization>,
+    // pid -> memory used
+    pub process_memories: HashMap<u32, u64>,
+    // timestamp of the snapshot
+    pub timestamp: u64,
+}
+
+impl DeviceSnapshot {
+    /// Calculate pod-level utilization from device snapshot
+    pub fn get_pod_utilization(&self, pids: &[u32]) -> PodUtilization {
+        let mut total_utilization = 0u32;
+
+        for pid in pids {
+            if let Some(process_util) = self.process_utilizations.get(pid) {
+                total_utilization += process_util.sm_util + process_util.codec_util;
+            }
+        }
+
+        PodUtilization { total_utilization }
+    }
+
+    /// Calculate pod-level memory usage from device snapshot
+    pub fn get_pod_memory(&self, pids: &[u32]) -> u64 {
+        pids.iter()
+            .filter_map(|pid| self.process_memories.get(pid))
+            .sum()
+    }
 }
 
 /// Normalization function for codec utilization.
@@ -135,8 +171,8 @@ impl LimiterCoordinator {
             let token = cancellation_token.clone();
 
             let task = tokio::spawn(async move {
-                let mut device_states: HashMap<String, (u64, i32)> = HashMap::new(); // pod_identifier -> (last_seen_timestamp, share)
                 let mut interval_timer = interval(watch_interval);
+                let mut last_seen_timestamp = 0u64; // Track timestamp at device level
 
                 info!(
                     device_idx = device_idx,
@@ -154,9 +190,9 @@ impl LimiterCoordinator {
                         }
                     }
 
-                    // Get all pods using this device.
+                    // Get all pods using this device
                     let pods_for_device: Vec<(String, PodDeviceUsage)> = {
-                        let pods = active_pods.read().unwrap();
+                        let pods = active_pods.read().expect("poisoned");
                         pods.iter()
                             .filter(|(_, usage)| {
                                 usage
@@ -173,7 +209,29 @@ impl LimiterCoordinator {
                         continue;
                     }
 
-                    // Monitor each pod.
+                    // **Get complete device snapshot ONCE per iteration**
+                    let device_snapshot =
+                        match Self::get_device_snapshot(device_idx, last_seen_timestamp).await {
+                            Ok(Some(snapshot)) => {
+                                // Update timestamp for next iteration
+                                last_seen_timestamp = snapshot.timestamp;
+                                snapshot
+                            }
+                            Ok(None) => {
+                                debug!(device_idx = device_idx, "No device data available");
+                                continue;
+                            }
+                            Err(e) => {
+                                error!(
+                                    device_idx = device_idx,
+                                    error = %e,
+                                    "Failed to get device snapshot"
+                                );
+                                continue;
+                            }
+                        };
+
+                    // **Process each pod using the snapshot**
                     for (pod_identifier, pod_usage) in pods_for_device {
                         let host_pids = pod_usage.get_host_pids();
 
@@ -181,73 +239,59 @@ impl LimiterCoordinator {
                             debug!(pod_identifier = %pod_identifier, device_idx = device_idx, "No active processes to monitor");
                             continue;
                         }
-
-                        for device_config in pod_usage.device_configs {
-                            let (last_seen_timestamp, current_share) = device_states
-                                .entry(pod_identifier.clone())
-                                .or_insert((0, device_config.total_cuda_cores as i32));
-
-                            let utilization = match Self::get_pod_utilization_with_retry(
-                                device_config.device_idx,
-                                &host_pids,
-                                *last_seen_timestamp,
-                                Duration::from_millis(100),
-                            )
-                            .await
-                            {
-                                Ok((utilization, timestamp)) => {
-                                    *last_seen_timestamp = timestamp;
-                                    Some(utilization)
-                                }
-                                Err(e) => {
-                                    error!(
-                                        pod_identifier = %pod_identifier,
-                                        device_idx = device_idx,
-                                        error = %e,
-                                        "Failed to get GPU utilization"
-                                    );
-                                    None
-                                }
-                            };
-
-                            // Update pod memory usage in shared memory
-                            let memory_used =
-                                match Self::get_pod_memory_usage(device_idx, &host_pids).await {
-                                    Ok(memory_used) => Some(memory_used),
-                                    Err(e) => {
-                                        error!(
-                                            pod_identifier = %pod_identifier,
-                                            device_idx = device_idx,
-                                            error = %e,
-                                            "Failed to get pod memory usage"
-                                        );
-                                        None
-                                    }
-                                };
-                            let timestamp = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .expect("Failed to get timestamp")
-                                .as_secs();
-                            // Calculate the new share value.
-                            let new_share = utilization.map(|util| {
-                                calculate_delta(&device_config, util.user_current, *current_share)
-                            });
-                            if let Err(e) = Self::update_shared_memory_state(
-                                &pod_identifier,
-                                &device_config.device_uuid,
-                                memory_used,
-                                new_share,
-                                timestamp,
-                            )
-                            .await
-                            {
-                                tracing::error!(
+                        let device_config = pod_usage
+                            .device_configs
+                            .iter()
+                            .find(|config| config.device_idx == device_idx)
+                            .expect("Device config must exist for filtered pod");
+                        // **Stateless operation: Read current share from shared memory**
+                        let current_share = match Self::read_current_share_from_shared_memory(
+                            &pod_identifier,
+                            &device_config.device_uuid,
+                        )
+                        .await
+                        {
+                            Ok(share) => share,
+                            Err(e) => {
+                                error!(
                                     pod_identifier = %pod_identifier,
                                     device_idx = device_idx,
+                                    device_uuid = %device_config.device_uuid,
                                     error = %e,
-                                    "Failed to update shared memory state"
+                                    "Failed to read current share from shared memory due to system state inconsistency, skipping pod"
                                 );
+                                // Skip this pod due to system state inconsistency
+                                continue;
                             }
+                        };
+
+                        // **Extract pod data from snapshot**
+                        let pod_utilization = device_snapshot.get_pod_utilization(&host_pids);
+                        let pod_memory = device_snapshot.get_pod_memory(&host_pids);
+
+                        // **Calculate new share based on current utilization**
+                        let new_share = calculate_delta(
+                            device_config,
+                            pod_utilization.total_utilization,
+                            current_share,
+                        );
+
+                        // **Update shared memory with new values**
+                        if let Err(e) = Self::update_shared_memory_state(
+                            &pod_identifier,
+                            &device_config.device_uuid,
+                            Some(pod_memory),
+                            Some(new_share),
+                            device_snapshot.timestamp,
+                        )
+                        .await
+                        {
+                            error!(
+                                pod_identifier = %pod_identifier,
+                                device_idx = device_idx,
+                                error = %e,
+                                "Failed to update shared memory state"
+                            );
                         }
                     }
                 }
@@ -286,11 +330,29 @@ impl LimiterCoordinator {
         // Update the pod device usage.
         {
             let mut active_pods = self.active_pods.write().unwrap();
-            let pod_usage = active_pods
-                .entry(pod_identifier.clone())
-                .or_insert_with(|| PodDeviceUsage::new(configs));
+            match active_pods.get_mut(&pod_identifier) {
+                Some(pod_usage) => {
+                    // Pod exists, add container and merge new device configs if needed
+                    pod_usage.add_container(container_name.to_string(), container_pid, host_pid);
 
-            pod_usage.add_container(container_name.to_string(), container_pid, host_pid);
+                    // Add any new device configs that don't already exist
+                    for new_config in configs {
+                        if !pod_usage
+                            .device_configs
+                            .iter()
+                            .any(|existing| existing.device_uuid == new_config.device_uuid)
+                        {
+                            pod_usage.device_configs.push(new_config);
+                        }
+                    }
+                }
+                None => {
+                    // New pod, create with provided configs
+                    let mut pod_usage = PodDeviceUsage::new(configs);
+                    pod_usage.add_container(container_name.to_string(), container_pid, host_pid);
+                    active_pods.insert(pod_identifier.clone(), pod_usage);
+                }
+            }
         }
 
         info!(
@@ -349,80 +411,6 @@ impl LimiterCoordinator {
         Ok(())
     }
 
-    /// Gets pod-level utilization data with retry logic.
-    async fn get_pod_utilization_with_retry(
-        device_idx: u32,
-        host_pids: &[u32],
-        last_seen_timestamp: u64,
-        retry_interval: Duration,
-    ) -> Result<(Utilization, u64)> {
-        const MAX_RETRIES: u32 = 5;
-        const BACKOFF_MULTIPLIER: u32 = 2;
-
-        for retry_count in 0..MAX_RETRIES {
-            match Self::get_pod_gpu_utilization(device_idx, host_pids, last_seen_timestamp).await {
-                Ok(Some((util, timestamp))) => return Ok((util, timestamp)),
-                Ok(None) => {
-                    return Ok((Utilization::default(), last_seen_timestamp));
-                }
-                Err(e) => {
-                    warn!(
-                        device_idx = device_idx,
-                        retry_count = retry_count,
-                        error = %e,
-                        "Failed to get GPU utilization, retrying"
-                    );
-
-                    if retry_count < MAX_RETRIES - 1 {
-                        sleep(retry_interval * BACKOFF_MULTIPLIER).await;
-                    }
-                }
-            }
-        }
-
-        Err(anyhow::anyhow!(
-            "Failed to get GPU utilization after {} retries",
-            MAX_RETRIES
-        ))
-    }
-
-    /// Gets the GPU memory usage of all processes in a pod directly via NVML.
-    async fn get_pod_memory_usage(device_idx: u32, host_pids: &[u32]) -> Result<u64> {
-        let nvml = nvml_wrapper::Nvml::init().context("Failed to initialize NVML")?;
-        tokio::task::spawn_blocking({
-            let host_pids = host_pids.to_vec();
-            move || -> Result<u64> {
-                let device = nvml
-                    .device_by_index(device_idx)
-                    .context("Failed to get device by index")?;
-
-                // Get all running processes
-                let process_info = device
-                    .running_compute_processes()
-                    .context("Failed to get running compute processes")?;
-
-                // Calculate total memory usage for all processes in this pod
-                let mut total_memory = 0u64;
-                for pi in process_info {
-                    if host_pids.contains(&pi.pid) {
-                        match pi.used_gpu_memory {
-                            nvml_wrapper::enums::device::UsedGpuMemory::Used(bytes) => {
-                                total_memory += bytes;
-                            }
-                            nvml_wrapper::enums::device::UsedGpuMemory::Unavailable => {
-                                // Ignore unavailable memory information
-                            }
-                        }
-                    }
-                }
-
-                Ok(total_memory)
-            }
-        })
-        .await
-        .context("Blocking task failed")?
-    }
-
     /// Updates the pod memory usage in shared memory.
     async fn update_shared_memory_state(
         pod_identifier: &str,
@@ -447,11 +435,16 @@ impl LimiterCoordinator {
                         device.update_pod_memory_used(memory_used);
                     }
                     if let Some(new_share) = new_share {
-                        // Get current state
+                        // Get current state and total cores
                         let total_cuda_cores = device.get_total_cores() as i32;
-                        // Apply adjustment
-                        let adjustment = new_share.max(0).min(total_cuda_cores);
-                        device.fetch_add_available_cores(adjustment);
+                        let current_cores = device.get_available_cores();
+
+                        // Calculate the delta (difference) to apply
+                        let target_cores = new_share.max(0).min(total_cuda_cores);
+                        let delta = target_cores - current_cores;
+
+                        // Apply the delta to reach the target value
+                        device.fetch_add_available_cores(delta);
                     }
                 } else {
                     error!(
@@ -468,72 +461,99 @@ impl LimiterCoordinator {
         .context("Blocking task failed")?
     }
 
-    /// Gets the GPU utilization of all processes in a pod directly via NVML.
-    async fn get_pod_gpu_utilization(
+    /// Gets a complete snapshot of device state (utilization + memory)
+    async fn get_device_snapshot(
         device_idx: u32,
-        host_pids: &[u32],
         last_seen_timestamp: u64,
-    ) -> Result<Option<(Utilization, u64)>> {
-        // Execute the NVML call in a blocking task.
+    ) -> Result<Option<DeviceSnapshot>> {
         tokio::task::spawn_blocking({
-            let host_pids = host_pids.to_vec();
-            move || -> Result<Option<(Utilization, u64)>> {
-                // Initialize NVML.
+            move || -> Result<Option<DeviceSnapshot>> {
                 let nvml = nvml_wrapper::Nvml::init().context("Failed to initialize NVML")?;
-
-                let mut newest_timestamp_candidate = last_seen_timestamp;
-                let dev = nvml
+                let device = nvml
                     .device_by_index(device_idx)
                     .context("Failed to get device by index")?;
 
-                // Get process utilization samples.
+                // Get utilization data from last seen timestamp
                 let process_utilization_samples =
-                    dev.process_utilization_stats(last_seen_timestamp);
-
+                    device.process_utilization_stats(last_seen_timestamp);
                 if let Err(NvmlError::NotFound) = process_utilization_samples {
                     return Ok(None);
                 }
-
                 let process_utilization_samples = process_utilization_samples
                     .context("Failed to get process utilization stats")?;
-                // Initialize utilization counters.
-                let mut current = Utilization::default();
-                let mut valid = false;
 
-                // Process each utilization sample.
+                // Get memory data
+                let process_info = device
+                    .running_compute_processes()
+                    .context("Failed to get running compute processes")?;
+
+                let mut process_utilizations = std::collections::HashMap::new();
+                let mut process_memories = std::collections::HashMap::new();
+                let mut newest_timestamp = last_seen_timestamp;
+
+                // Process utilization data
                 for sample in process_utilization_samples {
-                    // Skip old samples.
+                    // Skip old samples (defensive programming)
                     if sample.timestamp < last_seen_timestamp {
                         continue;
                     }
 
-                    // Collect the maximum valid timestamp.
-                    if sample.timestamp > newest_timestamp_candidate {
-                        newest_timestamp_candidate = sample.timestamp;
+                    // Track the newest timestamp
+                    if sample.timestamp > newest_timestamp {
+                        newest_timestamp = sample.timestamp;
                     }
 
-                    // Mark that we have valid data.
-                    valid = true;
+                    process_utilizations.insert(sample.pid, ProcessUtilization {
+                        sm_util: sample.sm_util,
+                        codec_util: codec_normalize(sample.enc_util + sample.dec_util),
+                    });
+                }
 
-                    // Calculate codec utilization.
-                    let codec_util = codec_normalize(sample.enc_util + sample.dec_util);
-
-                    // Add to system-level utilization.
-                    current.sys_current += sample.sm_util;
-                    current.sys_current += codec_util;
-
-                    // If it's a process in our pod, add to user process utilization.
-                    if host_pids.contains(&sample.pid) {
-                        current.user_current += sample.sm_util;
-                        current.user_current += codec_util;
+                // Process memory data
+                for pi in process_info {
+                    if let UsedGpuMemory::Used(bytes) = pi.used_gpu_memory {
+                        process_memories.insert(pi.pid, bytes);
                     }
                 }
 
-                // Return None if no valid data, otherwise return the utilization.
-                if !valid {
+                if process_utilizations.is_empty() && process_memories.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some((current, newest_timestamp_candidate)))
+                    Ok(Some(DeviceSnapshot {
+                        process_utilizations,
+                        process_memories,
+                        timestamp: newest_timestamp,
+                    }))
+                }
+            }
+        })
+        .await
+        .context("Blocking task failed")?
+    }
+
+    /// Read current share value from shared memory
+    async fn read_current_share_from_shared_memory(
+        pod_identifier: &str,
+        device_uuid: &str,
+    ) -> Result<i32> {
+        tokio::task::spawn_blocking({
+            let pod_identifier = pod_identifier.to_string();
+            let device_uuid = device_uuid.to_string();
+
+            move || -> Result<i32> {
+                use utils::shared_memory::SharedMemoryHandle;
+                let handle = SharedMemoryHandle::open(&pod_identifier)
+                    .context("Failed to open shared memory")?;
+                let state = handle.get_state();
+
+                let devices_read = state.devices.read();
+                if let Some(device) = devices_read.get(&device_uuid) {
+                    Ok(device.get_available_cores())
+                } else {
+                    anyhow::bail!(
+                        "Device {} not found in shared memory for pod {}. This indicates a system state inconsistency.",
+                        device_uuid, pod_identifier
+                    );
                 }
             }
         })
