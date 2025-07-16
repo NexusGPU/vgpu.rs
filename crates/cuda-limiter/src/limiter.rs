@@ -10,7 +10,6 @@ use nvml_wrapper::Nvml;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
 use thiserror::Error;
 use trap::TrapError;
-use utils::shared_memory::SharedDeviceInfoV1;
 use utils::shared_memory::SharedMemoryHandle;
 
 use crate::detour;
@@ -58,8 +57,8 @@ pub(crate) struct Limiter {
     pub(crate) pid: u32,
     /// Pod name for shared memory access
     pod_identifier: String,
-    /// Shared memory handles for each device
-    shared_memory_handles: HashMap<String, SharedMemoryHandle>,
+    /// Shared memory handle for each device
+    shared_memory_handle: SharedMemoryHandle,
     /// NVML instance
     nvml: Nvml,
     /// Device dimensions
@@ -77,10 +76,6 @@ impl std::fmt::Debug for Limiter {
         f.debug_struct("Limiter")
             .field("pid", &self.pid)
             .field("identifier", &self.pod_identifier)
-            .field(
-                "shared_memory_handles_count",
-                &self.shared_memory_handles.len(),
-            )
             .finish()
     }
 }
@@ -104,11 +99,12 @@ impl Limiter {
             .set(uuid_mapping)
             .expect("set GLOBAL_DEVICE_UUIDS");
 
+        let shared_memory_handle = SharedMemoryHandle::open(&pod_identifier)?;
         Ok(Limiter {
             pid,
             pod_identifier,
             current_devices_dim: HashMap::new(),
-            shared_memory_handles: HashMap::new(),
+            shared_memory_handle,
             nvml,
             cu_device_mapping,
             device_count,
@@ -120,31 +116,33 @@ impl Limiter {
         let kernel_size = grids as i32;
 
         // Get shared memory handle for this device
-        let handle = self
-            .shared_memory_handles
-            .get(device_uuid)
-            .expect("Shared memory handle not found");
+        let devices = self.shared_memory_handle.get_state().devices.read();
 
-        let state = handle.get_state();
+        // TODO: fallback
+        let device = devices
+            .get(device_uuid)
+            .ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))
+            .expect("device not configured");
+
         loop {
-            let available = state.get_available_cores();
+            let available = device.get_available_cores();
             if available > 0 {
                 break;
             }
         }
-        state.fetch_sub_available_cores(kernel_size);
+        device.fetch_sub_available_cores(kernel_size);
     }
 
     /// Get pod memory usage from shared memory
     pub(crate) fn get_pod_memory_usage(&self, device_uuid: &str) -> Result<(u64, u64), Error> {
-        let handle = self
-            .shared_memory_handles
+        let devices = self.shared_memory_handle.get_state().devices.read();
+
+        let device = devices
             .get(device_uuid)
             .ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))?;
 
-        let state = handle.get_state();
-        let used = state.get_pod_memory_used();
-        let limit = state.get_mem_limit();
+        let used = device.get_pod_memory_used();
+        let limit = device.get_mem_limit();
 
         Ok((used, limit))
     }
@@ -215,20 +213,6 @@ impl Limiter {
     }
 }
 
-/// Trait for shared memory operations
-#[allow(dead_code)]
-pub(crate) trait SharedMemory {
-    /// Gets a reference to the shared device state
-    fn get_state(&self) -> &SharedDeviceInfoV1;
-}
-
-/// Implementation of SharedMemory trait for SharedMemoryHandle
-impl SharedMemory for SharedMemoryHandle {
-    fn get_state(&self) -> &SharedDeviceInfoV1 {
-        self.get_state()
-    }
-}
-
 /// Get pod name from environment variable
 pub(crate) fn get_pod_identifier() -> Result<String, Error> {
     let name = std::env::var("POD_NAME").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
@@ -243,7 +227,12 @@ mod tests {
 
     use utils::shared_memory::SharedDeviceInfoV1;
 
-    use super::*;
+    /// Trait for shared memory operations
+    #[allow(dead_code)]
+    trait SharedMemory {
+        /// Gets a reference to the shared device state
+        fn get_state(&self) -> &SharedDeviceInfoV1;
+    }
 
     /// Mock implementation of SharedMemory for testing
     pub struct MockSharedMemory {
@@ -270,7 +259,7 @@ mod tests {
 
         /// Set pod memory used for testing
         pub fn set_pod_memory_used(&self, used: u64) {
-            self.state.update_pod_memory_used(used, 0);
+            self.state.update_pod_memory_used(used);
         }
     }
 

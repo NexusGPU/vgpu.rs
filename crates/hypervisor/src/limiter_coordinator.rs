@@ -1,57 +1,6 @@
 //! Limiter Coordinator Module
-//!
-//! This module provides functionality for coordinating GPU resource limits across pods and containers.
-//! The coordinator manages shared memory segments at the pod level, allowing all containers within
-//! a pod to share the same GPU core allocation.
-//!
-//! # Pod-Level Resource Sharing
-//!
-//! The coordinator uses pod names as shared memory identifiers, enabling containers within the same
-//! pod to share GPU core quotas. This is particularly useful for multi-container pods where
-//! containers need to coordinate their GPU usage.
-//!
-//! # Example Usage
-//!
-//! ```rust,no_run
-//! # use std::sync::Arc;
-//! # use std::time::Duration;
-//! # use utils::shared_memory::DeviceConfig;
-//!
-//! // Create a coordinator with device count (automatically starts monitoring tasks)
-//! let coordinator = LimiterCoordinator::new(Duration::from_secs(1), 4); // 4 GPUs
-//!
-//! // Configure device limits
-//! let device_config = DeviceConfig {
-//!     device_idx: 0,
-//!     up_limit: 80,                      // 80% utilization limit
-//!     mem_limit: 8 * 1024 * 1024 * 1024, // 8GB memory limit
-//!     total_cuda_cores: 2048,
-//! };
-//!
-//! // Register containers from the same pod
-//! coordinator.register_device("my-pod", "container-1", 1001, 12345, device_config.clone())?;
-//! coordinator.register_device("my-pod", "container-2", 1002, 12346, device_config.clone())?;
-//!
-//! // Both containers now share the same GPU core allocation through shared memory
-//! // identified by the pod name "my-pod"
-//! // The coordinator automatically monitors and adjusts GPU core allocation
-//!
-//! // Unregister containers when done
-//! coordinator.unregister_device("my-pod", "container-1", 1001)?;
-//! coordinator.unregister_device("my-pod", "container-2", 1002)?;
-//! // Shared memory is automatically cleaned up when the last container is unregistered
-//! # Ok::<(), anyhow::Error>(())
-//! ```
-//!
-//! # Key Features
-//!
-//! - **Pod-Level Sharing**: Containers within the same pod share GPU core allocation
-//! - **Automatic Cleanup**: Shared memory is cleaned up when the last container is unregistered
-//! - **Container Tracking**: Track which containers are using each pod's shared memory
-//! - **Dynamic Adjustment**: GPU core allocation is adjusted based on utilization monitoring
 
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -73,15 +22,15 @@ use utils::shared_memory::ThreadSafeSharedMemoryManager;
 /// Tracks device usage at the pod level.
 #[derive(Debug, Clone)]
 pub struct PodDeviceUsage {
-    pub device_config: DeviceConfig,
+    pub device_configs: Vec<DeviceConfig>,
     /// Information about containers in this pod that are using the device: container_name -> (container_pid, host_pid)
     pub active_containers: HashMap<String, (u32, u32)>,
 }
 
 impl PodDeviceUsage {
-    fn new(device_config: DeviceConfig) -> Self {
+    fn new(device_configs: Vec<DeviceConfig>) -> Self {
         Self {
-            device_config,
+            device_configs,
             active_containers: HashMap::new(),
         }
     }
@@ -209,7 +158,12 @@ impl LimiterCoordinator {
                     let pods_for_device: Vec<(String, PodDeviceUsage)> = {
                         let pods = active_pods.read().unwrap();
                         pods.iter()
-                            .filter(|(_, usage)| usage.device_config.device_idx == device_idx)
+                            .filter(|(_, usage)| {
+                                usage
+                                    .device_configs
+                                    .iter()
+                                    .any(|config| config.device_idx == device_idx)
+                            })
                             .map(|(name, usage)| (name.clone(), usage.clone()))
                             .collect()
                     };
@@ -228,120 +182,70 @@ impl LimiterCoordinator {
                             continue;
                         }
 
-                        // Get or initialize device state.
-                        let (last_seen_timestamp, current_share) = device_states
-                            .entry(pod_identifier.clone())
-                            .or_insert((0, pod_usage.device_config.total_cuda_cores as i32));
+                        for device_config in pod_usage.device_configs {
+                            let (last_seen_timestamp, current_share) = device_states
+                                .entry(pod_identifier.clone())
+                                .or_insert((0, device_config.total_cuda_cores as i32));
 
-                        // Get GPU utilization data.
-                        match Self::get_pod_utilization_with_retry(
-                            device_idx,
-                            &host_pids,
-                            *last_seen_timestamp,
-                            Duration::from_millis(100),
-                        )
-                        .await
-                        {
-                            Ok((utilization, timestamp)) => {
-                                *last_seen_timestamp = timestamp;
-
-                                // Calculate the new share value.
-                                let new_share = Self::calculate_new_share(
-                                    &pod_usage.device_config,
-                                    utilization.user_current,
-                                    *current_share,
-                                );
-
-                                // If the share value has changed, update the shared memory.
-                                if new_share != *current_share {
-                                    match Self::update_shared_memory_state(
-                                        &pod_identifier,
-                                        utilization.user_current,
-                                        new_share,
-                                    )
-                                    .await
-                                    {
-                                        Ok(()) => {
-                                            debug!(
-                                                pod_identifier = %pod_identifier,
-                                                device_idx = device_idx,
-                                                old_share = *current_share,
-                                                new_share = new_share,
-                                                user_utilization = utilization.user_current,
-                                                sys_utilization = utilization.sys_current,
-                                                "Updated GPU core allocation"
-                                            );
-                                            *current_share = new_share;
-                                        }
-                                        Err(e) => {
-                                            error!(
-                                                pod_identifier = %pod_identifier,
-                                                device_idx = device_idx,
-                                                error = %e,
-                                                "Failed to update shared memory state"
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    debug!(
+                            let utilization = match Self::get_pod_utilization_with_retry(
+                                device_config.device_idx,
+                                &host_pids,
+                                *last_seen_timestamp,
+                                Duration::from_millis(100),
+                            )
+                            .await
+                            {
+                                Ok((utilization, timestamp)) => {
+                                    *last_seen_timestamp = timestamp;
+                                    Some(utilization)
+                                }
+                                Err(e) => {
+                                    error!(
                                         pod_identifier = %pod_identifier,
                                         device_idx = device_idx,
-                                        share = *current_share,
-                                        user_utilization = utilization.user_current,
-                                        sys_utilization = utilization.sys_current,
-                                        "GPU core allocation unchanged"
+                                        error = %e,
+                                        "Failed to get GPU utilization"
                                     );
+                                    None
                                 }
-                            }
-                            Err(e) => {
-                                error!(
-                                    pod_identifier = %pod_identifier,
-                                    device_idx = device_idx,
-                                    error = %e,
-                                    "Failed to get GPU utilization"
-                                );
-                            }
-                        }
+                            };
 
-                        // Update pod memory usage in shared memory
-                        match Self::get_pod_memory_usage(device_idx, &host_pids).await {
-                            Ok(memory_used) => {
-                                let timestamp = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_secs();
-
-                                match Self::update_pod_memory_usage(
-                                    &pod_identifier,
-                                    memory_used,
-                                    timestamp,
-                                )
-                                .await
-                                {
-                                    Ok(()) => {
-                                        debug!(
-                                            pod_identifier = %pod_identifier,
-                                            device_idx = device_idx,
-                                            memory_used = memory_used,
-                                            "Updated pod memory usage"
-                                        );
-                                    }
+                            // Update pod memory usage in shared memory
+                            let memory_used =
+                                match Self::get_pod_memory_usage(device_idx, &host_pids).await {
+                                    Ok(memory_used) => Some(memory_used),
                                     Err(e) => {
                                         error!(
                                             pod_identifier = %pod_identifier,
                                             device_idx = device_idx,
                                             error = %e,
-                                            "Failed to update pod memory usage"
+                                            "Failed to get pod memory usage"
                                         );
+                                        None
                                     }
-                                }
-                            }
-                            Err(e) => {
-                                error!(
+                                };
+                            let timestamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .expect("Failed to get timestamp")
+                                .as_secs();
+                            // Calculate the new share value.
+                            let new_share = utilization.map(|util| {
+                                calculate_delta(&device_config, util.user_current, *current_share)
+                            });
+                            if let Err(e) = Self::update_shared_memory_state(
+                                &pod_identifier,
+                                &device_config.device_uuid,
+                                memory_used,
+                                new_share,
+                                timestamp,
+                            )
+                            .await
+                            {
+                                tracing::error!(
                                     pod_identifier = %pod_identifier,
                                     device_idx = device_idx,
                                     error = %e,
-                                    "Failed to get pod memory usage"
+                                    "Failed to update shared memory state"
                                 );
                             }
                         }
@@ -369,21 +273,22 @@ impl LimiterCoordinator {
         container_name: &str,
         container_pid: u32,
         host_pid: u32,
-        config: DeviceConfig,
+        configs: Vec<DeviceConfig>,
     ) -> Result<()> {
         // Use the pod_identifier as the shared memory identifier.
         let pod_identifier = pod_identifier.to_string();
 
         // Create the shared memory.
         self.shared_memory_manager
-            .create_or_get_shared_memory(&pod_identifier, &config)?;
+            .create_or_get_shared_memory(&pod_identifier, &configs)?;
 
+        let device_count = configs.len();
         // Update the pod device usage.
         {
             let mut active_pods = self.active_pods.write().unwrap();
             let pod_usage = active_pods
                 .entry(pod_identifier.clone())
-                .or_insert_with(|| PodDeviceUsage::new(config.clone()));
+                .or_insert_with(|| PodDeviceUsage::new(configs));
 
             pod_usage.add_container(container_name.to_string(), container_pid, host_pid);
         }
@@ -393,7 +298,7 @@ impl LimiterCoordinator {
             container_name = %container_name,
             container_pid = container_pid,
             host_pid = host_pid,
-            device_idx = config.device_idx,
+            device_count = device_count,
             "Registered device to coordinator"
         );
 
@@ -483,10 +388,10 @@ impl LimiterCoordinator {
 
     /// Gets the GPU memory usage of all processes in a pod directly via NVML.
     async fn get_pod_memory_usage(device_idx: u32, host_pids: &[u32]) -> Result<u64> {
+        let nvml = nvml_wrapper::Nvml::init().context("Failed to initialize NVML")?;
         tokio::task::spawn_blocking({
             let host_pids = host_pids.to_vec();
             move || -> Result<u64> {
-                let nvml = nvml_wrapper::Nvml::init().context("Failed to initialize NVML")?;
                 let device = nvml
                     .device_by_index(device_idx)
                     .context("Failed to get device by index")?;
@@ -519,23 +424,43 @@ impl LimiterCoordinator {
     }
 
     /// Updates the pod memory usage in shared memory.
-    async fn update_pod_memory_usage(
+    async fn update_shared_memory_state(
         pod_identifier: &str,
-        memory_used: u64,
+        device_uuid: &str,
+        memory_used: Option<u64>,
+        new_share: Option<i32>,
         timestamp: u64,
     ) -> Result<()> {
         tokio::task::spawn_blocking({
             let pod_identifier = pod_identifier.to_string();
+            let device_uuid = device_uuid.to_string();
+
             move || -> Result<()> {
                 use utils::shared_memory::SharedMemoryHandle;
                 let handle = SharedMemoryHandle::open(&pod_identifier)
                     .context("Failed to open shared memory")?;
+                let state = handle.get_state();
 
                 // Update the memory usage in shared memory
-                handle
-                    .get_state()
-                    .update_pod_memory_used(memory_used, timestamp);
-
+                if let Some(device) = state.devices.write().get_mut(&device_uuid) {
+                    if let Some(memory_used) = memory_used {
+                        device.update_pod_memory_used(memory_used);
+                    }
+                    if let Some(new_share) = new_share {
+                        // Get current state
+                        let total_cuda_cores = device.get_total_cores() as i32;
+                        // Apply adjustment
+                        let adjustment = new_share.max(0).min(total_cuda_cores);
+                        device.fetch_add_available_cores(adjustment);
+                    }
+                } else {
+                    error!(
+                        pod_identifier = %pod_identifier,
+                        device_uuid = %device_uuid,
+                        "Device not found in shared memory"
+                    );
+                }
+                state.update_heartbeat(timestamp);
                 Ok(())
             }
         })
@@ -615,105 +540,6 @@ impl LimiterCoordinator {
         .await
         .context("Blocking task failed")?
     }
-
-    /// Update shared memory state (asynchronous safe version)
-    async fn update_shared_memory_state(
-        pod_identifier: &str,
-        user_current: u32,
-        current_share: i32,
-    ) -> Result<()> {
-        tokio::task::spawn_blocking({
-            let pod_identifier = pod_identifier.to_string();
-            move || -> Result<()> {
-                // Open shared memory in a blocking task
-                use utils::shared_memory::SharedMemoryHandle;
-                let handle = SharedMemoryHandle::open(&pod_identifier)
-                    .context("Failed to open shared memory")?;
-
-                let shared_state_ptr = handle.get_ptr();
-
-                // Get current state
-                let up_limit = unsafe { (*shared_state_ptr).up_limit.load(Ordering::Acquire) };
-                let total_cuda_cores =
-                    unsafe { (*shared_state_ptr).total_cuda_cores.load(Ordering::Acquire) as i32 };
-
-                // Calculate new share value
-                let new_share = calculate_delta_blocking(
-                    total_cuda_cores,
-                    user_current,
-                    current_share,
-                    up_limit,
-                );
-
-                // Apply adjustment
-                let clamped_share = new_share.max(0).min(total_cuda_cores);
-                unsafe {
-                    (*shared_state_ptr)
-                        .available_cuda_cores
-                        .store(clamped_share, Ordering::Release)
-                };
-
-                Ok(())
-            }
-        })
-        .await
-        .context("Blocking task failed")?
-    }
-
-    /// Calculate new share value
-    fn calculate_new_share(
-        device_config: &DeviceConfig,
-        user_current: u32,
-        current_share: i32,
-    ) -> i32 {
-        let up_limit = device_config.up_limit as i32;
-        let total_cuda_cores = device_config.total_cuda_cores as i32;
-
-        // Calculate utilization difference
-        let utilization_diff = if (up_limit - user_current as i32).abs() < 5 {
-            5
-        } else {
-            (up_limit - user_current as i32).abs()
-        };
-
-        // Calculate increment
-        let increment = Self::calculate_increment(device_config, utilization_diff, up_limit);
-
-        // Determine adjustment direction
-        if user_current <= up_limit as u32 {
-            // Utilization below limit, increase share
-            if current_share + increment > total_cuda_cores {
-                total_cuda_cores
-            } else {
-                current_share + increment
-            }
-        } else {
-            // Utilization above limit, decrease share
-            if current_share - increment < 0 {
-                0
-            } else {
-                current_share - increment
-            }
-        }
-    }
-
-    /// Calculate adjustment increment
-    fn calculate_increment(
-        device_config: &DeviceConfig,
-        utilization_diff: i32,
-        up_limit: i32,
-    ) -> i32 {
-        // Simplified calculation logic, based on the ratio of total cores
-        let total_cores = device_config.total_cuda_cores as i32;
-        let mut increment = total_cores / 100 * utilization_diff / 10;
-
-        // When the difference is large, increase the adjustment
-        if utilization_diff > up_limit / 2 {
-            increment = increment * utilization_diff * 2 / (up_limit + 1);
-        }
-
-        increment.max(1) // At least adjust 1 core
-    }
 }
 
 impl Drop for LimiterCoordinator {
@@ -729,13 +555,9 @@ impl Drop for LimiterCoordinator {
 }
 
 /// Calculate core adjustment value
-fn calculate_delta_blocking(
-    total_cuda_cores: i32,
-    user_current: u32,
-    share: i32,
-    up_limit: u32,
-) -> i32 {
-    let up_limit = up_limit as i32;
+fn calculate_delta(device: &DeviceConfig, user_current: u32, share: i32) -> i32 {
+    let up_limit = device.up_limit as i32;
+    let total_cuda_cores = device.total_cuda_cores as i32;
 
     // Calculate utilization difference
     let utilization_diff = if (up_limit - user_current as i32).abs() < 5 {
@@ -745,14 +567,7 @@ fn calculate_delta_blocking(
     };
 
     // Calculate increment
-    let mut increment = total_cuda_cores / 100 * utilization_diff / 10;
-
-    // When the difference is large, increase the adjustment
-    if utilization_diff > up_limit / 2 {
-        increment = increment * utilization_diff * 2 / (up_limit + 1);
-    }
-
-    let increment = increment.max(1); // At least adjust 1 core
+    let increment = calculate_increment(device, utilization_diff);
 
     // Determine adjustment direction
     if user_current <= up_limit as u32 {
@@ -772,6 +587,22 @@ fn calculate_delta_blocking(
     }
 }
 
+/// Calculate the increment value for delta adjustment
+fn calculate_increment(device: &DeviceConfig, utilization_diff: i32) -> i32 {
+    let up_limit = device.up_limit as i32;
+    let mut increment =
+        device.sm_count as i32 * device.sm_count as i32 * device.max_thread_per_sm as i32 / 256
+            * utilization_diff
+            / 10;
+
+    // Apply additional scaling when difference is large
+    if utilization_diff > up_limit / 2 {
+        increment = increment * utilization_diff * 2 / (up_limit + 1);
+    }
+
+    increment
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -784,9 +615,12 @@ mod tests {
     fn create_test_device_config(device_idx: u32) -> DeviceConfig {
         DeviceConfig {
             device_idx,
+            device_uuid: "test-device-uuid".to_string(),
             up_limit: 80,
             mem_limit: 8 * 1024 * 1024 * 1024, // 8GB
             total_cuda_cores: 2048,
+            sm_count: 10,
+            max_thread_per_sm: 1024,
         }
     }
 
@@ -814,7 +648,9 @@ mod tests {
 
         // Register device
         coordinator
-            .register_device(&pod_identifier, "container-1", 1001, 12345, config.clone())
+            .register_device(&pod_identifier, "container-1", 1001, 12345, vec![
+                config.clone()
+            ])
             .unwrap();
 
         // Unregister device
@@ -831,10 +667,14 @@ mod tests {
 
         // Register multiple containers
         coordinator
-            .register_device(&pod_identifier, "container-1", 1001, 12345, config.clone())
+            .register_device(&pod_identifier, "container-1", 1001, 12345, vec![
+                config.clone()
+            ])
             .unwrap();
         coordinator
-            .register_device(&pod_identifier, "container-2", 1002, 12346, config.clone())
+            .register_device(&pod_identifier, "container-2", 1002, 12346, vec![
+                config.clone()
+            ])
             .unwrap();
 
         // Unregister containers

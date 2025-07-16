@@ -7,13 +7,13 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::RwLock;
 
 use anyhow::Context;
 use anyhow::Result;
 use shared_memory::Shmem;
 use shared_memory::ShmemConf;
 use shared_memory::ShmemError;
+use spin::RwLock;
 use tracing::info;
 use tracing::warn;
 
@@ -31,8 +31,6 @@ pub struct SharedDeviceInfoV1 {
     pub total_cuda_cores: AtomicU32,
     /// Current pod memory usage in bytes.
     pub pod_memory_used: AtomicU64,
-    /// Last memory update timestamp.
-    pub last_memory_update: AtomicU64,
 }
 
 impl SharedDeviceInfoV1 {
@@ -44,7 +42,6 @@ impl SharedDeviceInfoV1 {
             mem_limit: AtomicU64::new(mem_limit),
             total_cuda_cores: AtomicU32::new(total_cuda_cores),
             pod_memory_used: AtomicU64::new(0),
-            last_memory_update: AtomicU64::new(0),
         }
     }
 
@@ -56,6 +53,12 @@ impl SharedDeviceInfoV1 {
     /// Sets the number of available CUDA cores.
     pub fn set_available_cores(&self, cores: i32) {
         self.available_cuda_cores.store(cores, Ordering::Release)
+    }
+
+    /// Fetches and adds the number of available CUDA cores.
+    pub fn fetch_add_available_cores(&self, cores: i32) -> i32 {
+        self.available_cuda_cores
+            .fetch_add(cores, Ordering::Release)
     }
 
     /// Subtracts the number of available CUDA cores.
@@ -95,14 +98,8 @@ impl SharedDeviceInfoV1 {
     }
 
     /// Updates the pod memory usage and timestamp.
-    pub fn update_pod_memory_used(&self, used: u64, timestamp: u64) {
+    pub fn update_pod_memory_used(&self, used: u64) {
         self.pod_memory_used.store(used, Ordering::Release);
-        self.last_memory_update.store(timestamp, Ordering::Release);
-    }
-
-    /// Gets the last memory update timestamp.
-    pub fn get_last_memory_update(&self) -> u64 {
-        self.last_memory_update.load(Ordering::Acquire)
     }
 }
 
@@ -132,6 +129,13 @@ impl SharedDeviceInfo {
     pub fn set_available_cores(&self, cores: i32) {
         match self {
             Self::V1(info) => info.set_available_cores(cores),
+        }
+    }
+
+    /// Fetches and adds the number of available CUDA cores.
+    pub fn fetch_add_available_cores(&self, cores: i32) -> i32 {
+        match self {
+            Self::V1(info) => info.fetch_add_available_cores(cores),
         }
     }
 
@@ -185,23 +189,16 @@ impl SharedDeviceInfo {
     }
 
     /// Updates the pod memory usage and timestamp.
-    pub fn update_pod_memory_used(&self, used: u64, timestamp: u64) {
+    pub fn update_pod_memory_used(&self, used: u64) {
         match self {
-            Self::V1(info) => info.update_pod_memory_used(used, timestamp),
-        }
-    }
-
-    /// Gets the last memory update timestamp.
-    pub fn get_last_memory_update(&self) -> u64 {
-        match self {
-            Self::V1(info) => info.get_last_memory_update(),
+            Self::V1(info) => info.update_pod_memory_used(used),
         }
     }
 }
 
 /// Hypervisor state containing multiple devices and health information.
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SharedDeviceState {
     /// Map of device UUID to device state.
     pub devices: RwLock<HashMap<String, SharedDeviceInfo>>,
@@ -211,9 +208,16 @@ pub struct SharedDeviceState {
 
 impl SharedDeviceState {
     /// Creates a new SharedDeviceState instance.
-    pub fn new() -> Self {
+    pub fn new(configs: &[DeviceConfig]) -> Self {
+        let mut devices = HashMap::new();
+        for config in configs {
+            devices.insert(
+                config.device_uuid.clone(),
+                SharedDeviceInfo::new(config.total_cuda_cores, config.up_limit, config.mem_limit),
+            );
+        }
         Self {
-            devices: RwLock::new(HashMap::new()),
+            devices: RwLock::new(devices),
             last_heartbeat: AtomicU64::new(0),
         }
     }
@@ -260,31 +264,31 @@ impl SharedDeviceState {
 
     /// Adds or updates a device in the state.
     pub fn add_device(&self, device_uuid: String, device_info: SharedDeviceInfo) {
-        let mut devices = self.devices.write().unwrap();
+        let mut devices = self.devices.write();
         devices.insert(device_uuid, device_info);
     }
 
     /// Removes a device from the state.
     pub fn remove_device(&self, device_uuid: &str) -> Option<SharedDeviceInfo> {
-        let mut devices = self.devices.write().unwrap();
+        let mut devices = self.devices.write();
         devices.remove(device_uuid)
     }
 
     /// Checks if a device exists by UUID.
     pub fn has_device(&self, device_uuid: &str) -> bool {
-        let devices = self.devices.read().unwrap();
+        let devices = self.devices.read();
         devices.contains_key(device_uuid)
     }
 
     /// Gets a list of all device UUIDs.
     pub fn get_device_uuids(&self) -> Vec<String> {
-        let devices = self.devices.read().unwrap();
+        let devices = self.devices.read();
         devices.keys().cloned().collect()
     }
 
     /// Gets the number of devices.
     pub fn device_count(&self) -> usize {
-        let devices = self.devices.read().unwrap();
+        let devices = self.devices.read();
         devices.len()
     }
 
@@ -315,29 +319,11 @@ impl SharedDeviceState {
         current_time - last_heartbeat <= timeout_seconds
     }
 
-    /// Executes a function on the current CUDA device if it exists.
-    /// This provides thread-safe access to device operations for the current CUDA device.
-    pub fn with_current_device<F, R>(&self, f: F) -> Result<Option<R>>
-    where F: FnOnce(&SharedDeviceInfo) -> R {
-        let device_uuid = Self::get_current_device_uuid()?;
-        let devices = self.devices.read().unwrap();
-        Ok(devices.get(&device_uuid).map(f))
-    }
-
-    /// Executes a mutable function on the current CUDA device if it exists.
-    /// This provides thread-safe mutable access to device operations for the current CUDA device.
-    pub fn with_current_device_mut<F, R>(&self, f: F) -> Result<Option<R>>
-    where F: FnOnce(&mut SharedDeviceInfo) -> R {
-        let device_uuid = Self::get_current_device_uuid()?;
-        let mut devices = self.devices.write().unwrap();
-        Ok(devices.get_mut(&device_uuid).map(f))
-    }
-
     /// Executes a function on a device by UUID if it exists.
     /// This provides thread-safe access to device operations.
     pub fn with_device_by_uuid<F, R>(&self, device_uuid: &str, f: F) -> Option<R>
     where F: FnOnce(&SharedDeviceInfo) -> R {
-        let devices = self.devices.read().unwrap();
+        let devices = self.devices.read();
         devices.get(device_uuid).map(f)
     }
 
@@ -345,30 +331,34 @@ impl SharedDeviceState {
     /// This provides thread-safe mutable access to device operations.
     pub fn with_device_by_uuid_mut<F, R>(&self, device_uuid: &str, f: F) -> Option<R>
     where F: FnOnce(&mut SharedDeviceInfo) -> R {
-        let mut devices = self.devices.write().unwrap();
+        let mut devices = self.devices.write();
         devices.get_mut(device_uuid).map(f)
-    }
-}
-
-impl Default for SharedDeviceState {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
 /// Device configuration information.
 #[derive(Debug, Clone)]
 pub struct DeviceConfig {
+    /// Device index
     pub device_idx: u32,
+    /// Device UUID
+    pub device_uuid: String,
+    /// Utilization limit percentage (0-100)
     pub up_limit: u32,
+    /// Memory limit in bytes
     pub mem_limit: u64,
+    /// Number of streaming multiprocessors
+    pub sm_count: u32,
+    /// Maximum threads per streaming multiprocessor
+    pub max_thread_per_sm: u32,
+    /// Total number of CUDA cores
     pub total_cuda_cores: u32,
 }
 
 /// A thread-safe shared memory manager.
 pub struct ThreadSafeSharedMemoryManager {
-    /// Active shared memory segments: identifier -> (Shmem, DeviceConfig)
-    active_memories: RwLock<HashMap<String, (SharedMemoryHandle, DeviceConfig)>>,
+    /// Active shared memory segments: identifier -> Shmem
+    active_memories: RwLock<HashMap<String, SharedMemoryHandle>>,
 }
 
 impl ThreadSafeSharedMemoryManager {
@@ -383,33 +373,22 @@ impl ThreadSafeSharedMemoryManager {
     pub fn create_or_get_shared_memory(
         &self,
         identifier: &str,
-        config: &DeviceConfig,
+        configs: &[DeviceConfig],
     ) -> Result<()> {
-        let mut memories = self.active_memories.write().unwrap();
+        let mut memories = self.active_memories.write();
 
         // Check if the segment already exists.
         if memories.contains_key(identifier) {
             return Ok(());
         }
         // Create a new shared memory segment.
-        let shmem = SharedMemoryHandle::create(identifier, config)?;
-
-        // Initialize the shared memory data.
-        let ptr = shmem.get_ptr();
-        unsafe {
-            ptr.write(SharedDeviceInfoV1::new(
-                config.total_cuda_cores,
-                config.up_limit,
-                config.mem_limit,
-            ));
-        }
+        let shmem = SharedMemoryHandle::create(identifier, configs)?;
 
         // Store the Shmem object and configuration.
-        memories.insert(identifier.to_string(), (shmem, config.clone()));
+        memories.insert(identifier.to_string(), shmem);
 
         info!(
             identifier = %identifier,
-            device_idx = config.device_idx,
             "Created shared memory segment"
         );
 
@@ -417,10 +396,10 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Gets a pointer to the shared memory by its identifier.
-    pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut SharedDeviceInfoV1> {
-        let memories = self.active_memories.read().unwrap();
+    pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut SharedDeviceState> {
+        let memories = self.active_memories.read();
 
-        if let Some((shmem, _)) = memories.get(identifier) {
+        if let Some(shmem) = memories.get(identifier) {
             let ptr = shmem.get_ptr();
             Ok(ptr)
         } else {
@@ -430,9 +409,9 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Cleans up a shared memory segment.
     pub fn cleanup(&self, identifier: &str) -> Result<()> {
-        let mut memories = self.active_memories.write().unwrap();
+        let mut memories = self.active_memories.write();
 
-        if let Some((shmem, _)) = memories.remove(identifier) {
+        if let Some(shmem) = memories.remove(identifier) {
             // Drop the Shmem object to release the shared memory.
             drop(shmem);
             info!(identifier = %identifier, "Cleaned up shared memory segment");
@@ -445,20 +424,8 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Checks if a shared memory segment exists.
     pub fn contains(&self, identifier: &str) -> bool {
-        let memories = self.active_memories.read().unwrap();
+        let memories = self.active_memories.read();
         memories.contains_key(identifier)
-    }
-
-    /// Gets all shared memory identifiers.
-    pub fn get_all_identifiers(&self) -> Vec<String> {
-        let memories = self.active_memories.read().unwrap();
-        memories.keys().cloned().collect()
-    }
-
-    /// Gets the device configuration for a shared memory segment.
-    pub fn get_device_config(&self, identifier: &str) -> Option<DeviceConfig> {
-        let memories = self.active_memories.read().unwrap();
-        memories.get(identifier).map(|(_, config)| config.clone())
     }
 }
 
@@ -475,27 +442,27 @@ unsafe impl Sync for ThreadSafeSharedMemoryManager {}
 /// Safely access shared memory, automatically handling the segment's lifecycle.
 pub struct SharedMemoryHandle {
     _shmem: Shmem,
-    ptr: *mut SharedDeviceInfoV1,
+    ptr: *mut SharedDeviceState,
 }
 
 impl SharedMemoryHandle {
     /// Opens an existing shared memory segment.
     pub fn open(identifier: &str) -> Result<Self> {
         let shmem = ShmemConf::new()
-            .size(std::mem::size_of::<SharedDeviceInfoV1>())
+            .size(std::mem::size_of::<SharedDeviceState>())
             .os_id(identifier)
             .open()
             .context("Failed to open shared memory")?;
 
-        let ptr = shmem.as_ptr() as *mut SharedDeviceInfoV1;
+        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
 
         Ok(Self { _shmem: shmem, ptr })
     }
 
     /// Creates a new shared memory segment.
-    pub fn create(identifier: &str, config: &DeviceConfig) -> Result<Self> {
+    pub fn create(identifier: &str, configs: &[DeviceConfig]) -> Result<Self> {
         let shmem = match ShmemConf::new()
-            .size(std::mem::size_of::<SharedDeviceInfoV1>())
+            .size(std::mem::size_of::<SharedDeviceState>())
             .os_id(identifier)
             .create()
         {
@@ -503,7 +470,7 @@ impl SharedMemoryHandle {
             Err(ShmemError::LinkExists) => {
                 // If it already exists, try to open it.
                 ShmemConf::new()
-                    .size(std::mem::size_of::<SharedDeviceInfoV1>())
+                    .size(std::mem::size_of::<SharedDeviceState>())
                     .os_id(identifier)
                     .open()
                     .context("Failed to open existing shared memory")?
@@ -511,15 +478,11 @@ impl SharedMemoryHandle {
             Err(e) => return Err(anyhow::anyhow!("Failed to create shared memory: {}", e)),
         };
 
-        let ptr = shmem.as_ptr() as *mut SharedDeviceInfoV1;
+        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
 
         // Initialize the shared memory data.
         unsafe {
-            ptr.write(SharedDeviceInfoV1::new(
-                config.total_cuda_cores,
-                config.up_limit,
-                config.mem_limit,
-            ));
+            ptr.write(SharedDeviceState::new(configs));
         }
 
         info!(
@@ -531,12 +494,12 @@ impl SharedMemoryHandle {
     }
 
     /// Gets a pointer to the shared device state.
-    pub fn get_ptr(&self) -> *mut SharedDeviceInfoV1 {
+    pub fn get_ptr(&self) -> *mut SharedDeviceState {
         self.ptr
     }
 
     /// Gets a reference to the shared device state.
-    pub fn get_state(&self) -> &SharedDeviceInfoV1 {
+    pub fn get_state(&self) -> &SharedDeviceState {
         unsafe { &*self.ptr }
     }
 }
@@ -561,13 +524,16 @@ mod tests {
     const TEST_UP_LIMIT: u32 = 80;
     const TEST_MEM_LIMIT: u64 = 1024 * 1024 * 1024; // 1GB
 
-    fn create_test_config() -> DeviceConfig {
-        DeviceConfig {
+    fn create_test_configs() -> Vec<DeviceConfig> {
+        vec![DeviceConfig {
             device_idx: TEST_DEVICE_IDX,
+            device_uuid: "test-device-uuid".to_string(),
             up_limit: TEST_UP_LIMIT,
             mem_limit: TEST_MEM_LIMIT,
             total_cuda_cores: TEST_TOTAL_CORES,
-        }
+            sm_count: 10,
+            max_thread_per_sm: 1024,
+        }]
     }
 
     fn create_unique_identifier(test_name: &str) -> String {
@@ -576,10 +542,11 @@ mod tests {
 
     #[test]
     fn shared_device_state_creation() {
-        let state = SharedDeviceState::new();
+        let configs = create_test_configs();
+        let state = SharedDeviceState::new(&configs);
 
         // Test initial state
-        assert_eq!(state.device_count(), 0, "Should start with no devices");
+        assert_eq!(state.device_count(), 1, "Should start with one device");
         assert_eq!(
             state.get_last_heartbeat(),
             0,
@@ -591,12 +558,8 @@ mod tests {
         );
 
         // Add a device
-        let device_state = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
-        let device_uuid = "test-device-uuid".to_string();
-        state.add_device(device_uuid.clone(), device_state);
-
-        assert_eq!(state.device_count(), 1, "Should have one device");
-        assert!(state.has_device(&device_uuid), "Should contain the device");
+        let device_uuid = &configs[0].device_uuid;
+        assert!(state.has_device(device_uuid), "Should contain the device");
 
         // Test heartbeat
         let timestamp = std::time::SystemTime::now()
@@ -617,7 +580,7 @@ mod tests {
 
     #[test]
     fn shared_device_state_device_operations() {
-        let state = SharedDeviceState::new();
+        let state = SharedDeviceState::new(&create_test_configs());
         let device_uuid = "test-device-uuid".to_string();
 
         // Add device
@@ -660,7 +623,7 @@ mod tests {
 
     #[test]
     fn shared_device_state_multiple_devices() {
-        let state = SharedDeviceState::new();
+        let state = SharedDeviceState::new(&create_test_configs());
 
         // Add multiple devices
         for i in 0..3 {
@@ -702,7 +665,7 @@ mod tests {
 
     #[test]
     fn shared_device_state_atomic_operations() {
-        let device_state = SharedDeviceInfoV1::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
+        let device_state = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
 
         // Test available cores operations
         device_state.set_available_cores(512);
@@ -746,7 +709,7 @@ mod tests {
 
     #[test]
     fn shared_device_state_concurrent_access() {
-        let state = Arc::new(SharedDeviceState::new());
+        let state = Arc::new(SharedDeviceState::new(&create_test_configs()));
         let device_uuid = "test-device-uuid".to_string();
 
         // Add device to the state
@@ -801,38 +764,43 @@ mod tests {
 
     #[test]
     fn shared_memory_handle_creation() {
-        let config = create_test_config();
+        let configs = create_test_configs();
         let identifier = create_unique_identifier("handle_create");
 
         // Create shared memory handle
-        let handle = SharedMemoryHandle::create(&identifier, &config)
+        let handle = SharedMemoryHandle::create(&identifier, &configs)
             .expect("should create shared memory handle successfully");
 
         let state = handle.get_state();
-        assert_eq!(
-            state.get_total_cores(),
-            TEST_TOTAL_CORES,
-            "Total cores should match configuration"
-        );
-        assert_eq!(
-            state.get_up_limit(),
-            TEST_UP_LIMIT,
-            "Up limit should match configuration"
-        );
-        assert_eq!(
-            state.get_mem_limit(),
-            TEST_MEM_LIMIT,
-            "Memory limit should match configuration"
-        );
+        let device_uuid = &configs[0].device_uuid;
+        state
+            .with_device_by_uuid(device_uuid, |device| {
+                assert_eq!(
+                    device.get_total_cores(),
+                    TEST_TOTAL_CORES,
+                    "Total cores should match configuration"
+                );
+                assert_eq!(
+                    device.get_up_limit(),
+                    TEST_UP_LIMIT,
+                    "Up limit should match configuration"
+                );
+                assert_eq!(
+                    device.get_mem_limit(),
+                    TEST_MEM_LIMIT,
+                    "Memory limit should match configuration"
+                );
+            })
+            .expect("device should exist");
     }
 
     #[test]
     fn shared_memory_handle_open_existing() {
-        let config = create_test_config();
+        let configs = create_test_configs();
         let identifier = create_unique_identifier("handle_open");
 
         // Create shared memory handle first
-        let _handle1 = SharedMemoryHandle::create(&identifier, &config)
+        let _handle1 = SharedMemoryHandle::create(&identifier, &configs)
             .expect("should create shared memory handle successfully");
 
         // Open existing shared memory
@@ -840,8 +808,11 @@ mod tests {
             .expect("should open existing shared memory successfully");
 
         let state = handle2.get_state();
+        let device_uuid = &configs[0].device_uuid;
         assert_eq!(
-            state.get_total_cores(),
+            state
+                .with_device_by_uuid(device_uuid, |d| d.get_total_cores())
+                .unwrap(),
             TEST_TOTAL_CORES,
             "Total cores should match original configuration"
         );
@@ -849,12 +820,13 @@ mod tests {
 
     #[test]
     fn shared_memory_handle_concurrent_access() {
-        let config = create_test_config();
+        let configs = create_test_configs();
         let identifier = create_unique_identifier("handle_concurrent");
+        let device_uuid = configs[0].device_uuid.clone();
 
         // Create shared memory handle
         let handle = Arc::new(
-            SharedMemoryHandle::create(&identifier, &config)
+            SharedMemoryHandle::create(&identifier, &configs)
                 .expect("should create shared memory handle successfully"),
         );
 
@@ -863,16 +835,23 @@ mod tests {
         // Spawn multiple threads to test concurrent access
         for i in 0..5 {
             let handle_clone = Arc::clone(&handle);
+            let device_uuid_clone = device_uuid.clone();
             let thread_handle = thread::spawn(move || {
                 for j in 0..20 {
-                    let value = i * 20 + j;
+                    let value = (i * 20 + j) as i32;
                     let state = handle_clone.get_state();
-                    state.set_available_cores(value);
+                    state
+                        .with_device_by_uuid_mut(&device_uuid_clone, |d| {
+                            d.set_available_cores(value)
+                        })
+                        .unwrap();
 
                     // Small delay to increase chance of interleaving
                     thread::sleep(Duration::from_millis(1));
 
-                    let read_value = state.get_available_cores();
+                    let read_value = state
+                        .with_device_by_uuid(&device_uuid_clone, |d| d.get_available_cores())
+                        .unwrap();
                     // Due to concurrent access, the read value may not be the one we just set
                     assert!(read_value >= 0, "Read value should be non-negative");
                 }
@@ -886,7 +865,10 @@ mod tests {
         }
 
         // Verify final state is accessible
-        let final_value = handle.get_state().get_available_cores();
+        let final_value = handle
+            .get_state()
+            .with_device_by_uuid(&device_uuid, |d| d.get_available_cores())
+            .unwrap();
         assert!(final_value >= 0, "Final value should be non-negative");
     }
 
@@ -905,135 +887,167 @@ mod tests {
     #[test]
     fn boundary_conditions() {
         // Test with maximum values
-        let max_config = DeviceConfig {
+        let max_uuid = "max-uuid".to_string();
+        let max_configs = vec![DeviceConfig {
             device_idx: u32::MAX,
+            device_uuid: max_uuid.clone(),
             up_limit: u32::MAX,
             mem_limit: u64::MAX,
+            sm_count: u32::MAX,
+            max_thread_per_sm: u32::MAX,
             total_cuda_cores: u32::MAX,
-        };
+        }];
 
-        let device_state = SharedDeviceInfoV1::new(
-            max_config.total_cuda_cores,
-            max_config.up_limit,
-            max_config.mem_limit,
-        );
+        let state = SharedDeviceState::new(&max_configs);
 
-        assert_eq!(
-            device_state.get_total_cores(),
-            u32::MAX,
-            "Should handle maximum u32 value for cores"
-        );
-        assert_eq!(
-            device_state.get_up_limit(),
-            u32::MAX,
-            "Should handle maximum u32 value for limit"
-        );
-        assert_eq!(
-            device_state.get_mem_limit(),
-            u64::MAX,
-            "Should handle maximum u64 value for memory"
-        );
+        state
+            .with_device_by_uuid(&max_uuid, |device| {
+                assert_eq!(
+                    device.get_total_cores(),
+                    u32::MAX,
+                    "Should handle maximum u32 value for cores"
+                );
+                assert_eq!(
+                    device.get_up_limit(),
+                    u32::MAX,
+                    "Should handle maximum u32 value for limit"
+                );
+                assert_eq!(
+                    device.get_mem_limit(),
+                    u64::MAX,
+                    "Should handle maximum u64 value for memory"
+                );
+            })
+            .unwrap();
 
         // Test with minimum values
-        let min_config = DeviceConfig {
+        let min_uuid = "min-uuid".to_string();
+        let min_configs = vec![DeviceConfig {
             device_idx: 0,
+            device_uuid: min_uuid.clone(),
             up_limit: 0,
             mem_limit: 0,
             total_cuda_cores: 0,
-        };
+            sm_count: 0,
+            max_thread_per_sm: 0,
+        }];
 
-        let device_state = SharedDeviceInfoV1::new(
-            min_config.total_cuda_cores,
-            min_config.up_limit,
-            min_config.mem_limit,
-        );
+        let state = SharedDeviceState::new(&min_configs);
 
-        assert_eq!(
-            device_state.get_total_cores(),
-            0,
-            "Should handle zero cores"
-        );
-        assert_eq!(device_state.get_up_limit(), 0, "Should handle zero limit");
-        assert_eq!(device_state.get_mem_limit(), 0, "Should handle zero memory");
+        state
+            .with_device_by_uuid(&min_uuid, |device| {
+                assert_eq!(device.get_total_cores(), 0, "Should handle zero cores");
+                assert_eq!(device.get_up_limit(), 0, "Should handle zero limit");
+                assert_eq!(device.get_mem_limit(), 0, "Should handle zero memory");
+            })
+            .unwrap();
 
         // Test available cores with extreme values
-        device_state.set_available_cores(i32::MAX);
-        assert_eq!(
-            device_state.get_available_cores(),
-            i32::MAX,
-            "Should handle maximum i32 value"
-        );
+        state
+            .with_device_by_uuid_mut(&min_uuid, |device| {
+                device.set_available_cores(i32::MAX);
+                assert_eq!(
+                    device.get_available_cores(),
+                    i32::MAX,
+                    "Should handle maximum i32 value"
+                );
 
-        device_state.set_available_cores(i32::MIN);
-        assert_eq!(
-            device_state.get_available_cores(),
-            i32::MIN,
-            "Should handle minimum i32 value"
-        );
+                device.set_available_cores(i32::MIN);
+                assert_eq!(
+                    device.get_available_cores(),
+                    i32::MIN,
+                    "Should handle minimum i32 value"
+                );
+            })
+            .unwrap();
     }
 
     #[test]
     fn cross_process_simulation() {
-        let config = create_test_config();
+        let configs = create_test_configs();
         let identifier = create_unique_identifier("cross_process");
 
         // Simulate process 1: Create shared memory
-        let handle1 = SharedMemoryHandle::create(&identifier, &config)
+        let handle1 = SharedMemoryHandle::create(&identifier, &configs)
             .expect("should create shared memory successfully");
 
         // Modify state in "process 1"
-        handle1.get_state().set_available_cores(200);
-        handle1.get_state().set_up_limit(85);
+        let device_uuid = &configs[0].device_uuid;
+        handle1
+            .get_state()
+            .with_device_by_uuid_mut(device_uuid, |d| {
+                d.set_available_cores(200);
+                d.set_up_limit(85);
+            })
+            .unwrap();
 
         // Simulate process 2: Open existing shared memory
         let handle2 = SharedMemoryHandle::open(&identifier)
             .expect("should open existing shared memory successfully");
 
         // Verify state is shared between "processes"
-        assert_eq!(
-            handle2.get_state().get_available_cores(),
-            200,
-            "Available cores should be shared"
-        );
-        assert_eq!(
-            handle2.get_state().get_up_limit(),
-            85,
-            "Up limit should be shared"
-        );
+        handle2
+            .get_state()
+            .with_device_by_uuid(device_uuid, |d| {
+                assert_eq!(
+                    d.get_available_cores(),
+                    200,
+                    "Available cores should be shared"
+                );
+                assert_eq!(d.get_up_limit(), 85, "Up limit should be shared");
+            })
+            .unwrap();
 
         // Modify state in "process 2"
-        handle2.get_state().set_available_cores(300);
-        handle2.get_state().set_mem_limit(2 * 1024 * 1024 * 1024);
+        handle2
+            .get_state()
+            .with_device_by_uuid_mut(device_uuid, |d| {
+                d.set_available_cores(300);
+                d.set_mem_limit(2 * 1024 * 1024 * 1024);
+            })
+            .unwrap();
 
         // Verify changes are visible in "process 1"
-        assert_eq!(
-            handle1.get_state().get_available_cores(),
-            300,
-            "Changes should be visible across processes"
-        );
-        assert_eq!(
-            handle1.get_state().get_mem_limit(),
-            2 * 1024 * 1024 * 1024,
-            "Memory limit changes should be visible"
-        );
+        handle1
+            .get_state()
+            .with_device_by_uuid(device_uuid, |d| {
+                assert_eq!(
+                    d.get_available_cores(),
+                    300,
+                    "Changes should be visible across processes"
+                );
+                assert_eq!(
+                    d.get_mem_limit(),
+                    2 * 1024 * 1024 * 1024,
+                    "Memory limit changes should be visible"
+                );
+            })
+            .unwrap();
     }
 
     #[test]
     fn shared_memory_handle_send_sync() {
-        let config = create_test_config();
+        let configs = create_test_configs();
         let identifier = create_unique_identifier("send_sync");
 
-        let handle = SharedMemoryHandle::create(&identifier, &config)
+        let handle = SharedMemoryHandle::create(&identifier, &configs)
             .expect("should create shared memory successfully");
 
         // Test that handle can be sent across threads
         let handle_arc = Arc::new(handle);
         let handle_clone = Arc::clone(&handle_arc);
+        let device_uuid = configs[0].device_uuid.clone();
 
         let thread_handle = thread::spawn(move || {
             let state = handle_clone.get_state();
-            state.set_available_cores(42);
-            state.get_available_cores()
+            state
+                .with_device_by_uuid_mut(&device_uuid, |d| {
+                    d.set_available_cores(42);
+                })
+                .unwrap();
+            state
+                .with_device_by_uuid(&device_uuid, |d| d.get_available_cores())
+                .unwrap()
         });
 
         let result = thread_handle
@@ -1046,7 +1060,10 @@ mod tests {
 
         // Verify the change is visible in the original thread
         assert_eq!(
-            handle_arc.get_state().get_available_cores(),
+            handle_arc
+                .get_state()
+                .with_device_by_uuid(&configs[0].device_uuid, |d| d.get_available_cores())
+                .unwrap(),
             42,
             "Changes should be visible across threads"
         );
@@ -1056,25 +1073,21 @@ mod tests {
     #[test]
     fn thread_safe_shared_memory_manager_creation() {
         let manager = ThreadSafeSharedMemoryManager::new();
-        assert_eq!(manager.get_all_identifiers().len(), 0);
+        let memories = manager.active_memories.read();
+        assert_eq!(memories.len(), 0);
     }
 
     #[test]
     fn thread_safe_shared_memory_manager_basic_operations() {
         let manager = ThreadSafeSharedMemoryManager::new();
-        let config = create_test_config();
+        let configs = create_test_configs();
         let identifier = create_unique_identifier("thread_safe_basic");
 
         // Test creation
         manager
-            .create_or_get_shared_memory(&identifier, &config)
+            .create_or_get_shared_memory(&identifier, &configs)
             .unwrap();
         assert!(manager.contains(&identifier));
-
-        // Test get config
-        let retrieved_config = manager.get_device_config(&identifier).unwrap();
-        assert_eq!(retrieved_config.device_idx, config.device_idx);
-        assert_eq!(retrieved_config.up_limit, config.up_limit);
 
         // Test get shared memory
         let ptr = manager.get_shared_memory(&identifier).unwrap();
@@ -1087,17 +1100,13 @@ mod tests {
 
     #[test]
     fn thread_safe_shared_memory_manager_concurrent_access() {
-        use std::sync::Arc;
-        use std::thread;
-        use std::time::Duration;
-
         let manager = Arc::new(ThreadSafeSharedMemoryManager::new());
-        let config = create_test_config();
+        let configs = create_test_configs();
         let identifier = create_unique_identifier("thread_safe_concurrent");
 
         // Create shared memory first
         manager
-            .create_or_get_shared_memory(&identifier, &config)
+            .create_or_get_shared_memory(&identifier, &configs)
             .unwrap();
 
         let mut handles = vec![];
@@ -1115,10 +1124,6 @@ mod tests {
 
                     let ptr = result.unwrap();
                     assert!(!ptr.is_null());
-
-                    // Verify we can read the device config
-                    let config = manager_clone.get_device_config(&identifier_clone).unwrap();
-                    assert_eq!(config.device_idx, TEST_DEVICE_IDX);
 
                     // Small delay to increase chance of race conditions
                     thread::sleep(Duration::from_millis(1));
@@ -1143,18 +1148,24 @@ mod tests {
     #[test]
     fn thread_safe_shared_memory_manager_multiple_memories() {
         let manager = ThreadSafeSharedMemoryManager::new();
-        let config1 = DeviceConfig {
+        let config1 = vec![DeviceConfig {
             device_idx: 0,
+            device_uuid: "multi-id-1".to_string(),
             up_limit: 80,
             mem_limit: 1024 * 1024 * 1024,
             total_cuda_cores: 2048,
-        };
-        let config2 = DeviceConfig {
+            sm_count: 10,
+            max_thread_per_sm: 1024,
+        }];
+        let config2 = vec![DeviceConfig {
             device_idx: 1,
+            device_uuid: "multi-id-2".to_string(),
             up_limit: 90,
             mem_limit: 2048 * 1024 * 1024,
             total_cuda_cores: 4096,
-        };
+            sm_count: 10,
+            max_thread_per_sm: 1024,
+        }];
 
         let id1 = create_unique_identifier("thread_safe_multi_1");
         let id2 = create_unique_identifier("thread_safe_multi_2");
@@ -1168,16 +1179,28 @@ mod tests {
         assert!(manager.contains(&id2));
 
         // Verify configs are different
-        let retrieved_config1 = manager.get_device_config(&id1).unwrap();
-        let retrieved_config2 = manager.get_device_config(&id2).unwrap();
-
-        assert_eq!(retrieved_config1.device_idx, 0);
-        assert_eq!(retrieved_config2.device_idx, 1);
-        assert_eq!(retrieved_config1.up_limit, 80);
-        assert_eq!(retrieved_config2.up_limit, 90);
+        let ptr1 = manager.get_shared_memory(&id1).unwrap();
+        let ptr2 = manager.get_shared_memory(&id2).unwrap();
+        unsafe {
+            (*ptr1)
+                .with_device_by_uuid("multi-id-1", |d| {
+                    assert_eq!(d.get_up_limit(), 80);
+                })
+                .unwrap();
+            (*ptr2)
+                .with_device_by_uuid("multi-id-2", |d| {
+                    assert_eq!(d.get_up_limit(), 90);
+                })
+                .unwrap();
+        }
 
         // Get identifiers
-        let identifiers = manager.get_all_identifiers();
+        let identifiers = manager
+            .active_memories
+            .read()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         assert_eq!(identifiers.len(), 2);
         assert!(identifiers.contains(&id1));
         assert!(identifiers.contains(&id2));
@@ -1204,8 +1227,8 @@ mod tests {
             .contains("Shared memory not found"));
 
         // Test getting config for non-existent memory
-        let config = manager.get_device_config(non_existent_id);
-        assert!(config.is_none());
+        let memories = manager.active_memories.read();
+        assert!(!memories.contains_key(non_existent_id));
 
         // Test cleanup of non-existent memory (should not panic)
         let cleanup_result = manager.cleanup(non_existent_id);
@@ -1224,18 +1247,18 @@ mod tests {
     #[test]
     fn test_concurrent_creation_race_condition() {
         let manager = Arc::new(ThreadSafeSharedMemoryManager::new());
-        let config = create_test_config();
+        let configs = create_test_configs();
         let identifier = create_unique_identifier("concurrent_creation_race");
         let num_threads = 10;
         let mut handles = vec![];
 
         for _ in 0..num_threads {
             let manager_clone = Arc::clone(&manager);
-            let config_clone = config.clone();
+            let configs_clone = configs.clone();
             let identifier_clone = identifier.clone();
             let handle = thread::spawn(move || {
                 let result =
-                    manager_clone.create_or_get_shared_memory(&identifier_clone, &config_clone);
+                    manager_clone.create_or_get_shared_memory(&identifier_clone, &configs_clone);
                 assert!(
                     result.is_ok(),
                     "create_or_get_shared_memory should not fail"
@@ -1252,8 +1275,12 @@ mod tests {
         assert!(manager.contains(&identifier));
         let ptr = manager.get_shared_memory(&identifier).unwrap();
         unsafe {
-            let device_info = &*ptr;
-            assert_eq!(device_info.get_mem_limit(), config.mem_limit);
+            let state = &*ptr;
+            state
+                .with_device_by_uuid(&configs[0].device_uuid, |d| {
+                    assert_eq!(d.get_mem_limit(), TEST_MEM_LIMIT);
+                })
+                .unwrap();
         }
 
         // Cleanup
@@ -1264,12 +1291,12 @@ mod tests {
     #[test]
     fn test_cleanup_concurrency() {
         let manager = Arc::new(ThreadSafeSharedMemoryManager::new());
-        let config = create_test_config();
+        let configs = create_test_configs();
         let identifier = create_unique_identifier("cleanup_concurrency");
 
         // Create the shared memory segment initially
         manager
-            .create_or_get_shared_memory(&identifier, &config)
+            .create_or_get_shared_memory(&identifier, &configs)
             .unwrap();
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1314,29 +1341,37 @@ mod tests {
     #[test]
     fn test_multi_threaded_read_write_integration() {
         let manager = Arc::new(ThreadSafeSharedMemoryManager::new());
-        let config = create_test_config();
+        let configs = create_test_configs();
         let identifier = create_unique_identifier("multi_thread_integration");
 
         // Create the shared memory segment
         manager
-            .create_or_get_shared_memory(&identifier, &config)
+            .create_or_get_shared_memory(&identifier, &configs)
             .unwrap();
 
         let num_threads = 5;
         let mut handles = vec![];
+        let device_uuid = configs[0].device_uuid.clone();
 
         for i in 0..num_threads {
             let identifier_clone = identifier.clone();
+            let device_uuid_clone = device_uuid.clone();
             let handle = thread::spawn(move || {
                 let handle = SharedMemoryHandle::open(&identifier_clone).unwrap();
                 let device_info = handle.get_state();
 
                 // Write a unique value from this thread
-                device_info.set_available_cores(i);
+                device_info
+                    .with_device_by_uuid_mut(&device_uuid_clone, |d| {
+                        d.set_available_cores(i as i32)
+                    })
+                    .unwrap();
                 thread::sleep(Duration::from_millis(20)); // Allow time for other threads to see it
 
                 // Read the value and see if it has been changed by another thread
-                let value = device_info.get_available_cores();
+                let value = device_info
+                    .with_device_by_uuid(&device_uuid_clone, |d| d.get_available_cores())
+                    .unwrap();
                 (i, value)
             });
             handles.push(handle);
@@ -1351,8 +1386,9 @@ mod tests {
         let final_value = SharedMemoryHandle::open(&identifier)
             .unwrap()
             .get_state()
-            .get_available_cores();
-        assert!((0..num_threads).contains(&final_value));
+            .with_device_by_uuid(&device_uuid, |d| d.get_available_cores())
+            .unwrap();
+        assert!((0..num_threads as i32).contains(&final_value));
 
         // Cleanup
         manager.cleanup(&identifier).unwrap();
@@ -1360,7 +1396,7 @@ mod tests {
 
     #[test]
     fn test_new_shared_device_state_structure() {
-        let state = SharedDeviceState::new();
+        let state = SharedDeviceState::new(&[]);
 
         // Test initial state
         assert_eq!(state.device_count(), 0);

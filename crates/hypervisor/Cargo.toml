@@ -38,7 +38,7 @@ device-plugin-pb = { workspace = true }
 hyper-util = { version = "0.1", features = ["tokio"] }
 schemars = { workspace = true }
 notify = "6.1"
-
+cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
 
 [[bin]]
 name = "hypervisor"

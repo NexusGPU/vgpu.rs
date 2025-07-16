@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use cudarc::driver::sys::CUdevice_attribute;
+use cudarc::driver::CudaContext;
 use nvml_wrapper::Nvml;
 use utils::shared_memory::DeviceConfig;
 
@@ -24,7 +26,7 @@ pub async fn register_worker_to_limiter_coordinator(
     let pod_identifier = &format!("{}_{}", worker.namespace, worker.pod_name);
 
     // Create device config based on the worker's GPU info.
-    let device_config = create_device_config_from_worker(worker, nvml).await?;
+    let device_configs = create_device_configs_from_worker(worker, nvml).await?;
 
     // Register with the limiter coordinator.
     limiter_coordinator.register_device(
@@ -32,7 +34,7 @@ pub async fn register_worker_to_limiter_coordinator(
         container_name,
         container_pid,
         host_pid,
-        device_config,
+        device_configs,
     )?;
 
     tracing::info!(
@@ -68,57 +70,45 @@ pub async fn unregister_worker_from_limiter_coordinator(
 }
 
 /// Creates a device config from a worker's GPU info.
-async fn create_device_config_from_worker(
+async fn create_device_configs_from_worker(
     worker: &Arc<TensorFusionWorker>,
     nvml: &Nvml,
-) -> Result<DeviceConfig> {
+) -> Result<Vec<DeviceConfig>> {
     // Get the first GPU UUID from the worker (assuming single GPU for now).
-    let gpu_uuid = worker
-        .gpu_uuids()
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("Worker has no GPU UUIDs"))?;
+    let gpu_uuids = worker.gpu_uuids();
 
-    // Map the GPU UUID to a device index.
-    let device_count = nvml.device_count()?;
-    let mut device_idx = 0;
-    let mut found = false;
-
-    for i in 0..device_count {
-        let device = nvml.device_by_index(i)?;
-        let uuid = device.uuid()?.to_lowercase();
-        if uuid == gpu_uuid.to_lowercase() {
-            device_idx = i;
-            found = true;
-            break;
-        }
+    let mut device_configs = Vec::new();
+    for gpu_uuid in gpu_uuids {
+        let device = nvml.device_by_uuid(gpu_uuid.as_str())?;
+        let device_idx = device.index()?;
+        let (total_cuda_cores, up_limit, mem_limit, sm_count, max_thread_per_sm) =
+            calculate_device_limits_from_gpu_info(nvml, device_idx)?;
+        device_configs.push(DeviceConfig {
+            device_idx,
+            device_uuid: gpu_uuid.to_string(),
+            up_limit,
+            mem_limit,
+            total_cuda_cores,
+            sm_count,
+            max_thread_per_sm,
+        });
     }
 
-    if !found {
-        return Err(anyhow::anyhow!("GPU UUID {} not found in system", gpu_uuid));
-    }
-
-    // Get actual GPU hardware information and calculate total CUDA cores
-    let (total_cuda_cores, up_limit, mem_limit) =
-        calculate_device_limits_from_gpu_info(nvml, device_idx)?;
-
-    Ok(DeviceConfig {
-        device_idx,
-        up_limit,
-        mem_limit,
-        total_cuda_cores,
-    })
+    Ok(device_configs)
 }
 
 /// Calculate device limits from actual GPU hardware information
-fn calculate_device_limits_from_gpu_info(nvml: &Nvml, device_idx: u32) -> Result<(u32, u32, u64)> {
+fn calculate_device_limits_from_gpu_info(
+    nvml: &Nvml,
+    device_idx: u32,
+) -> Result<(u32, u32, u64, u32, u32)> {
     let device = nvml.device_by_index(device_idx)?;
-
-    // Get number of streaming multiprocessors (SM cores)
-    let sm_count = device.num_cores()?;
-
-    // For max threads per SM, we use a fixed value based on modern GPU architectures
-    // Most modern GPUs support 2048 threads per SM (32 warps * 64 threads per warp)
-    let max_thread_per_sm = 2048u32;
+    let ctx = CudaContext::new(device_idx as usize)?;
+    let sm_count =
+        ctx.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
+    let max_thread_per_sm = ctx
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR)?
+        as u32;
 
     // Calculate total CUDA cores using the formula: sm_count * max_thread_per_sm * FACTOR
     let total_cuda_cores = sm_count * max_thread_per_sm * FACTOR;
@@ -147,5 +137,11 @@ fn calculate_device_limits_from_gpu_info(nvml: &Nvml, device_idx: u32) -> Result
         "Calculated device limits from GPU hardware info"
     );
 
-    Ok((total_cuda_cores, up_limit, vram_limit))
+    Ok((
+        total_cuda_cores,
+        up_limit,
+        vram_limit,
+        sm_count,
+        max_thread_per_sm,
+    ))
 }
