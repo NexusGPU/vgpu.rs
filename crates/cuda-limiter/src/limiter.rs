@@ -132,6 +132,10 @@ impl Limiter {
         device.fetch_sub_available_cores(kernel_size);
     }
 
+    pub(crate) fn get_device_count(&self) -> u32 {
+        self.cu_device_mapping.len() as u32
+    }
+
     /// Get pod memory usage from shared memory
     pub(crate) fn get_pod_memory_usage(&self, device_uuid: &str) -> Result<(u64, u64), Error> {
         let devices = self.shared_memory_handle.get_state().devices.read();
