@@ -1362,9 +1362,7 @@ mod tests {
 
                 // Write a unique value from this thread
                 device_info
-                    .with_device_by_uuid_mut(&device_uuid_clone, |d| {
-                        d.set_available_cores(i)
-                    })
+                    .with_device_by_uuid_mut(&device_uuid_clone, |d| d.set_available_cores(i))
                     .unwrap();
                 thread::sleep(Duration::from_millis(20)); // Allow time for other threads to see it
 
