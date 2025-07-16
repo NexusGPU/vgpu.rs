@@ -387,11 +387,6 @@ impl ThreadSafeSharedMemoryManager {
         // Store the Shmem object and configuration.
         memories.insert(identifier.to_string(), shmem);
 
-        info!(
-            identifier = %identifier,
-            "Created shared memory segment"
-        );
-
         Ok(())
     }
 
