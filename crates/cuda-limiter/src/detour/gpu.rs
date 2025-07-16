@@ -106,8 +106,8 @@ pub(crate) unsafe extern "C" fn cu_launch_detour(f: CUfunction) -> CUresult {
             Ok((block_x, block_y, block_z)) => {
                 // Use the block dimensions to limit the rate
                 if let Err(e) = limiter.rate_limiter(device_uuid, 1, block_x * block_y * block_z) {
-            tracing::error!("Rate limiter failed: {}", e);
-        }
+                    tracing::error!("Rate limiter failed: {}", e);
+                }
             }
             Err(_) => {
                 tracing::warn!("Failed to get block dimensions, using default");
@@ -223,7 +223,9 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_detour(
             }
             Err(_) => {
                 tracing::warn!("Failed to get block dimensions, using default");
-                if let Err(e) = limiter.rate_limiter(device_uuid, (grid_width * grid_height) as u32, 1) {
+                if let Err(e) =
+                    limiter.rate_limiter(device_uuid, (grid_width * grid_height) as u32, 1)
+                {
                     tracing::error!("Rate limiter failed: {}", e);
                 }
             }
@@ -258,7 +260,9 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_async_detour(
             }
             Err(_) => {
                 tracing::warn!("Failed to get block dimensions, using default");
-                if let Err(e) = limiter.rate_limiter(device_uuid, (grid_width * grid_height) as u32, 1) {
+                if let Err(e) =
+                    limiter.rate_limiter(device_uuid, (grid_width * grid_height) as u32, 1)
+                {
                     tracing::error!("Rate limiter failed: {}", e);
                 }
             }

@@ -3,12 +3,19 @@
 //! GPU resource coordination between processes.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
-use anyhow::{Context, Result};
-use shared_memory::{Shmem, ShmemConf, ShmemError};
+use anyhow::Context;
+use anyhow::Result;
+use shared_memory::Shmem;
+use shared_memory::ShmemConf;
+use shared_memory::ShmemError;
 use spin::RwLock;
-use tracing::{info, warn};
+use tracing::info;
+use tracing::warn;
 
 /// Maximum number of devices that can be stored in shared memory
 const MAX_DEVICES: usize = 16;
@@ -125,7 +132,7 @@ impl DeviceEntry {
     pub fn set_uuid(&self, uuid: &str) {
         let uuid_bytes = uuid.as_bytes();
         let copy_len = std::cmp::min(uuid_bytes.len(), MAX_UUID_LEN - 1);
-        
+
         // Clear the UUID array first
         unsafe {
             let uuid_ptr = self.uuid.as_ptr() as *mut u8;
@@ -142,7 +149,7 @@ impl DeviceEntry {
             .iter()
             .position(|&b| b == 0)
             .unwrap_or(MAX_UUID_LEN - 1);
-        
+
         // Safety: We ensure the UUID is always valid UTF-8 when setting it
         unsafe { std::str::from_utf8_unchecked(&self.uuid[..null_pos]) }
     }
@@ -159,7 +166,8 @@ impl DeviceEntry {
 
     /// Sets the active status
     pub fn set_active(&self, active: bool) {
-        self.is_active.store(if active { 1 } else { 0 }, Ordering::Release);
+        self.is_active
+            .store(if active { 1 } else { 0 }, Ordering::Release);
     }
 
     /// Compares UUID efficiently without string allocation
@@ -171,13 +179,17 @@ impl DeviceEntry {
         if uuid_bytes.len() >= MAX_UUID_LEN {
             return false;
         }
-        
+
         // Check if lengths match by finding null terminator
-        let stored_len = self.uuid.iter().position(|&b| b == 0).unwrap_or(MAX_UUID_LEN);
+        let stored_len = self
+            .uuid
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(MAX_UUID_LEN);
         if stored_len != uuid_bytes.len() {
             return false;
         }
-        
+
         // Compare bytes directly
         self.uuid[..stored_len] == *uuid_bytes
     }
@@ -216,9 +228,15 @@ impl SharedDeviceState {
             state.devices[i].set_uuid(&config.device_uuid);
             // Use atomic operations to set device info
             let device_info = &state.devices[i].device_info;
-            device_info.total_cuda_cores.store(config.total_cuda_cores, Ordering::Relaxed);
-            device_info.up_limit.store(config.up_limit, Ordering::Relaxed);
-            device_info.mem_limit.store(config.mem_limit, Ordering::Relaxed);
+            device_info
+                .total_cuda_cores
+                .store(config.total_cuda_cores, Ordering::Relaxed);
+            device_info
+                .up_limit
+                .store(config.up_limit, Ordering::Relaxed);
+            device_info
+                .mem_limit
+                .store(config.mem_limit, Ordering::Relaxed);
             state.devices[i].set_active(true);
         }
 
@@ -230,20 +248,17 @@ impl SharedDeviceState {
             );
         }
 
-        state.device_count.store(device_count as u32, Ordering::Release);
+        state
+            .device_count
+            .store(device_count as u32, Ordering::Release);
         state
     }
 
     /// Finds device index by UUID efficiently
     fn find_device_index(&self, device_uuid: &str) -> Option<usize> {
         let current_count = self.device_count.load(Ordering::Acquire) as usize;
-        
-        for i in 0..current_count {
-            if self.devices[i].uuid_matches(device_uuid) {
-                return Some(i);
-            }
-        }
-        None
+
+        (0..current_count).find(|&i| self.devices[i].uuid_matches(device_uuid))
     }
 
     /// Adds or updates a device in the state.
@@ -252,11 +267,21 @@ impl SharedDeviceState {
         if let Some(i) = self.find_device_index(&device_uuid) {
             // Update existing device atomically
             let existing = &self.devices[i].device_info;
-            existing.total_cuda_cores.store(device_info.get_total_cores(), Ordering::Relaxed);
-            existing.up_limit.store(device_info.get_up_limit(), Ordering::Relaxed);
-            existing.mem_limit.store(device_info.get_mem_limit(), Ordering::Relaxed);
-            existing.available_cuda_cores.store(device_info.get_available_cores(), Ordering::Relaxed);
-            existing.pod_memory_used.store(device_info.get_pod_memory_used(), Ordering::Relaxed);
+            existing
+                .total_cuda_cores
+                .store(device_info.get_total_cores(), Ordering::Relaxed);
+            existing
+                .up_limit
+                .store(device_info.get_up_limit(), Ordering::Relaxed);
+            existing
+                .mem_limit
+                .store(device_info.get_mem_limit(), Ordering::Relaxed);
+            existing
+                .available_cuda_cores
+                .store(device_info.get_available_cores(), Ordering::Relaxed);
+            existing
+                .pod_memory_used
+                .store(device_info.get_pod_memory_used(), Ordering::Relaxed);
             return true;
         }
 
@@ -265,24 +290,33 @@ impl SharedDeviceState {
         if current_count < MAX_DEVICES {
             // Try to atomically increment the count
             let new_count = current_count + 1;
-            if self.device_count.compare_exchange_weak(
-                current_count as u32, 
-                new_count as u32, 
-                Ordering::AcqRel, 
-                Ordering::Acquire
-            ).is_ok() {
+            if self
+                .device_count
+                .compare_exchange_weak(
+                    current_count as u32,
+                    new_count as u32,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
                 // Successfully reserved the slot
                 let entry = &self.devices[current_count];
                 entry.set_uuid(&device_uuid);
-                
+
                 // Set device info atomically
                 let info = &entry.device_info;
-                info.total_cuda_cores.store(device_info.get_total_cores(), Ordering::Relaxed);
-                info.up_limit.store(device_info.get_up_limit(), Ordering::Relaxed);
-                info.mem_limit.store(device_info.get_mem_limit(), Ordering::Relaxed);
-                info.available_cuda_cores.store(device_info.get_available_cores(), Ordering::Relaxed);
-                info.pod_memory_used.store(device_info.get_pod_memory_used(), Ordering::Relaxed);
-                
+                info.total_cuda_cores
+                    .store(device_info.get_total_cores(), Ordering::Relaxed);
+                info.up_limit
+                    .store(device_info.get_up_limit(), Ordering::Relaxed);
+                info.mem_limit
+                    .store(device_info.get_mem_limit(), Ordering::Relaxed);
+                info.available_cuda_cores
+                    .store(device_info.get_available_cores(), Ordering::Relaxed);
+                info.pod_memory_used
+                    .store(device_info.get_pod_memory_used(), Ordering::Relaxed);
+
                 entry.set_active(true);
                 return true;
             }
@@ -294,17 +328,17 @@ impl SharedDeviceState {
     pub fn remove_device(&self, device_uuid: &str) -> Option<SharedDeviceInfo> {
         if let Some(i) = self.find_device_index(device_uuid) {
             let entry = &self.devices[i];
-            
+
             // Create a copy of the device info before removing
             let device_info = SharedDeviceInfo::new(
                 entry.device_info.get_total_cores(),
                 entry.device_info.get_up_limit(),
                 entry.device_info.get_mem_limit(),
             );
-            
+
             // Mark as inactive first
             entry.set_active(false);
-            
+
             // Compact the array by moving last active device to this position
             let current_count = self.device_count.load(Ordering::Acquire) as usize;
             if i != current_count - 1 {
@@ -315,20 +349,31 @@ impl SharedDeviceState {
                     entry.set_uuid(last_entry.get_uuid());
                     let src_info = &last_entry.device_info;
                     let dst_info = &entry.device_info;
-                    dst_info.total_cuda_cores.store(src_info.get_total_cores(), Ordering::Relaxed);
-                    dst_info.up_limit.store(src_info.get_up_limit(), Ordering::Relaxed);
-                    dst_info.mem_limit.store(src_info.get_mem_limit(), Ordering::Relaxed);
-                    dst_info.available_cuda_cores.store(src_info.get_available_cores(), Ordering::Relaxed);
-                    dst_info.pod_memory_used.store(src_info.get_pod_memory_used(), Ordering::Relaxed);
+                    dst_info
+                        .total_cuda_cores
+                        .store(src_info.get_total_cores(), Ordering::Relaxed);
+                    dst_info
+                        .up_limit
+                        .store(src_info.get_up_limit(), Ordering::Relaxed);
+                    dst_info
+                        .mem_limit
+                        .store(src_info.get_mem_limit(), Ordering::Relaxed);
+                    dst_info
+                        .available_cuda_cores
+                        .store(src_info.get_available_cores(), Ordering::Relaxed);
+                    dst_info
+                        .pod_memory_used
+                        .store(src_info.get_pod_memory_used(), Ordering::Relaxed);
                     entry.set_active(true);
-                    
+
                     // Deactivate the last entry
                     last_entry.set_active(false);
                 }
             }
-            
+
             // Decrement count
-            self.device_count.store((current_count - 1) as u32, Ordering::Release);
+            self.device_count
+                .store((current_count - 1) as u32, Ordering::Release);
             return Some(device_info);
         }
         None
@@ -385,11 +430,8 @@ impl SharedDeviceState {
     /// Executes a closure with a device by UUID efficiently.
     pub fn with_device_by_uuid<T, F>(&self, device_uuid: &str, f: F) -> Option<T>
     where F: FnOnce(&SharedDeviceInfo) -> T {
-        if let Some(i) = self.find_device_index(device_uuid) {
-            Some(f(&self.devices[i].device_info))
-        } else {
-            None
-        }
+        self.find_device_index(device_uuid)
+            .map(|i| f(&self.devices[i].device_info))
     }
 
     /// Executes a closure with a mutable device by UUID efficiently.
@@ -701,7 +743,7 @@ mod tests {
         // Add MAX_DEVICES devices
         for i in 0..MAX_DEVICES {
             let device_info = SharedDeviceInfo::new(1024, 80, 1024 * 1024 * 1024);
-            state.add_device(format!("device-{}", i), device_info);
+            state.add_device(format!("device-{i}"), device_info);
         }
 
         assert_eq!(state.device_count(), MAX_DEVICES);
@@ -816,7 +858,7 @@ mod tests {
                         .unwrap();
 
                     // Value should be valid (set by some thread)
-                    assert!(read_value >= 0 && read_value < 100);
+                    assert!((0..100).contains(&read_value));
                 }
             });
 
@@ -899,14 +941,14 @@ mod tests {
                 80 + (i as u32),
                 (1 + (i as u64)) * 1024 * 1024 * 1024,
             );
-            state.add_device(format!("device-{}", i), device_info);
+            state.add_device(format!("device-{i}"), device_info);
         }
 
         assert_eq!(state.device_count(), 10);
 
         // Remove every other device
         for i in (0..10).step_by(2) {
-            let removed = state.remove_device(&format!("device-{}", i));
+            let removed = state.remove_device(&format!("device-{i}"));
             assert!(removed.is_some());
         }
 
@@ -914,12 +956,12 @@ mod tests {
 
         // Verify remaining devices
         for i in (1..10).step_by(2) {
-            assert!(state.has_device(&format!("device-{}", i)));
+            assert!(state.has_device(&format!("device-{i}")));
         }
 
         // Verify removed devices are gone
         for i in (0..10).step_by(2) {
-            assert!(!state.has_device(&format!("device-{}", i)));
+            assert!(!state.has_device(&format!("device-{i}")));
         }
     }
 }

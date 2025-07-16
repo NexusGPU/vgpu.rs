@@ -115,7 +115,12 @@ impl Limiter {
     }
 
     /// Rate limiter that waits for available CUDA cores with exponential backoff
-    pub(crate) fn rate_limiter(&self, device_uuid: &str, grids: u32, _blocks: u32) -> Result<(), Error> {
+    pub(crate) fn rate_limiter(
+        &self,
+        device_uuid: &str,
+        grids: u32,
+        _blocks: u32,
+    ) -> Result<(), Error> {
         let kernel_size = grids as i32;
 
         // Get shared memory handle for this device
@@ -132,23 +137,25 @@ impl Limiter {
         const BACKOFF_MULTIPLIER: u64 = 2;
 
         loop {
-            let available = state.with_device_by_uuid(device_uuid, |device| {
-                device.get_available_cores()
-            }).ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))?;
-            
+            let available = state
+                .with_device_by_uuid(device_uuid, |device| device.get_available_cores())
+                .ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))?;
+
             if available >= kernel_size {
                 // Successfully reserved cores
-                state.with_device_by_uuid_mut(device_uuid, |device| {
-                    device.fetch_sub_available_cores(kernel_size)
-                }).ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))?;
+                state
+                    .with_device_by_uuid_mut(device_uuid, |device| {
+                        device.fetch_sub_available_cores(kernel_size)
+                    })
+                    .ok_or_else(|| Error::DeviceNotConfigured(device_uuid.to_string()))?;
                 break;
             }
-            
+
             // Wait with exponential backoff to avoid busy-waiting
             std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
             backoff_ms = (backoff_ms * BACKOFF_MULTIPLIER).min(MAX_BACKOFF_MS);
         }
-        
+
         Ok(())
     }
 

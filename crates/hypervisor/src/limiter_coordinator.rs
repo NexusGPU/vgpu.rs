@@ -420,10 +420,10 @@ impl LimiterCoordinator {
         timestamp: u64,
     ) -> Result<()> {
         use utils::shared_memory::SharedMemoryHandle;
-        
+
         // Simple shared memory operations don't need spawn_blocking
-        let handle = SharedMemoryHandle::open(pod_identifier)
-            .context("Failed to open shared memory")?;
+        let handle =
+            SharedMemoryHandle::open(pod_identifier).context("Failed to open shared memory")?;
         let state = handle.get_state();
 
         // Update the memory usage in shared memory
@@ -459,19 +459,16 @@ impl LimiterCoordinator {
     }
 
     /// Gets available cores for a device efficiently
-    async fn get_available_cores(
-        pod_identifier: &str,
-        device_uuid: &str,
-    ) -> Result<i32> {
+    async fn get_available_cores(pod_identifier: &str, device_uuid: &str) -> Result<i32> {
         use utils::shared_memory::SharedMemoryHandle;
-        
-        let handle = SharedMemoryHandle::open(pod_identifier)
-            .context("Failed to open shared memory")?;
+
+        let handle =
+            SharedMemoryHandle::open(pod_identifier).context("Failed to open shared memory")?;
         let state = handle.get_state();
 
-        if let Some(available_cores) = state.with_device_by_uuid(device_uuid, |device| {
-            device.get_available_cores()
-        }) {
+        if let Some(available_cores) =
+            state.with_device_by_uuid(device_uuid, |device| device.get_available_cores())
+        {
             Ok(available_cores)
         } else {
             anyhow::bail!(
