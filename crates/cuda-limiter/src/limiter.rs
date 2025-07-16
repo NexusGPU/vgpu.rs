@@ -13,6 +13,7 @@ use trap::TrapError;
 use utils::shared_memory::SharedMemoryHandle;
 
 use crate::detour;
+use crate::detour::gpu;
 
 #[derive(Error, Debug)]
 pub(crate) enum Error {
@@ -87,15 +88,18 @@ impl Limiter {
         let mut cu_device_mapping = HashMap::new();
         let mut uuid_mapping = HashMap::new();
 
-        for gpu_uuid in gpu_uuids {
-            let gpu_uuid = gpu_uuid.replace("gpu-", "GPU-");
-            let device = nvml.device_by_uuid(gpu_uuid.as_str())?;
-            let idx = device.index()?;
-            let ctx = CudaContext::new(idx as usize)?;
-            uuid_mapping.insert(idx as i32, gpu_uuid.clone());
-            tracing::info!("Device {idx} UUID: {gpu_uuid}");
-            cu_device_mapping.insert(ctx.cu_device(), gpu_uuid.clone());
+        for i in 0..gpu_uuids.len() {
+            let ctx = CudaContext::new(i)?;
+            let cu_uuid = ctx.uuid()?;
+            let cu_uuid = uuid_to_string_formatted(&cu_uuid.bytes);
+
+            if gpu_uuids.contains(&cu_uuid.to_lowercase()) {
+                uuid_mapping.insert(i as i32, cu_uuid.clone());
+                tracing::info!("Device {i} UUID: {}", cu_uuid);
+                cu_device_mapping.insert(ctx.cu_device(), cu_uuid);
+            }
         }
+
         detour::GLOBAL_DEVICE_UUIDS
             .set(uuid_mapping)
             .expect("set GLOBAL_DEVICE_UUIDS");
@@ -223,6 +227,17 @@ pub(crate) fn get_pod_identifier() -> Result<String, Error> {
     let namespace =
         std::env::var("POD_NAMESPACE").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
     Ok(format!("{namespace}_{name}"))
+}
+
+fn uuid_to_string_formatted(uuid: &[i8; 16]) -> String {
+    format!(
+        "GPU-{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        uuid[0], uuid[1], uuid[2], uuid[3],
+        uuid[4], uuid[5],
+        uuid[6], uuid[7],
+        uuid[8], uuid[9],
+        uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
+    )
 }
 
 #[cfg(test)]

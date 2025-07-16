@@ -80,18 +80,16 @@ fn init_ngpu_library() {
         };
 
         if !config.gpu_uuids.is_empty() {
-            let lower_case_uuids: HashSet<_> = config.gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
-            let device_count = nvml
-                .device_count()
-                .expect("failed to get device count");
+            let lower_case_uuids: HashSet<_> =
+                config.gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
+            let device_count = nvml.device_count().expect("failed to get device count");
 
             let mut device_indices = Vec::new();
             for i in 0..device_count {
                 let device = nvml
-                    .device_by_index(i).expect("failed to get device by index");
-                let uuid = device
-                    .uuid()
-                    .expect("failed to get device uuid");
+                    .device_by_index(i)
+                    .expect("failed to get device by index");
+                let uuid = device.uuid().expect("failed to get device uuid");
                 if lower_case_uuids.contains(&uuid.to_lowercase()) {
                     device_indices.push(i.to_string());
                 }
