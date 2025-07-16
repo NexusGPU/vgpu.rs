@@ -92,7 +92,7 @@ impl Limiter {
             let cu_uuid = ctx.uuid()?;
             let cu_uuid = uuid_to_string_formatted(&cu_uuid.bytes);
 
-            if gpu_uuids.contains(&cu_uuid.to_lowercase()) {
+            if gpu_uuids.contains(&cu_uuid) {
                 uuid_mapping.insert(i as i32, cu_uuid.clone());
                 tracing::info!("Device {i} UUID: {}", cu_uuid);
                 cu_device_mapping.insert(ctx.cu_device(), cu_uuid);
