@@ -627,7 +627,7 @@ mod tests {
 
         // Add multiple devices
         for i in 0..3 {
-            let device_uuid = format!("device-{}", i);
+            let device_uuid = format!("device-{i}");
             let device_state = SharedDeviceInfo::new(
                 1024 + i as u32 * 512,
                 80 + i as u32 * 5,
@@ -838,7 +838,7 @@ mod tests {
             let device_uuid_clone = device_uuid.clone();
             let thread_handle = thread::spawn(move || {
                 for j in 0..20 {
-                    let value = (i * 20 + j) as i32;
+                    let value = i * 20 + j;
                     let state = handle_clone.get_state();
                     state
                         .with_device_by_uuid_mut(&device_uuid_clone, |d| {
@@ -1363,7 +1363,7 @@ mod tests {
                 // Write a unique value from this thread
                 device_info
                     .with_device_by_uuid_mut(&device_uuid_clone, |d| {
-                        d.set_available_cores(i as i32)
+                        d.set_available_cores(i)
                     })
                     .unwrap();
                 thread::sleep(Duration::from_millis(20)); // Allow time for other threads to see it
@@ -1388,7 +1388,7 @@ mod tests {
             .get_state()
             .with_device_by_uuid(&device_uuid, |d| d.get_available_cores())
             .unwrap();
-        assert!((0..num_threads as i32).contains(&final_value));
+        assert!((0..num_threads).contains(&final_value));
 
         // Cleanup
         manager.cleanup(&identifier).unwrap();
