@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 use anyhow::Result;
+use shared_memory::Mode;
 use shared_memory::Shmem;
 use shared_memory::ShmemConf;
 use shared_memory::ShmemError;
@@ -566,6 +567,14 @@ impl SharedMemoryHandle {
         let shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
             .os_id(identifier)
+            .mode(
+                Mode::S_IRUSR
+                    | Mode::S_IWUSR
+                    | Mode::S_IRGRP
+                    | Mode::S_IWGRP
+                    | Mode::S_IROTH
+                    | Mode::S_IWOTH,
+            )
             .create()
         {
             Ok(shmem) => shmem,

@@ -68,7 +68,7 @@ futures-util = "0.3"
 eventsource = { git="https://github.com/NexusGPU/eventsource.git" }
 url = "2.5"
 libloading = "0.8"
-shared_memory = "0.12"
+shared_memory = { git="https://github.com/NexusGPU/shared_memory.git", rev="8eb7859" }
 tower = "0.5"
 schemars = "0.8"
 json-patch = "1.4"
