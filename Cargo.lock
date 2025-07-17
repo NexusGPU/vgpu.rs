@@ -4216,6 +4216,7 @@ dependencies = [
  "anyhow",
  "cudarc",
  "frida-gum",
+ "libc",
  "shared_memory",
  "similar-asserts",
  "spin 0.10.0",

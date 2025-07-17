@@ -564,6 +564,8 @@ impl SharedMemoryHandle {
 
     /// Creates a new shared memory segment.
     pub fn create(identifier: &str, configs: &[DeviceConfig]) -> Result<Self> {
+        let old_umask = unsafe { libc::umask(0) };
+
         let shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
             .os_id(identifier)
@@ -588,6 +590,10 @@ impl SharedMemoryHandle {
             }
             Err(e) => return Err(anyhow::anyhow!("Failed to create shared memory: {}", e)),
         };
+
+        unsafe {
+            libc::umask(old_umask);
+        }
 
         let ptr = shmem.as_ptr() as *mut SharedDeviceState;
 
