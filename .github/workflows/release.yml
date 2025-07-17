@@ -243,6 +243,8 @@ jobs:
             libadd_path-x64.tar.gz
             libadd_path-arm64.tar.gz
             tensor-fusion-components.tar.gz
+            bootstrap-x64.tar.gz
+            bootstrap-arm64.tar.gz
 
   publish_x86:
     needs:
