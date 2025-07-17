@@ -3,12 +3,25 @@ name = "trap"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["http"]
+ipc = ["ipc-channel"]
+http = ["reqwest", "tokio", "poem", "uuid", "chrono", "serde_json", "http-bidir-comm"]
+
 [dependencies]
-ipc-channel = { workspace = true }
+ipc-channel = { workspace = true, optional = true}
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true }
-libc = "0.2.174"
+
+# HTTP feature dependencies
+reqwest = { workspace = true, features = ["json", "rustls-tls"], optional = true, default-features = false }
+tokio = { workspace = true, features = ["full"], optional = true }
+poem = { workspace = true, optional = true }
+uuid = { workspace = true, features = ["v4"], optional = true }
+chrono = { workspace = true, features = ["serde"], optional = true }
+serde_json = { workspace = true, optional = true }
+http-bidir-comm = { workspace = true, optional = true }
 
 [dev-dependencies]
-tempfile = "3.20.0"
+wiremock = "0.6.0"

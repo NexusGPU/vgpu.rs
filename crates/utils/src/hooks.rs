@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::c_void;
 use std::ops::Deref;
 use std::sync::LazyLock;
@@ -28,31 +29,13 @@ impl Hooker<'_> {
         } else {
             Module::find_global_export_by_name(symbol)
         }
-        .ok_or_else(|| Error::NoSymbolName(symbol.to_string()))?;
+        .ok_or_else(|| Error::NoSymbolName(Cow::Owned(symbol.to_string())))?;
         self.interceptor
             .replace(
                 function,
                 NativePointer(detour),
                 NativePointer(std::ptr::null_mut()),
             )
-            .map_err(Into::into)
-    }
-
-    pub fn hook_export_fast(
-        &mut self,
-        symbol: &str,
-        detour: *mut c_void,
-    ) -> Result<NativePointer, Error> {
-        let function = if let Some(module_name) = self.module {
-            Module::load(&GUM, module_name).find_export_by_name(symbol)
-        } else {
-            Module::find_global_export_by_name(symbol)
-        }
-        .ok_or_else(|| Error::NoSymbolName(symbol.to_string()))?;
-
-        // we use `replace_fast` since we don't use the original function.
-        self.interceptor
-            .replace_fast(function, NativePointer(detour))
             .map_err(Into::into)
     }
 }
@@ -67,7 +50,12 @@ impl HookManager {
     pub fn collect_module_names(&mut self) {
         let mut module_map = ModuleMap::new();
         module_map.update();
-        self.module_names = module_map.values().iter().map(|m| m.name()).collect();
+        self.module_names = module_map
+            .values()
+            .iter()
+            .filter(|m| !m.path().starts_with("/tensor-fusion"))
+            .map(|m| m.name().to_string())
+            .collect();
         // sort by length to avoid matching a longer module name as a substring of a shorter one
         self.module_names
             .sort_by_key(|b| std::cmp::Reverse(b.len()));
@@ -78,7 +66,7 @@ impl HookManager {
             module.map(|m: &str| self.module_names.iter().find(|x| x.starts_with(m)));
 
         let module = match found_module {
-            Some(None) => return Err(Error::NoModuleName(module.unwrap().to_string())),
+            Some(None) => return Err(Error::NoModuleName(Cow::Owned(module.unwrap().to_string()))),
             Some(m) => m.map(|s| s.as_str()),
             None => None,
         };
@@ -98,16 +86,6 @@ impl HookManager {
         detour: *mut c_void,
     ) -> Result<NativePointer, Error> {
         self.hooker(module)?.hook_export(symbol, detour)
-    }
-
-    #[allow(dead_code)]
-    pub fn hook_export_fast(
-        &mut self,
-        module: Option<&str>,
-        symbol: &str,
-        detour: *mut c_void,
-    ) -> Result<NativePointer, Error> {
-        self.hooker(module)?.hook_export_fast(symbol, detour)
     }
 }
 

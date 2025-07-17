@@ -1,8 +1,6 @@
 use std::collections::HashMap;
-use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::thread;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -10,8 +8,10 @@ use nvml_wrapper::enum_wrappers::device::PcieUtilCounter;
 use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::Nvml;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
-use super::GpuResources;
+use crate::process::GpuResources;
 
 type ProcessId = u32;
 type GpuUuid = String;
@@ -36,11 +36,16 @@ pub(crate) struct Metrics {
     pub gpu_metrics: HashMap<GpuUuid, GpuMetrics>,
 }
 
+#[derive(Debug)]
 pub(crate) struct GpuObserver {
     nvml: Arc<Nvml>,
     pub metrics: RwLock<Metrics>,
     senders: RwLock<Vec<mpsc::Sender<()>>>,
 }
+
+// Explicitly implement Send and Sync for GpuObserver
+unsafe impl Send for GpuObserver {}
+unsafe impl Sync for GpuObserver {}
 
 impl GpuObserver {
     pub(crate) fn create(nvml: Arc<Nvml>) -> Arc<Self> {
@@ -51,26 +56,76 @@ impl GpuObserver {
         })
     }
 
-    /// Run the GPU observer loop in the current thread
-    pub(crate) fn run(&self, update_interval: Duration) {
+    /// Run the GPU observer loop asynchronously
+    pub(crate) async fn run(
+        &self,
+        update_interval: Duration,
+        cancellation_token: CancellationToken,
+    ) {
         loop {
-            let last_metrics = self.metrics.read().expect("poisoned");
-            match self.query_metrics(&last_metrics) {
-                Ok(metrics) => {
-                    drop(last_metrics);
-                    *self.metrics.write().expect("poisoned") = metrics;
-                    let senders = self.senders.read().expect("poisoned");
-                    for sender in senders.iter() {
-                        if let Err(e) = sender.send(()) {
-                            tracing::error!("Failed to send update signal: {}", e);
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    tracing::info!("GPU observer shutdown requested");
+                    break;
+                }
+                _ = async {
+                    // Query new metrics without holding the lock across .await
+                    let metrics_result = {
+                        let last_metrics_guard = self.metrics.read().expect("poisoned");
+                        self.query_metrics(&last_metrics_guard)
+                    };
+
+                    match metrics_result {
+                        Ok(metrics) => {
+                            // Update the metrics – obtain write lock briefly
+                            *self.metrics.write().expect("poisoned") = metrics;
+
+                            // Notify subscribers and clean up closed channels
+                            self.notify_subscribers().await;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to update GPU metrics: {}", e);
                         }
                     }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to update GPU metrics: {}", e);
+
+                    tokio::time::sleep(update_interval).await;
+                } => {
+                    // Continue the loop
                 }
             }
-            thread::sleep(update_interval);
+        }
+    }
+
+    /// Notify all subscribers and clean up closed channels
+    async fn notify_subscribers(&self) {
+        // Clone sender list while holding read lock
+        let sender_list = {
+            let senders_guard = self.senders.read().expect("poisoned");
+            senders_guard.clone()
+        };
+
+        // Track which senders are still valid
+        let mut valid_senders = Vec::new();
+
+        // Notify subscribers and identify closed channels
+        for sender in sender_list {
+            match sender.send(()).await {
+                Ok(()) => {
+                    // Channel is still open, keep it
+                    valid_senders.push(sender);
+                }
+                Err(_) => {
+                    // Channel is closed, don't keep it
+                    // We don't log this as an error since it's normal for subscribers to disconnect
+                    tracing::debug!("Subscriber disconnected, cleaning up channel");
+                }
+            }
+        }
+
+        // Update the senders list with only valid senders
+        {
+            let mut senders_guard = self.senders.write().expect("poisoned");
+            *senders_guard = valid_senders;
         }
     }
 
@@ -131,6 +186,9 @@ impl GpuObserver {
                             }
                             _ => 0,
                         },
+                        tflops_request: None,
+                        tflops_limit: None,
+                        memory_limit: None,
                     });
                 }
             }
@@ -153,6 +211,9 @@ impl GpuObserver {
                 resources: GpuResources {
                     memory_bytes: memory_info.used,
                     compute_percentage: utilization.gpu,
+                    tflops_request: None,
+                    tflops_limit: None,
+                    memory_limit: None,
                 },
             });
             gpu_process_metrics.insert(gpu_uuid, (process_metrics, newest_timestamp_candidate));
@@ -179,7 +240,7 @@ impl GpuObserver {
     }
 
     pub(crate) fn subscribe(&self) -> mpsc::Receiver<()> {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel(32);
         self.senders.write().expect("poisoned").push(sender);
         receiver
     }

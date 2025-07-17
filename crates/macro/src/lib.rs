@@ -33,8 +33,8 @@ pub fn hook_fn(
     let output: proc_macro2::TokenStream = {
         let proper_function = syn::parse_macro_input!(input as ItemFn);
 
-        let signature = proper_function.clone().sig;
-        let visibility = proper_function.clone().vis;
+        let signature = &proper_function.sig;
+        let visibility = &proper_function.vis;
 
         let ident_string = signature.ident.to_string();
         let type_name = ident_string.split("_detour").next().map(|fn_name| {
@@ -49,16 +49,15 @@ pub fn hook_fn(
         });
 
         let unsafety = signature.unsafety;
-        let abi = signature.abi;
+        let abi = signature.abi.clone();
 
         // Function arguments without taking into account variadics!
         let mut fn_args = signature
             .inputs
-            .clone()
-            .into_iter()
+            .iter()
             .map(|fn_arg| match fn_arg {
                 syn::FnArg::Receiver(_) => panic!("Hooks should not take any form of `self`!"),
-                syn::FnArg::Typed(arg) => arg.ty,
+                syn::FnArg::Typed(arg) => arg.ty.clone(),
             })
             .collect::<Vec<_>>();
 
@@ -72,7 +71,7 @@ pub fn hook_fn(
             fn_args.push(Box::new(Type::Verbatim(fixed_arg)));
         }
 
-        let return_type = signature.output;
+        let return_type = &signature.output;
 
         // `unsafe extern "C" fn(i32) -> i32`
         let bare_fn = quote! {
@@ -96,7 +95,7 @@ pub fn hook_fn(
         // Create a modified function with tracing at the beginning
         let mut modified_function = proper_function.clone();
 
-        // Access the block through the clone
+        // Access the block through the reference
         let block = &modified_function.block;
 
         // Create a new body with tracing at the beginning - just log the function name

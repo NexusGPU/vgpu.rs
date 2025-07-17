@@ -1,97 +1,104 @@
+use std::ffi::c_uint;
+
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
+use nvml_wrapper_sys::bindings::nvmlMemory_t;
+use nvml_wrapper_sys::bindings::nvmlMemory_v2_t;
+use nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
+use nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_ERROR_UNKNOWN;
+use nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS;
+use nvml_wrapper_sys::bindings::nvmlReturn_t;
 use tf_macro::hook_fn;
 use utils::hooks::HookManager;
 use utils::replace_symbol;
 
-use super::NvmlReturnT;
-use super::NVML_SUCCESS;
 use crate::GLOBAL_LIMITER;
-
-// NVML Memory Info structure
-#[repr(C)]
-pub(crate) struct NvmlMemoryT {
-    pub total: u64,
-    pub free: u64,
-    pub used: u64,
-}
-
-// NVML Memory Info V2 structure
-#[repr(C)]
-pub(crate) struct NvmlMemoryV2T {
-    pub version: u32,
-    pub total: u64,
-    pub reserved: u64,
-    pub free: u64,
-    pub used: u64,
-}
 
 #[hook_fn]
 pub(crate) unsafe fn nvml_device_get_memory_info_detour(
     device: nvmlDevice_t,
-    memory: *mut NvmlMemoryT,
-) -> NvmlReturnT {
+    memory: *mut nvmlMemory_t,
+) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let device_idx = match limiter.device_idx_by_handle(device) {
-        Some(device_idx) => device_idx,
-        None => return FN_NVML_DEVICE_GET_MEMORY_INFO(device, memory),
-    };
-    let mem_limit = limiter
-        .get_mem_limit(device_idx)
-        .expect("Failed to get memory limit");
 
-    let used = limiter
-        .get_used_gpu_memory(device_idx)
-        .expect("Failed to get used GPU memory");
-
-    let memory_ref = &mut *memory;
-    // Modify the memory info to reflect our limits
-    let new_total = mem_limit;
-    let new_used = used;
-
-    let new_free = if new_total > new_used {
-        new_total.saturating_sub(new_used)
-    } else {
-        0 // Ensure free memory is not negative
+    let device_uuid = match limiter.device_uuid_by_handle(device) {
+        Ok(Some(device_uuid)) => device_uuid,
+        Ok(None) => {
+            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
+        }
+        Err(e) => {
+            tracing::error!("Failed to get device UUID: {e}, falling back to original function");
+            return FN_NVML_DEVICE_GET_MEMORY_INFO(device, memory);
+        }
     };
 
-    memory_ref.total = new_total;
-    memory_ref.used = new_used;
-    memory_ref.free = new_free;
-    NVML_SUCCESS
+    match limiter.get_pod_memory_usage(&device_uuid) {
+        Ok((used, mem_limit)) => {
+            let memory_ref = &mut *memory;
+            memory_ref.total = mem_limit;
+            memory_ref.free = mem_limit.saturating_sub(used);
+            memory_ref.used = used;
+            nvmlReturn_enum_NVML_SUCCESS
+        }
+        Err(e) => {
+            tracing::error!("Failed to get pod memory usage: {e}");
+            nvmlReturn_enum_NVML_ERROR_UNKNOWN
+        }
+    }
 }
 
 #[hook_fn]
 pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     device: nvmlDevice_t,
-    memory: *mut NvmlMemoryV2T,
-) -> NvmlReturnT {
+    memory: *mut nvmlMemory_v2_t,
+) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let device_idx = match limiter.device_idx_by_handle(device) {
-        Some(device_idx) => device_idx,
-        None => return FN_NVML_DEVICE_GET_MEMORY_INFO_V2(device, memory),
+
+    let device_uuid = match limiter.device_uuid_by_handle(device) {
+        Ok(Some(device_uuid)) => device_uuid,
+        Ok(None) => {
+            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
+        }
+        Err(e) => {
+            tracing::error!("Failed to get device UUID: {e}, falling back to original function");
+            return FN_NVML_DEVICE_GET_MEMORY_INFO_V2(device, memory);
+        }
     };
-    let mem_limit = limiter
-        .get_mem_limit(device_idx)
-        .expect("Failed to get memory limit");
 
-    let used = limiter
-        .get_used_gpu_memory(device_idx)
-        .expect("Failed to get used GPU memory");
+    match limiter.get_pod_memory_usage(&device_uuid) {
+        Ok((used, mem_limit)) => {
+            let memory_ref = &mut *memory;
+            memory_ref.total = mem_limit;
+            memory_ref.free = mem_limit.saturating_sub(used);
+            memory_ref.used = used;
+            nvmlReturn_enum_NVML_SUCCESS
+        }
+        Err(e) => {
+            tracing::error!("Failed to get memory limit: {e}");
+            nvmlReturn_enum_NVML_ERROR_UNKNOWN
+        }
+    }
+}
 
-    let memory_ref = &mut *memory;
-    // Modify the memory info to reflect our limits
-    let new_total = mem_limit;
-    let new_used = used;
-    let new_free = if new_total > new_used {
-        new_total.saturating_sub(new_used)
+#[hook_fn]
+pub(crate) unsafe fn nvml_device_get_count_v2_detour(device_count: *mut c_uint) -> nvmlReturn_t {
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let device_count_ref = &mut *device_count;
+    *device_count_ref = limiter.get_device_count();
+    nvmlReturn_enum_NVML_SUCCESS
+}
+
+#[hook_fn]
+pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
+    index: c_uint,
+    device: *mut nvmlDevice_t,
+) -> nvmlReturn_t {
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let nvml_index = limiter.nvml_index_mapping(index as usize);
+    if let Ok(nvml_index) = nvml_index {
+        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(nvml_index, device)
     } else {
-        0 // Ensure free memory is not negative
-    };
-
-    memory_ref.total = new_total;
-    memory_ref.used = new_used;
-    memory_ref.free = new_free;
-    NVML_SUCCESS
+        nvmlReturn_enum_NVML_ERROR_NOT_FOUND
+    }
 }
 
 pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
@@ -110,5 +117,22 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         nvml_device_get_memory_info_v2_detour,
         FnNvml_device_get_memory_info_v2,
         FN_NVML_DEVICE_GET_MEMORY_INFO_V2
+    );
+    replace_symbol!(
+        hook_manager,
+        Some("libnvidia-ml."),
+        "nvmlDeviceGetCount_v2",
+        nvml_device_get_count_v2_detour,
+        FnNvml_device_get_count_v2,
+        FN_NVML_DEVICE_GET_COUNT_V2
+    );
+
+    replace_symbol!(
+        hook_manager,
+        Some("libnvidia-ml."),
+        "nvmlDeviceGetHandleByIndex_v2",
+        nvml_device_get_handle_by_index_v2_detour,
+        FnNvml_device_get_handle_by_index_v2,
+        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
     );
 }

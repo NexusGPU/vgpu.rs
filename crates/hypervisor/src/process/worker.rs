@@ -1,233 +1,213 @@
-use std::io::Read;
-use std::io::Write;
-use std::mem::MaybeUninit;
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::RwLock;
 
 use anyhow::Result;
+use api_types::QosLevel;
 
 use super::GpuProcess;
 use super::GpuResources;
 use super::ProcessState;
-use super::QosLevel;
+use crate::api::types::LimiterCommandType;
 use crate::gpu_observer::GpuObserver;
-
-#[allow(dead_code)]
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum ControlMessageType {
-    Suspend = 0,
-    Resume = 1,
-    SuspendAndVramReclaim = 2,
-    SuspendAndSave = 3,
-    ResponseSuccess = 4,
-    ResponseFail = 5,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-struct ControlMessage {
-    control: ControlMessageType,
-    payload: [u8; 128],
-}
-
-impl ControlMessage {
-    fn new(control: ControlMessageType) -> Self {
-        Self {
-            control,
-            payload: [0; 128],
-        }
-    }
-}
+use crate::limiter_comm::CommandDispatcher;
 
 pub(crate) struct TensorFusionWorker {
     id: u32,
-    #[allow(dead_code)]
-    requested: GpuResources,
-    socket_path: PathBuf,
     state: RwLock<ProcessState>,
-    gpu_uuid: String,
+    gpu_uuids: Vec<String>,
     gpu_observer: Arc<GpuObserver>,
-    unix_stream: MaybeUninit<Mutex<UnixStream>>,
-    qos_level: QosLevel,
+    qos_level: api_types::QosLevel,
+    /// Worker name, formatted as "namespace/pod_name"
+    pub(crate) name: String,
+    /// Kubernetes pod name
+    pub(crate) pod_name: String,
+    /// Kubernetes namespace
+    pub(crate) namespace: String,
+    /// Command dispatcher for sending commands to limiters
+    command_dispatcher: Arc<CommandDispatcher>,
 }
 
 impl TensorFusionWorker {
     pub(crate) fn new(
         id: u32,
-        socket_path: PathBuf,
-        requested: GpuResources,
         qos_level: QosLevel,
-        gpu_uuid: String,
+        gpu_uuids: Vec<String>,
         gpu_observer: Arc<GpuObserver>,
+        namespace: String,
+        pod_name: String,
+        command_dispatcher: Arc<CommandDispatcher>,
     ) -> TensorFusionWorker {
+        let name = format!("{namespace}_{pod_name}");
         Self {
             id,
-            socket_path,
-            unix_stream: MaybeUninit::uninit(),
             qos_level,
-            requested,
             state: RwLock::new(ProcessState::Running),
-            gpu_uuid,
+            gpu_uuids,
             gpu_observer,
+            name,
+            pod_name,
+            namespace,
+            command_dispatcher,
         }
     }
 
-    pub(crate) fn connect(&mut self) -> Result<()> {
-        let unix_stream = UnixStream::connect(&self.socket_path)?;
+    /// Generate limiter ID based on worker information
+    fn get_limiter_id(&self) -> String {
+        format!("limiter_{}", self.id)
+    }
 
-        self.unix_stream = MaybeUninit::new(Mutex::new(unix_stream));
+    /// Get GPU UUIDs for this worker
+    pub(crate) fn gpu_uuids(&self) -> &[String] {
+        &self.gpu_uuids
+    }
+
+    /// Send command to limiter using CommandDispatcher
+    fn send_command(&self, command_type: LimiterCommandType) -> Result<()> {
+        let limiter_id = self.get_limiter_id();
+        let command_dispatcher = Arc::clone(&self.command_dispatcher);
+        let process_id = self.id;
+
+        // Clone values for use in the async closure
+        let limiter_id_clone = limiter_id.clone();
+        let command_type_clone = command_type.clone();
+
+        // Spawn a task to send the command asynchronously without blocking
+        tokio::spawn(async move {
+            match command_dispatcher
+                .enqueue_command(&limiter_id_clone, command_type_clone.clone())
+                .await
+            {
+                Ok(_command_id) => {
+                    tracing::info!(
+                        "Command {:?} sent successfully to limiter {} for process {}",
+                        command_type_clone,
+                        limiter_id_clone,
+                        process_id
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to send command {:?} to limiter {} for process {}: {}",
+                        command_type_clone,
+                        limiter_id_clone,
+                        process_id,
+                        e
+                    );
+                }
+            }
+        });
+
+        // Return immediately - the command will be sent asynchronously
+        tracing::info!(
+            "Queued command {:?} for limiter {} for process {}",
+            command_type,
+            limiter_id,
+            self.id
+        );
         Ok(())
-    }
-
-    fn send_message(&self, message: ControlMessage) -> Result<bool> {
-        let mut unix_stream = unsafe { self.unix_stream.assume_init_ref() }
-            .lock()
-            .unwrap();
-        // Send the message
-        let message_bytes = unsafe {
-            std::slice::from_raw_parts(
-                &message as *const ControlMessage as *const u8,
-                std::mem::size_of::<ControlMessage>(),
-            )
-        };
-        unix_stream.write_all(message_bytes)?;
-
-        // Read response
-        let mut response = ControlMessage::new(ControlMessageType::ResponseSuccess);
-        let response_bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                &mut response as *mut ControlMessage as *mut u8,
-                std::mem::size_of::<ControlMessage>(),
-            )
-        };
-        unix_stream.read_exact(response_bytes)?;
-        let succ = response.control == ControlMessageType::ResponseSuccess;
-        if !succ {
-            tracing::error!(
-                "Failed to send control message, control: {:?}",
-                response.control
-            );
-        }
-        Ok(succ)
     }
 }
 
 impl GpuProcess for TensorFusionWorker {
-    fn id(&self) -> u32 {
+    fn pid(&self) -> u32 {
         self.id
     }
 
-    // fn state(&self) -> ProcessState {
-    //     *self.state.read().expect("poisoned")
-    // }
-
-    fn requested_resources(&self) -> GpuResources {
-        self.requested.clone()
+    fn name(&self) -> &str {
+        &self.name
     }
 
-    fn current_resources(&self) -> GpuResources {
-        self.gpu_observer
-            .get_process_resources(&self.gpu_uuid, self.id)
-            .unwrap_or(GpuResources {
-                memory_bytes: 0,
-                compute_percentage: 0,
-            })
+    fn current_resources(&self) -> HashMap<&str, GpuResources> {
+        let mut resources: HashMap<&str, GpuResources> = HashMap::new();
+        for gpu_uuid in &self.gpu_uuids {
+            let resource = self
+                .gpu_observer
+                .get_process_resources(gpu_uuid, self.pid());
+            if let Some(resource) = resource {
+                resources.insert(gpu_uuid.as_str(), resource);
+            }
+        }
+        resources
     }
 
     fn pause(&self) -> Result<()> {
-        match self.send_message(ControlMessage::new(ControlMessageType::Suspend)) {
-            Ok(true) => {
-                // Successfully sent and got positive response
+        match self.send_command(LimiterCommandType::TfSuspend) {
+            Ok(()) => {
                 *self.state.write().expect("poisoned") = ProcessState::Paused;
+                tracing::info!("Process {} paused successfully", self.id);
                 Ok(())
             }
-            Ok(false) => {
-                // Successfully sent but got negative response
-                tracing::warn!(
-                    "Process ID {} pause request was rejected by the worker",
-                    self.id
-                );
-                Err(anyhow::anyhow!("Pause request was rejected by the worker"))
-            }
             Err(e) => {
-                // Communication error
-                tracing::error!(
-                    "Failed to send pause message to process ID {}: {}",
-                    self.id,
-                    e
-                );
-                Err(anyhow::anyhow!("Failed to communicate with worker: {}", e))
+                tracing::error!("Failed to pause process {}: {}", self.id, e);
+                Err(e)
             }
         }
     }
 
     fn release(&self) -> Result<()> {
-        match self.send_message(ControlMessage::new(
-            ControlMessageType::SuspendAndVramReclaim,
-        )) {
-            Ok(true) => {
-                // Successfully sent and got positive response
+        match self.send_command(LimiterCommandType::TfVramReclaim) {
+            Ok(()) => {
                 *self.state.write().expect("poisoned") = ProcessState::Released;
+                tracing::info!("Process {} released successfully", self.id);
                 Ok(())
             }
-            Ok(false) => {
-                // Successfully sent but got negative response
-                tracing::warn!(
-                    "Process ID {} release request was rejected by the worker",
-                    self.id
-                );
-                Err(anyhow::anyhow!(
-                    "Release request was rejected by the worker"
-                ))
-            }
             Err(e) => {
-                // Communication error
-                tracing::error!(
-                    "Failed to send release message to process ID {}: {}",
-                    self.id,
-                    e
-                );
-                Err(anyhow::anyhow!("Failed to communicate with worker: {}", e))
+                tracing::error!("Failed to release process {}: {}", self.id, e);
+                Err(e)
             }
         }
     }
 
     fn resume(&self) -> Result<()> {
-        match self.send_message(ControlMessage::new(ControlMessageType::Resume)) {
-            Ok(true) => {
-                // Successfully sent and got positive response
+        match self.send_command(LimiterCommandType::TfResume) {
+            Ok(()) => {
                 *self.state.write().expect("poisoned") = ProcessState::Running;
+                tracing::info!("Process {} resumed successfully", self.id);
                 Ok(())
             }
-            Ok(false) => {
-                // Successfully sent but got negative response
-                tracing::warn!(
-                    "Process ID {} resume request was rejected by the worker",
-                    self.id
-                );
-                Err(anyhow::anyhow!("Resume request was rejected by the worker"))
-            }
             Err(e) => {
-                // Communication error
-                tracing::error!(
-                    "Failed to send resume message to process ID {}: {}",
-                    self.id,
-                    e
-                );
-                Err(anyhow::anyhow!("Failed to communicate with worker: {}", e))
+                tracing::error!("Failed to resume process {}: {}", self.id, e);
+                Err(e)
             }
         }
     }
 
-    // fn gpu_uuid(&self) -> &str {
-    //     &self.gpu_uuid
-    // }
-
     fn qos_level(&self) -> super::QosLevel {
         self.qos_level
+    }
+}
+
+// Custom Clone implementation because some fields are not Clone
+impl Clone for TensorFusionWorker {
+    fn clone(&self) -> Self {
+        // Clone requested fields; reset non-cloneable unix_stream to uninit; clone state value
+        let state_value = *self.state.read().expect("poisoned");
+        Self {
+            id: self.id,
+            state: RwLock::new(state_value),
+            gpu_uuids: self.gpu_uuids.clone(),
+            gpu_observer: Arc::clone(&self.gpu_observer),
+            qos_level: self.qos_level,
+            name: self.name.clone(),
+            pod_name: self.pod_name.clone(),
+            namespace: self.namespace.clone(),
+            command_dispatcher: Arc::clone(&self.command_dispatcher),
+        }
+    }
+}
+
+// Manual Debug implementation to avoid issues with non-Debug fields
+impl std::fmt::Debug for TensorFusionWorker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TensorFusionWorker")
+            .field("id", &self.id)
+            .field("state", &*self.state.read().expect("poisoned"))
+            .field("gpu_uuids", &self.gpu_uuids)
+            .field("qos_level", &self.qos_level)
+            .field("name", &self.name)
+            .field("pod_name", &self.pod_name)
+            .field("namespace", &self.namespace)
+            .finish()
     }
 }

@@ -6,13 +6,13 @@
 [![Lint](https://github.com/NexusGPU/vgpu.rs/actions/workflows/lint.yml/badge.svg)](https://github.com/NexusGPU/vgpu.rs/actions/workflows/lint.yml)
 [![Test](https://github.com/NexusGPU/vgpu.rs/actions/workflows/test.yml/badge.svg)](https://github.com/NexusGPU/vgpu.rs/actions/workflows/test.yml)
 
-vgpu.rs is the fractional GPU & vgpu-hypervisor implementation written in Rust
+vgpu.rs is a fractional GPU & vgpu-hypervisor implementation written in Rust.
 
 ## Installation
 
 You can download the latest release binaries from the
 [GitHub Releases page](https://github.com/NexusGPU/vgpu.rs/releases). Use the
-following command to automatically download the appropriate version
+following command to automatically download the appropriate version:
 
 ```bash
 # Download and extract the latest release
@@ -158,3 +158,156 @@ with specific responsibilities:
 - [**utils**](crates/utils): A collection of common utilities and helper
   functions shared across the project. Includes tracing, logging, and other
   infrastructure components.
+
+## System Architecture
+
+### 1. Overview
+
+This project provides a Kubernetes-based solution for GPU virtualization and resource limiting. Its primary goal is to enable multiple pods to share physical GPU resources in a multi-tenant environment while precisely controlling the GPU usage of each pod.
+
+The system consists of two core components:
+
+*   **Hypervisor (Daemon)**: A daemon process running on each GPU node, responsible for managing and scheduling all pods that require GPU resources on that node.
+*   **Cuda-Limiter (SO Library)**: A dynamic library injected into the user application's process space via the `LD_PRELOAD` mechanism. It intercepts CUDA API calls, communicates with the Hypervisor, and enforces GPU operation limits based on the Hypervisor's scheduling decisions.
+
+The entire system is designed to run in a Kubernetes cluster, using Pods as the basic unit for resource isolation and limitation. This means all processes (workers/limiters) within the same pod share the same GPU quota.
+
+### 2. Core Components
+
+#### 2.1. Hypervisor
+
+The Hypervisor is the "brain" of the system, deployed as a DaemonSet on each Kubernetes node equipped with a GPU. Its main responsibilities include:
+
+*   **Worker Management**: Tracks and manages all connected `cuda-limiter` instances (i.e., workers).
+*   **Resource Monitoring**:
+    *   Monitors physical GPU metrics (e.g., utilization, memory usage) via NVML (NVIDIA Management Library).
+    *   Aggregates GPU usage data reported by all workers.
+*   **Scheduling Policy**:
+    *   Dynamically decides which pod's process is allowed to perform GPU computations based on a predefined scheduling algorithm (e.g., weighted round-robin) and each pod's resource quota.
+    *   Scheduling decisions are dispatched to the corresponding `cuda-limiter` instances.
+*   **Shared Memory Communication**:
+    *   Creates a shared memory region to efficiently broadcast global GPU utilization data to all `cuda-limiter` instances on the node. This avoids the overhead of each worker querying NVML individually.
+*   **Kubernetes Integration**:
+    *   Interacts with the Kubernetes API Server to watch for pod creation and deletion events.
+    *   Retrieves pod metadata (like pod name, resource requests) and associates this information with workers to achieve pod-level resource isolation.
+*   **API Service**:
+    *   Provides an HTTP API for `cuda-limiter` registration, command polling, status reporting, etc.
+    *   Uses the `http-bidir-comm` crate to implement bidirectional communication with `cuda-limiter`.
+
+#### 2.2. Cuda-Limiter
+
+Cuda-Limiter is a dynamic library (`.so` file) injected into every user process that needs to use the GPU. Its core function is to act as the Hypervisor's agent within the user process.
+
+*   **API Interception (Hooking)**:
+    *   Uses techniques like `frida-gum` to intercept critical CUDA API calls (e.g., `cuLaunchKernel`) and NVML API calls at runtime.
+    *   This is the key to enforcing GPU limits, as all GPU-related operations must first be inspected by `cuda-limiter`.
+*   **Communication with Hypervisor**:
+    *   On initialization, it obtains the Hypervisor's address from environment variables and registers itself.
+    *   Uses the `http-bidir-comm` crate to establish a long-lived connection (based on HTTP long-polling or SSE) with the Hypervisor to receive scheduling commands (e.g., "execute," "wait").
+*   **Execution Control (Trap & Wait)**:
+    *   When an intercepted CUDA function is called, `cuda-limiter` pauses the thread's execution.
+    *   It sends a "request to execute" signal to the Hypervisor, including information about the current process and pod.
+    *   It then blocks and waits for the Hypervisor's response. Only after receiving an "allow execute" command does it call the original CUDA function, allowing the GPU operation to proceed.
+*   **Shared Memory Access**:
+    *   By attaching to the shared memory region created by the Hypervisor, `cuda-limiter` can access the current node-wide GPU status with near-zero overhead for local decision-making or data reporting.
+*   **Environment Variable Configuration**:
+    *   Relies on environment variables (e.g., `HYPERVISOR_IP`, `HYPERVISOR_PORT`, `POD_NAME`) to obtain the necessary runtime context.
+
+#### 2.3. http-bidir-comm
+
+This is a generic, HTTP-based bidirectional communication library used by both the Hypervisor and Cuda-Limiter. It abstracts the common pattern of client-server task requests and result reporting.
+
+*   **Client (Cuda-Limiter side)**:
+    *   Implements a `BlockingHttpClient`, suitable for use in injected, potentially non-async code environments.
+    *   Pulls tasks/commands from the server via long-polling or Server-Sent Events (SSE).
+*   **Server (Hypervisor side)**:
+    *   Implemented using the `Poem` web framework to provide an asynchronous HTTP service.
+    *   Maintains task queues for each client (worker) and handles result submissions from clients.
+
+#### 2.4. Utils
+
+A common utility library providing shared functionality across multiple crates:
+
+*   **Logging**: Standardized logging facilities.
+*   **Hooking**: Low-level wrappers for API interception.
+*   **Shared Memory**: Wrappers for creating and accessing shared memory.
+*   **Build Info**: Embeds version and build information at compile time.
+
+### 3. Workflow (From Pod Launch to GPU Usage)
+
+1.  **Pod Scheduling**: Kubernetes schedules a GPU-requesting pod to a node.
+2.  **Hypervisor Awareness**: The Hypervisor on that node, watching the K8s API Server, learns about the new pod.
+3.  **Process Launch & Injection**: The container within the pod starts the user application. The `LD_PRELOAD` environment variable ensures `cuda-limiter.so` is loaded before the application.
+4.  **Limiter Initialization**:
+    *   The `cuda-limiter` code is executed via its `ctor` (constructor).
+    *   It reads environment variables like `POD_NAME` and `HYPERVISOR_IP`.
+    *   It establishes HTTP communication with the Hypervisor and registers itself, reporting its PID and parent Pod name.
+5.  **Hypervisor Worker Registration**: The Hypervisor receives the registration request, records the new worker process, and associates it with the corresponding pod.
+6.  **API Interception**: `cuda-limiter` sets up its hooks for CUDA APIs.
+7.  **GPU Operation Request**: The user application calls a CUDA function (e.g., to launch a kernel).
+8.  **Trap & Wait**:
+    *   The `cuda-limiter` interceptor catches the call, preventing its immediate execution.
+    *   It sends an execution request to the Hypervisor via `http-bidir-comm`.
+    *   The current thread is suspended, awaiting a scheduling decision from the Hypervisor.
+9.  **Hypervisor Scheduling**:
+    *   The Hypervisor's scheduler receives the request.
+    *   Based on the GPU demand of all pods, their weights/quotas, and the current GPU state, it decides whether to grant the request.
+    *   If granted, it sends an "allow execute" command back to the corresponding `cuda-limiter` over the HTTP connection.
+10. **Execution & Resumption**:
+    *   `cuda-limiter` receives the command and wakes up the suspended thread.
+    *   The original CUDA function is called, and the actual GPU computation begins.
+11. **Completion & Loop**: Once the GPU operation is complete, the function returns. `cuda-limiter` is ready to intercept the next CUDA call, repeating the process.
+12. **Pod Termination**: When the pod is deleted, the Hypervisor cleans up all records and state associated with that pod's workers.
+
+### 4. Architecture Diagram
+
+```
++-------------------------------------------------------------------+
+| Kubernetes Node                                                   |
+|                                                                   |
+|  +---------------------------+      +---------------------------+ |
+|  | Pod A                     |      | Pod B                     | |
+|  |                           |      |                           | |
+|  | +-----------------------+ |      | +-----------------------+ | |
+|  | | Process 1 (User App)  | |      | | Process 3 (User App)  | | |
+|  | | +-------------------+ | |      | | +-------------------+ | | |
+|  | | | cuda-limiter.so |<----HTTP---->| | cuda-limiter.so |<----...
+|  | | +-------------------+ | |      | | +-------------------+ | | |
+|  | +-----------------------+ |      | +-----------------------+ | |
+|  |                           |      |                           | |
+|  | +-----------------------+ |      +---------------------------+ |
+|  | | Process 2 (User App)  | |                                    |
+|  | | +-------------------+ | |                                    |
+|  | | | cuda-limiter.so |<----HTTP---->+                           |
+|  | | +-------------------+ | |      |                           |
+|  | +-----------------------+ |      |                           |
+|  +---------------------------+      |  Hypervisor (Daemon)      |
+|                                     |                           |
+|                                     | +-----------------------+ |
+|       +---------------------------->| |    Scheduler          | |
+|       |                             | +-----------------------+ |
+|       |                             | |    Worker Manager     | |
+|       |                             | +-----------------------+ |
+|       |                             | |    K8s Pod Watcher    | |
+|       |                             | +-----------------------+ |
+|       |                             | |    HTTP API Server    | |
+|       |                             | | (http-bidir-comm)   | |
+|       |                             | +-----------------------+ |
+|       |                             | |    GPU Observer (NVML)| |
+|       +-----------------------------+-----------------------+ |
+|       |                                                       |
+|  +----|------------------------+      +-----------------------+ |
+|  | Shared Memory (/dev/shm) |<----(write)----| |
+|  +----|------------------------+      +-----------------------+ |
+|       |      ^                                                  |
+|       +------|--------------------------------------------------+
+|              | (read)
+|              |
+|  +-----------+---------------+
+|  | cuda-limiter.so (in any process) |
+|  +---------------------------+
+|                                                                   |
++-------------------------------------------------------------------+
+| |<-- K8s API -->| Kubernetes API Server                           |
++-------------------------------------------------------------------+
+```

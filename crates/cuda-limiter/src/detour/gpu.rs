@@ -2,16 +2,14 @@ use std::ffi::c_int;
 use std::ffi::c_uint;
 use std::ffi::c_void;
 use std::sync::OnceLock;
-use std::time::Duration;
 
-use cudarc::driver::sys::cuDeviceGetCount;
+use cudarc::driver::sys::CUfunction;
 use cudarc::driver::sys::CUresult;
+use cudarc::driver::sys::CUstream;
 use tf_macro::hook_fn;
 use utils::hooks::HookManager;
 use utils::replace_symbol;
 
-use super::CUfunction;
-use super::CUstream;
 use crate::with_device;
 use crate::GLOBAL_LIMITER;
 
@@ -30,16 +28,18 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_ptsz_detour(
     extra: *mut *mut c_void,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|_, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-        limiter.rate_limiter(
-            device,
+        if let Err(e) = limiter.rate_limiter(
+            device_uuid,
             grid_dim_x * grid_dim_y * grid_dim_z,
             block_dim_x * block_dim_y * block_dim_z,
-        );
+        ) {
+            tracing::error!("Rate limiter failed: {}", e);
+        }
     });
 
-    FN_CU_LAUNCH_KERNEL_PTSZ(
+    FN_CU_LAUNCH_KERNEL(
         f,
         grid_dim_x,
         grid_dim_y,
@@ -69,13 +69,15 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_detour(
     extra: *mut *mut c_void,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|_, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-        limiter.rate_limiter(
-            device,
+        if let Err(e) = limiter.rate_limiter(
+            device_uuid,
             grid_dim_x * grid_dim_y * grid_dim_z,
             block_dim_x * block_dim_y * block_dim_z,
-        );
+        ) {
+            tracing::error!("Rate limiter failed: {}", e);
+        }
     });
 
     FN_CU_LAUNCH_KERNEL(
@@ -96,18 +98,22 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_detour(
 #[hook_fn]
 pub(crate) unsafe extern "C" fn cu_launch_detour(f: CUfunction) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|device_idx, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
         // Get block dimensions
-        match limiter.get_block_dimensions(device) {
+        match limiter.get_block_dimensions(device_idx) {
             Ok((block_x, block_y, block_z)) => {
                 // Use the block dimensions to limit the rate
-                limiter.rate_limiter(device, 1, block_x * block_y * block_z);
+                if let Err(e) = limiter.rate_limiter(device_uuid, 1, block_x * block_y * block_z) {
+                    tracing::error!("Rate limiter failed: {}", e);
+                }
             }
             Err(_) => {
                 tracing::warn!("Failed to get block dimensions, using default");
-                limiter.rate_limiter(device, 1, 1);
+                if let Err(e) = limiter.rate_limiter(device_uuid, 1, 1) {
+                    tracing::error!("Rate limiter failed: {}", e);
+                }
             }
         }
     });
@@ -129,13 +135,15 @@ pub(crate) unsafe extern "C" fn cu_launch_cooperative_kernel_ptsz_detour(
     kernel_params: *mut *mut c_void,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|_, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-        limiter.rate_limiter(
-            device,
+        if let Err(e) = limiter.rate_limiter(
+            device_uuid,
             grid_dim_x * grid_dim_y * grid_dim_z,
             block_dim_x * block_dim_y * block_dim_z,
-        );
+        ) {
+            tracing::error!("Rate limiter failed: {}", e);
+        }
     });
 
     FN_CU_LAUNCH_COOPERATIVE_KERNEL_PTSZ(
@@ -166,13 +174,15 @@ pub(crate) unsafe extern "C" fn cu_launch_cooperative_kernel_detour(
     kernel_params: *mut *mut c_void,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|_, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-        limiter.rate_limiter(
-            device,
+        if let Err(e) = limiter.rate_limiter(
+            device_uuid,
             grid_dim_x * grid_dim_y * grid_dim_z,
             block_dim_x * block_dim_y * block_dim_z,
-        );
+        ) {
+            tracing::error!("Rate limiter failed: {}", e);
+        }
     });
 
     FN_CU_LAUNCH_COOPERATIVE_KERNEL(
@@ -196,22 +206,28 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_detour(
     grid_height: c_int,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|device_idx, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
         // Get block dimensions
-        match limiter.get_block_dimensions(device) {
+        match limiter.get_block_dimensions(device_idx) {
             Ok((block_x, block_y, block_z)) => {
                 // Use the block dimensions to limit the rate
-                limiter.rate_limiter(
-                    device,
+                if let Err(e) = limiter.rate_limiter(
+                    device_uuid,
                     (grid_width * grid_height) as u32,
                     block_x * block_y * block_z,
-                );
+                ) {
+                    tracing::error!("Rate limiter failed: {}", e);
+                }
             }
             Err(_) => {
                 tracing::warn!("Failed to get block dimensions, using default");
-                limiter.rate_limiter(device, (grid_width * grid_height) as u32, 1);
+                if let Err(e) =
+                    limiter.rate_limiter(device_uuid, (grid_width * grid_height) as u32, 1)
+                {
+                    tracing::error!("Rate limiter failed: {}", e);
+                }
             }
         }
     });
@@ -227,22 +243,28 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_async_detour(
     h_stream: CUstream,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|device_idx, device_uuid| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
         // Get block dimensions
-        match limiter.get_block_dimensions(device) {
+        match limiter.get_block_dimensions(device_idx) {
             Ok((block_x, block_y, block_z)) => {
                 // Use the block dimensions to limit the rate
-                limiter.rate_limiter(
-                    device,
+                if let Err(e) = limiter.rate_limiter(
+                    device_uuid,
                     (grid_width * grid_height) as u32,
                     block_x * block_y * block_z,
-                );
+                ) {
+                    tracing::error!("Rate limiter failed: {}", e);
+                }
             }
             Err(_) => {
                 tracing::warn!("Failed to get block dimensions, using default");
-                limiter.rate_limiter(device, (grid_width * grid_height) as u32, 1);
+                if let Err(e) =
+                    limiter.rate_limiter(device_uuid, (grid_width * grid_height) as u32, 1)
+                {
+                    tracing::error!("Rate limiter failed: {}", e);
+                }
             }
         }
     });
@@ -258,11 +280,11 @@ pub(crate) unsafe extern "C" fn cu_func_set_block_shape_detour(
     z: c_int,
 ) -> CUresult {
     // Use with_device macro directly
-    with_device!(|device| {
+    with_device!(|device_idx, _| {
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
         // Set block dimensions
-        if let Err(err) = limiter.set_block_dimensions(device, x as u32, y as u32, z as u32) {
+        if let Err(err) = limiter.set_block_dimensions(device_idx, x as u32, y as u32, z as u32) {
             tracing::warn!(
                 "Failed to set block dimensions: ({}, {}, {}): {:?}",
                 x,
@@ -287,34 +309,9 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flag: c_uint) -> CUresult {
     if result != CUresult::CUDA_SUCCESS {
         return result;
     }
-    let _ = INIT.get_or_try_init(|| {
-        // Get the number of CUDA devices
-        let mut device_count: c_int = 0;
-        let count_result = cuDeviceGetCount(&mut device_count as *mut c_int);
 
-        if count_result != CUresult::CUDA_SUCCESS || device_count <= 0 {
-            tracing::error!("Failed to get device count or no devices found");
-            return Err(());
-        }
-
-        // Get the global limiter instance
-        let limiter = GLOBAL_LIMITER.get().expect("get limiter");
-        // Start a watcher thread for each device
-        for dev in limiter.devices.iter() {
-            std::thread::Builder::new()
-                .name(format!("utilization-watcher-{}", dev.dev_idx))
-                .spawn(move || {
-                    if let Err(err) = limiter.run_watcher(dev.dev_idx, Duration::from_millis(120)) {
-                        tracing::error!("Watcher for device {} failed: {:?}", dev.dev_idx, err);
-                    }
-                })
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "spawn utilization-watcher thread for device {}",
-                        dev.dev_idx
-                    )
-                });
-        }
+    let _ = INIT.get_or_try_init(|| -> Result<(), ()> {
+        tracing::debug!("CUDA initialized successfully, monitoring is handled by hypervisor");
         Ok(())
     });
 

@@ -1,12 +1,14 @@
 #![feature(once_cell_try)]
 
-use std::cell::RefCell;
+use std::collections::HashSet;
 use std::ffi::c_char;
 use std::ffi::c_int;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::OsStr;
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Once;
 use std::sync::OnceLock;
 
 use ctor::ctor;
@@ -14,36 +16,199 @@ use limiter::Limiter;
 use nvml_wrapper::Nvml;
 use tf_macro::hook_fn;
 use trap::dummy::DummyTrap;
-use trap::ipc::IpcTrap;
+use trap::http::BlockingHttpTrap;
+use trap::http::HttpTrapConfig;
 use utils::hooks::HookManager;
 use utils::logging;
 use utils::replace_symbol;
 
+mod command_handler;
 mod config;
 mod detour;
 mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
+static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
 
-thread_local! {
-    static LIBCUDA_HOOKED: RefCell<bool> = const { RefCell::new(false) };
-    static LIBNVML_HOOKED: RefCell<bool> = const { RefCell::new(false) };
+static NGPU_INITIALIZED: Once = Once::new();
+static CUDA_HOOKS_INITIALIZED: Once = Once::new();
+static NVML_HOOKS_INITIALIZED: Once = Once::new();
+
+#[ctor]
+unsafe fn entry_point() {
+    logging::init();
+    init_hooks();
 }
 
-#[no_mangle]
-pub extern "C" fn set_limit(gpu: u32, up_limit: u32, mem_limit: u64) {
-    let limiter = GLOBAL_LIMITER.get().expect("get limiter");
-    if let Err(e) = limiter.set_uplimit(gpu, up_limit) {
-        tracing::error!("Failed to set up_limit: {}", e);
+fn init_ngpu_library() {
+    NGPU_INITIALIZED.call_once(|| {
+        // Get pod name from environment variable
+        let pod_identifier = match limiter::get_pod_identifier() {
+            Ok(name) => name,
+            Err(_) => {
+                tracing::error!("Failed to get pod name from environment, cuda-limiter disabled");
+                return;
+            }
+        };
+
+        let nvml = match Nvml::init().and(
+            Nvml::builder()
+                .lib_path(OsStr::new("libnvidia-ml.so.1"))
+                .init(),
+        ) {
+            Ok(nvml) => nvml,
+            Err(e) => {
+                tracing::error!("failed to initialize NVML: {}", e);
+                return;
+            }
+        };
+
+        let (hypervisor_ip, hypervisor_port) = match get_hypervisor_config() {
+            Some((ip, port)) => (ip, port),
+            None => {
+                tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
+                return;
+            }
+        };
+        // Get device indices from environment variable
+        let config = match config::get_device_configs(&hypervisor_ip, &hypervisor_port) {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::error!("failed to get device configs: {err}");
+                return;
+            }
+        };
+
+        if !config.gpu_uuids.is_empty() {
+            let lower_case_uuids: HashSet<_> =
+                config.gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
+            let device_count = nvml.device_count().expect("failed to get device count");
+
+            let mut device_indices = Vec::new();
+            for i in 0..device_count {
+                let device = nvml
+                    .device_by_index(i)
+                    .expect("failed to get device by index");
+                let uuid = device.uuid().expect("failed to get device uuid");
+                if lower_case_uuids.contains(&uuid.to_lowercase()) {
+                    device_indices.push(i.to_string());
+                }
+            }
+
+            if !device_indices.is_empty() {
+                let visible_devices = device_indices.join(",");
+                tracing::info!(
+                    "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
+                    &visible_devices
+                );
+                std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
+                std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+            }
+        }
+
+        let limiter = match Limiter::new(config.host_pid, nvml, pod_identifier, &config.gpu_uuids) {
+            Ok(limiter) => limiter,
+            Err(err) => {
+                tracing::error!("failed to init limiter, err: {err}");
+                return;
+            }
+        };
+        GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
+
+        command_handler::start_background_handler(
+            &hypervisor_ip,
+            &hypervisor_port,
+            config.host_pid,
+        );
+
+        // Load tensor-fusion/ngpu.so
+        if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
+            tracing::debug!("loading ngpu.so from: {ngpu_path}");
+            match unsafe { libloading::Library::new(ngpu_path.as_str()) } {
+                Ok(lib) => {
+                    GLOBAL_NGPU_LIBRARY
+                        .set(lib)
+                        .expect("set GLOBAL_NGPU_LIBRARY");
+                    tracing::debug!("loaded ngpu.so");
+                }
+                Err(e) => {
+                    tracing::error!("failed to load ngpu.so: {e}, path: {ngpu_path}");
+                }
+            }
+        }
+    });
+}
+
+fn init_cuda_hooks() {
+    CUDA_HOOKS_INITIALIZED.call_once(|| {
+        init_ngpu_library();
+
+        let mut hook_manager = HookManager::default();
+        hook_manager.collect_module_names();
+
+        unsafe {
+            detour::gpu::enable_hooks(&mut hook_manager);
+            detour::mem::enable_hooks(&mut hook_manager);
+        }
+
+        tracing::debug!("CUDA hooks initialized successfully");
+    });
+}
+
+fn init_nvml_hooks() {
+    NVML_HOOKS_INITIALIZED.call_once(|| {
+        init_ngpu_library();
+
+        let mut hook_manager = HookManager::default();
+        hook_manager.collect_module_names();
+
+        unsafe {
+            detour::nvml::enable_hooks(&mut hook_manager);
+        }
+
+        tracing::debug!("NVML hooks initialized successfully");
+    });
+}
+
+fn init_hooks() {
+    let mut hook_manager = HookManager::default();
+    hook_manager.collect_module_names();
+
+    let has_libcuda = hook_manager
+        .module_names
+        .iter()
+        .any(|m| m.starts_with("libcuda."));
+
+    let has_libnvml = hook_manager
+        .module_names
+        .iter()
+        .any(|m| m.starts_with("libnvidia-ml."));
+
+    if has_libcuda {
+        init_cuda_hooks();
     }
-    if let Err(e) = limiter.set_mem_limit(gpu, mem_limit) {
-        tracing::error!("Failed to set mem_limit: {}", e);
+
+    if has_libnvml {
+        init_nvml_hooks();
+    }
+
+    if !has_libcuda || !has_libnvml {
+        unsafe {
+            replace_symbol!(
+                &mut hook_manager,
+                None,
+                "dlopen",
+                dlopen_detour,
+                FnDlopen,
+                FN_DLOPEN
+            );
+        }
     }
 }
 
 enum TrapImpl {
     Dummy(DummyTrap),
-    Ipc(IpcTrap),
+    Http(Arc<BlockingHttpTrap>),
 }
 
 impl trap::Trap for TrapImpl {
@@ -53,7 +218,7 @@ impl trap::Trap for TrapImpl {
     ) -> Result<trap::TrapAction, trap::TrapError> {
         match self {
             TrapImpl::Dummy(t) => t.enter_trap_and_wait(frame),
-            TrapImpl::Ipc(t) => t.enter_trap_and_wait(frame),
+            TrapImpl::Http(t) => t.enter_trap_and_wait(frame),
         }
     }
 }
@@ -62,7 +227,7 @@ impl Clone for TrapImpl {
     fn clone(&self) -> Self {
         match self {
             TrapImpl::Dummy(_) => TrapImpl::Dummy(DummyTrap {}),
-            TrapImpl::Ipc(t) => TrapImpl::Ipc(t.clone()),
+            TrapImpl::Http(t) => TrapImpl::Http(Arc::clone(t)),
         }
     }
 }
@@ -71,94 +236,28 @@ pub fn global_trap() -> impl trap::Trap {
     static GLOBAL_TRAP: OnceLock<Mutex<TrapImpl>> = OnceLock::new();
 
     let trap = GLOBAL_TRAP.get_or_init(|| {
-        let ipc_server_path_name = std::env::var("TENSOR_FUSION_IPC_SERVER_PATH");
-        match ipc_server_path_name {
-            Ok(path) => match IpcTrap::connect(path) {
-                Ok(trap) => TrapImpl::Ipc(trap).into(),
-                Err(e) => {
-                    panic!("failed to connect to ipc server, err: {e}");
+        if let Some((hypervisor_ip, hypervisor_port)) = get_hypervisor_config() {
+            let server_url = format!("http://{hypervisor_ip}:{hypervisor_port}");
+            let config = HttpTrapConfig {
+                server_url,
+                ..Default::default()
+            };
+
+            match BlockingHttpTrap::new(config) {
+                Ok(trap) => {
+                    return TrapImpl::Http(Arc::new(trap)).into();
                 }
-            },
-            Err(_) => {
-                tracing::warn!("using dummy trap");
-                TrapImpl::Dummy(DummyTrap {}).into()
+                Err(e) => {
+                    tracing::warn!("Failed to create HttpTrap: {e}, falling back to DummyTrap")
+                }
             }
         }
+        // Fallback to DummyTrap
+        tracing::warn!("using dummy trap");
+        TrapImpl::Dummy(DummyTrap {}).into()
     });
 
     trap.lock().expect("poisoned").clone()
-}
-
-#[ctor]
-unsafe fn entry_point() {
-    logging::init();
-    let pid = std::process::id();
-
-    let nvml = match Nvml::init().and(
-        Nvml::builder()
-            .lib_path(OsStr::new("libnvidia-ml.so.1"))
-            .init(),
-    ) {
-        Ok(nvml) => nvml,
-        Err(e) => {
-            tracing::error!("Failed to initialize NVML: {}", e);
-            return;
-        }
-    };
-
-    // parse device limits
-    let device_configs = config::parse_limits_and_create_device_configs(&nvml);
-
-    let limiter = match Limiter::new(pid, nvml, &device_configs) {
-        Ok(limiter) => limiter,
-        Err(err) => {
-            tracing::error!("failed to init limiter, err: {err}");
-            return;
-        }
-    };
-    GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
-
-    let mut hook_manager = HookManager::default();
-    hook_manager.collect_module_names();
-
-    if hook_manager
-        .module_names
-        .iter()
-        .any(|m| m.starts_with("libcuda."))
-    {
-        LIBCUDA_HOOKED.with_borrow_mut(|hooked: &mut bool| {
-            if !*hooked {
-                detour::gpu::enable_hooks(&mut hook_manager);
-                detour::mem::enable_hooks(&mut hook_manager);
-                *hooked = true;
-            }
-        });
-    }
-    if hook_manager
-        .module_names
-        .iter()
-        .any(|m| m.starts_with("libnvidia-ml."))
-    {
-        LIBNVML_HOOKED.with_borrow_mut(|hooked: &mut bool| {
-            if !*hooked {
-                detour::nvml::enable_hooks(&mut hook_manager);
-                *hooked = true;
-            }
-        });
-    }
-    let cuda_hooked = LIBCUDA_HOOKED.with(|hooked| *hooked.borrow());
-    let nvml_hooked = LIBNVML_HOOKED.with(|hooked| *hooked.borrow());
-
-    if !cuda_hooked || !nvml_hooked {
-        replace_symbol!(
-            &mut hook_manager,
-            None,
-            "dlopen",
-            dlopen_detour,
-            FnDlopen,
-            FN_DLOPEN
-        );
-    }
 }
 
 #[hook_fn]
@@ -170,27 +269,18 @@ pub(crate) unsafe extern "C" fn dlopen_detour(name: *const c_char, mode: c_int) 
         tracing::trace!("dlopen: {lib}, {ret:?}");
 
         if lib.contains("libcuda.") {
-            LIBCUDA_HOOKED.with_borrow_mut(|hooked: &mut bool| {
-                if !*hooked {
-                    let mut hook_manager = HookManager::default();
-                    hook_manager.collect_module_names();
-                    detour::gpu::enable_hooks(&mut hook_manager);
-                    detour::mem::enable_hooks(&mut hook_manager);
-                    *hooked = true;
-                }
-            })
+            init_cuda_hooks();
         }
 
         if lib.contains("libnvidia-ml.") {
-            LIBNVML_HOOKED.with_borrow_mut(|hooked: &mut bool| {
-                if !*hooked {
-                    let mut hook_manager = HookManager::default();
-                    hook_manager.collect_module_names();
-                    detour::nvml::enable_hooks(&mut hook_manager);
-                    *hooked = true;
-                }
-            })
+            init_nvml_hooks();
         }
     }
     ret
+}
+
+fn get_hypervisor_config() -> Option<(String, String)> {
+    let hypervisor_ip = std::env::var("HYPERVISOR_IP").ok()?;
+    let hypervisor_port = std::env::var("HYPERVISOR_PORT").ok()?;
+    Some((hypervisor_ip, hypervisor_port))
 }

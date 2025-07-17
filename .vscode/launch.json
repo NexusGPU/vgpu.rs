@@ -7,27 +7,28 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'tensor-fusion-hypervisor'",
+            "name": "Debug executable 'hypervisor'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=tensor-fusion-hypervisor",
-                    "--package=tensor-fusion-hypervisor"
+                    "--bin=hypervisor",
+                    "--package=hypervisor"
                 ],
                 "filter": {
-                    "name": "tensor-fusion-hypervisor",
+                    "name": "hypervisor",
                     "kind": "bin"
-                }
+                },
             },
             "env": {
                 "TF_ENABLE_LOG": "1",
-                "TF_LOG_PATH": "logs/tf.log",
+                "GPU_NODE_NAME": "gpu-2"
             },
             "args": [
-                "--sock-path",
-                "/tensor-fusion/worker/sock/",
-                "--ipc-path",
-                "/tensor-fusion/worker/ipc"
+                "daemon",
+                "--gpu-metrics-file",
+                "logs/metrics.log",
+                "--kubelet-device-state-path",
+                "logs/device_state.json"
             ],
             "cwd": "${workspaceFolder}"
         }

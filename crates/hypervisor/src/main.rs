@@ -1,274 +1,194 @@
+mod api;
+mod app;
+mod app_builder;
 mod config;
+mod gpu_allocation_watcher;
+mod gpu_init;
 mod gpu_observer;
+mod host_pid_probe;
 mod hypervisor;
+mod k8s;
+mod kube_client;
+mod limiter_comm;
+mod limiter_coordinator;
 mod logging;
 mod metrics;
 mod process;
 mod scheduler;
-mod worker_watcher;
+mod worker_manager;
+mod worker_registration;
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::RwLock;
-use std::thread;
-use std::time::Duration;
-
+use anyhow::Context;
 use anyhow::Result;
-use clap::command;
 use clap::Parser;
-use gpu_observer::GpuObserver;
-use hypervisor::Hypervisor;
-use nvml_wrapper::Nvml;
-use process::GpuResources;
-use scheduler::weighted::WeightedScheduler;
 use utils::version;
-use worker_watcher::WorkerWatcher;
 
-#[derive(Parser)]
-#[command(about, long_about, version = &**version::VERSION)]
-struct Cli {
-    #[arg(long, value_hint = clap::ValueHint::DirPath, help = "Socket path for hypervisor to control vGPU workers, e.g. /tensor-fusion/worker/sock/")]
-    sock_path: PathBuf,
+use crate::app_builder::ApplicationBuilder;
+use crate::config::Cli;
+use crate::config::Commands;
 
-    #[arg(long, value_hint = clap::ValueHint::FilePath, help = "Path for printing GPU and worker metrics, e.g. /logs/metrics.log")]
-    gpu_metrics_file: Option<PathBuf>,
-
-    #[arg(
-        long,
-        default_value = "10",
-        help = "Number of metrics to aggregate before printing, default to 10 means aggregated every 10 seconds"
-    )]
-    metrics_batch_size: usize,
-
-    #[arg(
-        long,
-        env = "TENSOR_FUSION_GPU_INFO_PATH",
-        help = "Path for GPU info list, e.g. /etc/tensor-fusion/gpu-info.yaml"
-    )]
-    gpu_info_path: Option<PathBuf>,
-
-    #[arg(
-        long,
-        env = "TENSOR_FUSION_IPC_SERVER_PATH",
-        help = "Path for the IPC pipe used for communication between the hypervisor and worker processes, e.g. /tensor-fusion/worker/ipc"
-    )]
-    ipc_path: PathBuf,
-}
-
-fn main() -> Result<()> {
-    // Set up global panic hook to print detailed information and propagate to the main thread when a thread panics
+/// Sets up global panic hooks.
+fn setup_global_hooks() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        // Call the default panic hook to print detailed information
         default_hook(panic_info);
-        // Log the panic location and reason
         tracing::error!("Thread panicked: {}", panic_info);
     }));
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    setup_global_hooks();
 
     let cli = Cli::parse();
-    let _guard = logging::init(cli.gpu_metrics_file);
 
-    tracing::info!("Starting tensor-fusion-hypervisor {}", &**version::VERSION);
+    match cli.command {
+        Commands::Daemon(daemon_args) => run_daemon(*daemon_args).await,
+        Commands::MountShm(mount_shm_args) => run_mount_shm(mount_shm_args).await,
+        Commands::ShowShm(show_shm_args) => run_show_shm(show_shm_args).await,
+    }
+}
 
-    let nvml = Arc::new(match Nvml::init() {
-        Ok(nvml) => Ok(nvml),
-        Err(_) => Nvml::builder()
-            .lib_path(std::ffi::OsStr::new("libnvidia-ml.so.1"))
-            .init(),
-    }?);
+async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
+    use utils::shared_memory::SharedMemoryHandle;
+    utils::logging::init();
 
-    let mut gpu_limits = HashMap::new();
-    let mut gpu_uuid_to_name_map = HashMap::new();
-    let device_count = nvml.device_count()?;
+    tracing::info!(
+        "Attempting to open shared memory with identifier: {}",
+        show_shm_args.shm_identifier
+    );
 
-    for i in 0..device_count {
-        let device = nvml.device_by_index(i)?;
-        let memory_info = device.memory_info()?;
-        let uuid = device.uuid()?.to_lowercase();
-        let name = device.name()?;
+    let handle = SharedMemoryHandle::open(&show_shm_args.shm_identifier)
+        .context("Failed to open shared memory")?;
 
-        tracing::info!("Found GPU {}: {} ({})", i, uuid, name);
-        // Store GPU name and UUID mapping for config lookup
-        gpu_uuid_to_name_map.insert(uuid.clone(), name);
+    tracing::info!("Successfully opened shared memory handle");
 
-        gpu_limits.insert(uuid, GpuResources {
-            memory_bytes: memory_info.total,
-            compute_percentage: 100,
-        });
+    // Get the raw pointer for validation
+    let ptr = handle.get_ptr();
+
+    if ptr.is_null() {
+        tracing::error!("Shared memory pointer is null!");
+        return Err(anyhow::anyhow!("Shared memory pointer is null"));
     }
 
-    let gpu_node = std::env::var("GPU_NODE_NAME").unwrap_or("unknown".to_string());
-    let gpu_pool = std::env::var("TENSOR_FUSION_POOL_NAME").unwrap_or("unknown".to_string());
+    tracing::info!("Shared memory pointer is valid: {:p}", ptr);
 
-    // Load GPU information from config file
-    if let Err(e) = config::load_gpu_info(
-        gpu_uuid_to_name_map,
-        cli.gpu_info_path.unwrap_or("./gpu-info.yaml".into()),
-    ) {
-        tracing::warn!("Failed to load GPU information: {}", e);
-    }
+    // Get the state safely
+    let state = handle.get_state();
+    tracing::info!("Successfully accessed shared memory state");
 
-    let scheduler = WeightedScheduler::new();
-    // Create hypervisor with 1-second scheduling interval
-    let hypervisor = Arc::new(Hypervisor::new(scheduler, Duration::from_secs(1)));
+    // Print basic information step by step
+    let device_count = state.device_count();
+    tracing::info!("Shared memory contains {} devices", device_count);
 
-    let gpu_observer = GpuObserver::create(nvml.clone());
-    let worker_pid_mapping = Arc::new(RwLock::new(HashMap::new()));
+    let last_heartbeat = state.get_last_heartbeat();
+    tracing::info!("Last heartbeat timestamp: {}", last_heartbeat);
 
-    // Ensure socket directory exists
-    std::fs::create_dir_all(&cli.sock_path)?;
+    let device_uuids = state.get_device_uuids();
+    tracing::info!("Device UUIDs: {:?}", device_uuids);
 
-    thread::scope(|s| {
-        // Start GPU observer thread
-        let gpu_observer_handle = s.spawn({
-            let gpu_observer = gpu_observer.clone();
-            move || {
-                tracing::info!("Starting GPU observer thread");
-                gpu_observer.run(Duration::from_secs(1));
-            }
-        });
+    // Try to check if the shared memory is healthy
+    let is_healthy = state.is_healthy(60); // 60 seconds timeout
+    tracing::info!("Shared memory health status (60s timeout): {}", is_healthy);
 
-        // Start metrics collection thread
-        let metrics_handle = s.spawn({
-            let gpu_observer = gpu_observer.clone();
-            let worker_pid_mapping = worker_pid_mapping.clone();
-            let metrics_batch_size = cli.metrics_batch_size;
-            move || {
-                tracing::info!("Starting metrics collection thread");
-                metrics::run_metrics(
-                    gpu_observer,
-                    worker_pid_mapping,
-                    metrics_batch_size,
-                    gpu_node,
-                    gpu_pool,
-                );
-            }
-        });
-
-        // create trap server
-        let trap_server = Arc::new(
-            trap::ipc::IpcTrapServer::new(hypervisor.clone())
-                .expect("failed to create trap server"),
-        );
-        // Create the worker watcher instance to be shared by both threads
-        let sock_path = cli.sock_path.clone();
-        let watcher = Arc::new(
-            WorkerWatcher::new(
-                &sock_path,
-                {
-                    let hypervisor = hypervisor.clone();
-                    let trap_server = trap_server.clone();
-                    move |pid, mut worker| {
-                        if hypervisor.process_exists(pid) {
-                            return;
-                        }
-
-                        if let Err(e) = worker.connect() {
-                            tracing::error!("failed to connect to worker: {e}, skipped");
-                            return;
-                        }
-
-                        hypervisor.add_process(worker);
-                        tracing::info!("new worker added: {pid}");
-                        // Spawn a standalone thread to wait for client connection
-                        let trap_server = trap_server.clone();
-                        let ipc_path = cli.ipc_path.clone();
-                        thread::spawn(move || {
-                            tracing::info!("waiting for client with PID: {}", pid);
-                            match trap_server.wait_client(ipc_path, pid) {
-                                Ok(_) => tracing::info!("client with PID {} connected", pid),
-                                Err(e) => tracing::error!(
-                                    "failed to wait for client with PID {}: {}",
-                                    pid,
-                                    e
-                                ),
-                            }
-                        });
-                    }
-                },
-                {
-                    let hypervisor = hypervisor.clone();
-                    let trap_server = trap_server.clone();
-                    move |pid| {
-                        hypervisor.remove_process(pid);
-                        trap_server.remove_client(pid);
-                    }
-                },
-                worker_pid_mapping.clone(),
+    // Print device details one by one
+    for uuid in &device_uuids {
+        if let Some(info) = state.with_device_by_uuid(uuid, |device| {
+            format!("UUID: {}, Available cores: {}, Total cores: {}, Up limit: {}%, Memory limit: {} bytes, Pod memory used: {} bytes",
+                uuid,
+                device.get_available_cores(),
+                device.get_total_cores(),
+                device.get_up_limit(),
+                device.get_mem_limit(),
+                device.get_pod_memory_used()
             )
-            .expect("new worker watcher"),
+        }) {
+            tracing::info!("Device info: {}", info);
+        }
+    }
+
+    tracing::info!("Successfully completed shared memory inspection");
+    Ok(())
+}
+
+async fn run_daemon(daemon_args: crate::config::DaemonArgs) -> Result<()> {
+    let _guard = logging::init(daemon_args.gpu_metrics_file.clone());
+
+    tracing::info!("Starting hypervisor daemon {}", &**version::VERSION);
+
+    let app = ApplicationBuilder::new(daemon_args).build().await?;
+
+    app.run().await?;
+    app.shutdown().await?;
+
+    Ok(())
+}
+
+async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()> {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    utils::logging::init();
+
+    tracing::info!("mount point: {:?}", mount_shm_args.mount_point);
+    tracing::info!("size: {} MB", mount_shm_args.size_mb);
+
+    // create mount point directory
+    if !mount_shm_args.mount_point.exists() {
+        tracing::info!(
+            "create mount point directory: {:?}",
+            mount_shm_args.mount_point
         );
+        fs::create_dir_all(&mount_shm_args.mount_point)
+            .context("create mount point directory failed")?;
+    }
 
-        // Start worker watcher loop thread (directory polling)
-        let watcher_loop_handle = thread::Builder::new()
-            .name("worker-watcher-loop".into())
-            .spawn_scoped(s, {
-                let watcher = watcher.clone();
-                let sock_path = sock_path.clone();
-                move || {
-                    tracing::info!("Starting worker watcher loop thread");
-                    watcher.run_watcher_loop(sock_path);
-                }
-            })
-            .expect("failed to spawn worker watcher loop thread");
+    // check if tmpfs is already mounted
+    let mount_output = Command::new("mount")
+        .output()
+        .context("execute mount command failed")?;
 
-        // Start worker watcher event handling thread
-        let worker_handle = thread::Builder::new()
-            .name("worker-watcher-event-handler".into())
-            .spawn_scoped(s, {
-                let watcher = watcher.clone();
-                let gpu_observer = gpu_observer.clone();
-                move || {
-                    tracing::info!("Starting worker watcher event handler thread");
-                    watcher.run(gpu_observer);
-                }
-            })
-            .expect("failed to spawn worker watcher event handler thread");
+    let mount_info = String::from_utf8_lossy(&mount_output.stdout);
+    let mount_point_str = mount_shm_args.mount_point.to_string_lossy();
 
-        // Start trap server thread
-        let trap_handle = thread::Builder::new()
-            .name("trap-server".into())
-            .spawn_scoped(s, {
-                let hypervisor = hypervisor.clone();
-                move || {
-                    tracing::info!("Starting trap server thread");
-                    let trap_server = trap::ipc::IpcTrapServer::new(hypervisor)
-                        .expect("failed to create trap server");
-                    trap_server.run().expect("trap server failed");
-                }
-            })
-            .expect("failed to spawn trap server thread");
+    if mount_info.contains(&format!("on {mount_point_str} type tmpfs")) {
+        tracing::info!(
+            "tmpfs is already mounted on {:?}",
+            mount_shm_args.mount_point
+        );
+    } else {
+        // mount tmpfs
+        tracing::info!("mount tmpfs on {:?}", mount_shm_args.mount_point);
+        let size_arg = format!("size={}M", mount_shm_args.size_mb);
 
-        // Start hypervisor in a separate thread
-        let hypervisor_handle = s.spawn({
-            let hypervisor = hypervisor.clone();
-            move || {
-                tracing::info!("Starting hypervisor thread");
-                hypervisor.run();
-            }
-        });
+        let mount_result = Command::new("mount")
+            .args([
+                "-t",
+                "tmpfs",
+                "-o",
+                &format!("rw,nosuid,nodev,{size_arg}"),
+                "tmpfs",
+                mount_point_str.as_ref(),
+            ])
+            .status()
+            .context("execute mount command failed")?;
 
-        // Join threads to catch any panics
-        // Note: Since all these threads run in infinite loops, these join calls will only complete
-        // if a thread panics or if the program receives a termination signal (e.g., Ctrl+C)
-        gpu_observer_handle
-            .join()
-            .expect("GPU observer thread panicked");
-        metrics_handle
-            .join()
-            .expect("Metrics collection thread panicked");
-        watcher_loop_handle
-            .join()
-            .expect("Worker watcher loop thread panicked");
-        worker_handle
-            .join()
-            .expect("Worker watcher thread panicked");
-        trap_handle.join().expect("Trap server thread panicked");
-        hypervisor_handle
-            .join()
-            .expect("Hypervisor thread panicked");
-    });
+        if !mount_result.success() {
+            return Err(anyhow::anyhow!("mount tmpfs failed"));
+        }
 
+        tracing::info!("mount tmpfs successfully");
+    }
+
+    // set directory permissions
+    let metadata =
+        fs::metadata(&mount_shm_args.mount_point).context("get mount point metadata failed")?;
+
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(0o0755);
+
+    fs::set_permissions(&mount_shm_args.mount_point, permissions)
+        .context("set permissions failed")?;
     Ok(())
 }

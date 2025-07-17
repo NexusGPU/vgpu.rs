@@ -7,8 +7,17 @@ edition = "2021"
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-frida-gum = { git = "https://github.com/frida/frida-rust", rev = "e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f", features = ["auto-download", "std"] }
+frida-gum = { workspace = true, features = ["auto-download", "std"] }
 thiserror = { workspace = true }
+anyhow = { workspace = true }
+shared_memory = { workspace = true }
+cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
+spin = { version = "0.10", features = ["rwlock"], default-features = false }
+
+[dev-dependencies]
+similar-asserts = { workspace = true }
+test-log = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
 [build-dependencies]
 anyhow = { workspace = true }

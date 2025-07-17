@@ -1,28 +1,26 @@
 use std::ffi::c_uint;
-use std::ffi::c_ulonglong;
 
+use cudarc::driver::sys::CUarray;
+use cudarc::driver::sys::CUarray_format;
+use cudarc::driver::sys::CUdevice;
+use cudarc::driver::sys::CUdeviceptr;
+use cudarc::driver::sys::CUmemGenericAllocationHandle;
+use cudarc::driver::sys::CUmipmappedArray;
 use cudarc::driver::sys::CUresult;
+use cudarc::driver::sys::CUDA_ARRAY3D_DESCRIPTOR;
+use cudarc::driver::sys::CUDA_ARRAY_DESCRIPTOR;
 use tf_macro::hook_fn;
 use trap::Trap;
 use trap::TrapFrame;
 use utils::hooks::HookManager;
 use utils::replace_symbol;
 
-use super::CUarray;
-use super::CUdevice;
-use super::CUdeviceptr;
-use super::CUdeviceptrV1;
-use super::CUmipmappedArray;
-use super::CuarrayFormatEnum;
-use super::CudaArray3dDescriptor;
-use super::CudaArrayDescriptor;
 use crate::detour::round_up;
 use crate::global_trap;
-use crate::limiter::Error;
 use crate::with_device;
 use crate::GLOBAL_LIMITER;
 
-/// macro: check memory allocation and execute allocation
+/// macro: check pod-level memory allocation and execute allocation
 ///
 /// # Parameters
 /// * `$request_size:expr` - Requested memory size in bytes
@@ -34,11 +32,7 @@ use crate::GLOBAL_LIMITER;
 macro_rules! check_and_alloc {
     ($request_size:expr, $alloc_name:expr, $alloc_fn:expr) => {{
         let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-        let result = with_device!(|device| {
-            let used = limiter.get_used_gpu_memory(device)?;
-            let mem_limit = limiter.get_mem_limit(device)?;
-            Ok::<(u64, u64), Error>((used, mem_limit))
-        });
+        let result = with_device!(|_, device_uuid| { limiter.get_pod_memory_usage(device_uuid) });
 
         match result {
             Ok((used, mem_limit)) if used.saturating_add($request_size) > mem_limit => {
@@ -52,7 +46,10 @@ macro_rules! check_and_alloc {
                 CUresult::CUDA_ERROR_OUT_OF_MEMORY
             }
             Ok(_) => cuda_alloc_with_retry($request_size, || $alloc_fn()),
-            Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
+            Err(e) => {
+                tracing::error!("Failed to get pod memory usage: {e}");
+                CUresult::CUDA_ERROR_UNKNOWN
+            }
         }
     }};
 }
@@ -113,7 +110,7 @@ pub(crate) unsafe fn cu_mem_alloc_v2_detour(dptr: *mut CUdeviceptr, bytesize: u6
 }
 
 #[hook_fn]
-pub(crate) unsafe fn cu_mem_alloc_detour(dptr: *mut CUdeviceptrV1, bytesize: u64) -> CUresult {
+pub(crate) unsafe fn cu_mem_alloc_detour(dptr: *mut CUdeviceptr, bytesize: u64) -> CUresult {
     let request_size = bytesize;
     check_and_alloc!(request_size, "cuMemAlloc", || {
         FN_CU_MEM_ALLOC(dptr, bytesize)
@@ -148,7 +145,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_v2_detour(
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_alloc_pitch_detour(
-    dptr: *mut CUdeviceptrV1,
+    dptr: *mut CUdeviceptr,
     p_pitch: *mut usize,
     width_in_bytes: usize,
     height: usize,
@@ -163,7 +160,7 @@ pub(crate) unsafe fn cu_mem_alloc_pitch_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_array_create_v2_detour(
     p_handle: *mut CUarray,
-    p_allocate_array: *const CudaArrayDescriptor,
+    p_allocate_array: *const CUDA_ARRAY_DESCRIPTOR,
 ) -> CUresult {
     let request_size = allocate_array_request_size(p_allocate_array);
     check_and_alloc!(request_size, "cuArrayCreate_v2", || {
@@ -174,7 +171,7 @@ pub(crate) unsafe fn cu_array_create_v2_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_array_create_detour(
     p_handle: *mut CUarray,
-    p_allocate_array: *const CudaArrayDescriptor,
+    p_allocate_array: *const CUDA_ARRAY_DESCRIPTOR,
 ) -> CUresult {
     let request_size = allocate_array_request_size(p_allocate_array);
     check_and_alloc!(request_size, "cuArrayCreate", || {
@@ -185,7 +182,7 @@ pub(crate) unsafe fn cu_array_create_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_array_3d_create_v2_detour(
     p_handle: *mut CUarray,
-    p_allocate_array: *const CudaArray3dDescriptor,
+    p_allocate_array: *const CUDA_ARRAY3D_DESCRIPTOR,
 ) -> CUresult {
     let request_size = allocate_array_3d_request_size(p_allocate_array);
     check_and_alloc!(request_size, "cuArray3DCreate_v2", || {
@@ -196,7 +193,7 @@ pub(crate) unsafe fn cu_array_3d_create_v2_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_array_3d_create_detour(
     p_handle: *mut CUarray,
-    p_allocate_array: *const CudaArray3dDescriptor,
+    p_allocate_array: *const CUDA_ARRAY3D_DESCRIPTOR,
 ) -> CUresult {
     let request_size = allocate_array_3d_request_size(p_allocate_array);
     check_and_alloc!(request_size, "cuArray3DCreate", || {
@@ -207,13 +204,16 @@ pub(crate) unsafe fn cu_array_3d_create_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_mipmapped_array_create_detour(
     p_handle: *mut CUmipmappedArray,
-    p_mipmapped_array_desc: *const CudaArray3dDescriptor,
+    p_mipmapped_array_desc: *const CUDA_ARRAY3D_DESCRIPTOR,
     num_mipmap_levels: c_uint,
 ) -> CUresult {
     let desc_ref = &*p_mipmapped_array_desc;
-    let base_size = get_array_base_size(desc_ref.format as _);
-    let request_size =
-        base_size * desc_ref.num_channels * desc_ref.height * desc_ref.width * desc_ref.depth;
+    let base_size = get_array_base_size(desc_ref.Format);
+    let request_size = base_size
+        * (desc_ref.NumChannels as u64)
+        * (desc_ref.Height as u64)
+        * (desc_ref.Width as u64)
+        * (desc_ref.Depth as u64);
 
     check_and_alloc!(request_size, "cuMipmappedArrayCreate", || {
         FN_CU_MIPMAPPED_ARRAY_CREATE(p_handle, p_mipmapped_array_desc, num_mipmap_levels)
@@ -222,7 +222,7 @@ pub(crate) unsafe fn cu_mipmapped_array_create_detour(
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_create_detour(
-    handle: *mut c_ulonglong,
+    handle: *mut CUmemGenericAllocationHandle,
     size: u64,
     prop: *const u64,
     flags: c_uint,
@@ -236,61 +236,55 @@ pub(crate) unsafe fn cu_mem_create_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, device: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    limiter
-        .get_mem_limit_cu(device)
-        .map(|limit| {
+    match limiter.get_pod_memory_usage_cu(device) {
+        Ok((_, limit)) => {
             *bytes = limit;
             CUresult::CUDA_SUCCESS
-        })
-        .unwrap_or(CUresult::CUDA_ERROR_UNKNOWN)
+        }
+        Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
+    }
 }
 
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, device: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    limiter
-        .get_mem_limit_cu(device)
-        .map(|limit| {
+    match limiter.get_pod_memory_usage_cu(device) {
+        Ok((_, limit)) => {
             *bytes = limit;
             CUresult::CUDA_SUCCESS
-        })
-        .unwrap_or(CUresult::CUDA_ERROR_UNKNOWN)
+        }
+        Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
+    }
 }
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let result = with_device!(|device| {
-        let mem_limit = limiter.get_mem_limit(device)?;
-        let used = limiter.get_used_gpu_memory(device)?;
-        Ok::<(u64, u64), Error>((mem_limit, used))
-    });
-
-    match result {
-        Ok((mem_limit, used)) => {
-            *free = mem_limit.saturating_sub(used);
-            *total = mem_limit;
-            CUresult::CUDA_SUCCESS
+    with_device!(|_, device_uuid| {
+        let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+        match limiter.get_pod_memory_usage(device_uuid) {
+            Ok((used, mem_limit)) => {
+                *total = mem_limit;
+                *free = mem_limit - used;
+                CUresult::CUDA_SUCCESS
+            }
+            Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
         }
-        Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
-    }
+    })
 }
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    match with_device!(|device| {
-        let mem_limit = limiter.get_mem_limit(device)?;
-        let used = limiter.get_used_gpu_memory(device)?;
-        Ok::<(u64, u64), Error>((mem_limit, used))
-    }) {
-        Ok((mem_limit, used)) => {
-            *free = mem_limit.saturating_sub(used);
-            *total = mem_limit;
-            CUresult::CUDA_SUCCESS
+    with_device!(|_, device_uuid| {
+        let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+        match limiter.get_pod_memory_usage(device_uuid) {
+            Ok((used, mem_limit)) => {
+                *total = mem_limit;
+                *free = mem_limit - used;
+                CUresult::CUDA_SUCCESS
+            }
+            Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
         }
-        Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
-    }
+    })
 }
 
 /// Enables hooks for CUDA memory management functions.
@@ -418,33 +412,36 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
 }
 
 #[inline]
-fn get_array_base_size(format: CuarrayFormatEnum) -> u64 {
+fn get_array_base_size(format: CUarray_format) -> u64 {
     match format {
-        CuarrayFormatEnum::CuAdFormatUnsignedInt8 | CuarrayFormatEnum::CuAdFormatSignedInt8 => 8,
-        CuarrayFormatEnum::CuAdFormatUnsignedInt16
-        | CuarrayFormatEnum::CuAdFormatSignedInt16
-        | CuarrayFormatEnum::CuAdFormatHalf => 16,
-        CuarrayFormatEnum::CuAdFormatUnsignedInt32
-        | CuarrayFormatEnum::CuAdFormatSignedInt32
-        | CuarrayFormatEnum::CuAdFormatFloat => 32,
+        CUarray_format::CU_AD_FORMAT_UNSIGNED_INT8 | CUarray_format::CU_AD_FORMAT_SIGNED_INT8 => 8,
+        CUarray_format::CU_AD_FORMAT_UNSIGNED_INT16
+        | CUarray_format::CU_AD_FORMAT_SIGNED_INT16
+        | CUarray_format::CU_AD_FORMAT_HALF => 16,
+        CUarray_format::CU_AD_FORMAT_UNSIGNED_INT32
+        | CUarray_format::CU_AD_FORMAT_SIGNED_INT32
+        | CUarray_format::CU_AD_FORMAT_FLOAT => 32,
         _ => 32,
     }
 }
 
 #[inline]
-fn allocate_array_request_size(p_allocate_array: *const CudaArrayDescriptor) -> u64 {
+fn allocate_array_request_size(p_allocate_array: *const CUDA_ARRAY_DESCRIPTOR) -> u64 {
     let p_allocate_array = unsafe { &*p_allocate_array };
-    let base_size = get_array_base_size(p_allocate_array.format);
-    base_size * p_allocate_array.num_channels * p_allocate_array.height * p_allocate_array.width
+    let base_size = get_array_base_size(p_allocate_array.Format);
+    base_size
+        * (p_allocate_array.NumChannels as u64)
+        * (p_allocate_array.Height as u64)
+        * (p_allocate_array.Width as u64)
 }
 
 #[inline]
-fn allocate_array_3d_request_size(p_allocate_array: *const CudaArray3dDescriptor) -> u64 {
+fn allocate_array_3d_request_size(p_allocate_array: *const CUDA_ARRAY3D_DESCRIPTOR) -> u64 {
     let p_allocate_array = unsafe { &*p_allocate_array };
-    let base_size = get_array_base_size(p_allocate_array.format);
+    let base_size = get_array_base_size(p_allocate_array.Format);
     base_size
-        * p_allocate_array.num_channels
-        * p_allocate_array.height
-        * p_allocate_array.width
-        * p_allocate_array.depth
+        * (p_allocate_array.NumChannels as u64)
+        * (p_allocate_array.Height as u64)
+        * (p_allocate_array.Width as u64)
+        * (p_allocate_array.Depth as u64)
 }

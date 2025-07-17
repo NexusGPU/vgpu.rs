@@ -2,20 +2,31 @@
 resolver = "2"
 members = [
   "crates/add-path",
+  "crates/api-types",
   "crates/cuda-limiter",
-  "crates/integration-test",
   "crates/hypervisor",
   "crates/macro",
   "crates/utils",
   "crates/trap",
+  "crates/http-bidir-comm",
+  "crates/bootstrap",
+  "crates/device-plugin-pb",
+]
+exclude = [
+  "crates/integration-test",
 ]
 
 [workspace.dependencies]
+api-types = { path = "crates/api-types" }
 trap = { path = "crates/trap" }
 utils = { path = "crates/utils" }
 tf-macro = { path = "crates/macro" }
+http-bidir-comm = { path = "crates/http-bidir-comm" }
+device-plugin-pb = { path = "crates/device-plugin-pb" }
 tracing = "0.1"
 thiserror = "2.0"
+derive_more = "1.0"
+base64 = "0.22"
 tracing-subscriber = "0.3"
 ctor = "0.4"
 ipc-channel = "0.19.0"
@@ -23,9 +34,41 @@ vergen-git2 = "1.0.1"
 anyhow = "1.0.98"
 nvml-wrapper = "0.11.0"
 nvml-wrapper-sys = "0.9.0"
-cudarc = "0.16.5"
+cudarc = "0.16.6"
 serde = "1.0"
 serde_json = "1.0"
 tracing-appender = "0.2.3"
 clap = "4.5"
 once_cell = "1.19"
+kube = { version = "0.87", features = ["runtime", "derive", "rustls-tls", "client", "config"], default-features = false }
+k8s-openapi = { version = "0.20", features = ["v1_28"] }
+tokio = "1.0"
+error-stack = "0.4"
+futures = "0.3"
+priority-queue = "2.5.0"
+serde_yaml = "0.9"
+influxdb-line-protocol = "2.0.0"
+poem = { version = "3.1", features = ["sse", "test"] }
+frida-gum = { git = "https://github.com/frida/frida-rust", rev = "e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f" }
+libc = "0.2.174"
+tempfile = "3.20.0"
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
+reqwest = { version = "0.12", default-features = false }
+flate2 = "1.0"
+tar = "0.4"
+axum = "0.7"
+uuid = "1.8"
+chrono = "0.4"
+similar-asserts = "1.5"
+test-log = "0.2"
+async-stream = "0.3"
+futures-util = "0.3"
+eventsource = { git="https://github.com/NexusGPU/eventsource.git" }
+url = "2.5"
+libloading = "0.8"
+shared_memory = "0.12"
+tower = "0.5"
+schemars = "0.8"
+json-patch = "1.4"
