@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
@@ -63,8 +64,8 @@ pub(crate) struct Limiter {
     nvml: Nvml,
     /// Device dimensions
     current_devices_dim: HashMap<i32, DeviceDim>,
-    /// CUDA device mapping (CUdevice -> device_uuid)
-    cu_device_mapping: HashMap<CUdevice, String>,
+    /// CUDA device mapping (CUdevice -> (device_index, device_uuid))
+    cu_device_mapping: BTreeMap<CUdevice, (u32, String)>,
 }
 
 impl std::fmt::Debug for Limiter {
@@ -84,7 +85,7 @@ impl Limiter {
         pod_identifier: String,
         gpu_uuids: &[String],
     ) -> Result<Self, Error> {
-        let mut cu_device_mapping = HashMap::new();
+        let mut cu_device_mapping = BTreeMap::new();
         let mut uuid_mapping = HashMap::new();
 
         for i in 0..gpu_uuids.len() {
@@ -93,9 +94,11 @@ impl Limiter {
             let cu_uuid = uuid_to_string_formatted(&cu_uuid.bytes);
 
             if gpu_uuids.contains(&cu_uuid) {
+                let device = nvml.device_by_uuid(cu_uuid.as_str())?;
+                let index = device.index()?;
                 uuid_mapping.insert(i as i32, cu_uuid.clone());
                 tracing::info!("Device {i} UUID: {}", cu_uuid);
-                cu_device_mapping.insert(ctx.cu_device(), cu_uuid);
+                cu_device_mapping.insert(ctx.cu_device(), (index, cu_uuid.clone()));
             }
         }
 
@@ -183,14 +186,29 @@ impl Limiter {
             .get(&cu_device)
             .ok_or(Error::InvalidCuDevice(cu_device))?;
 
-        self.get_pod_memory_usage(device_uuid)
+        self.get_pod_memory_usage(device_uuid.1.as_str())
     }
+
+    pub(crate) fn nvml_index_mapping(&self, index: usize) -> Result<u32, Error> {
+        let key = self
+            .cu_device_mapping
+            .keys()
+            .nth(index)
+            .ok_or(Error::InvalidCuDevice(index as CUdevice))?;
+        let nvml_idx = self
+            .cu_device_mapping
+            .get(key)
+            .ok_or(Error::InvalidCuDevice(*key))?
+            .0;
+        Ok(nvml_idx)
+    }
+
     /// Get the NVML device handle for a specific device
     pub(crate) fn device_uuid_by_handle(
         &self,
         device_handle: nvmlDevice_t,
     ) -> Result<Option<String>, NvmlError> {
-        for (_, gpu_uuid) in self.cu_device_mapping.iter() {
+        for (_, (_, gpu_uuid)) in self.cu_device_mapping.iter() {
             let dev = self.nvml.device_by_uuid(gpu_uuid.as_str());
             match dev {
                 Ok(dev) => {
