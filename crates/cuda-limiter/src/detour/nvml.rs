@@ -1,6 +1,8 @@
 use std::ffi::c_uint;
 
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
+use nvml_wrapper_sys::bindings::nvmlEnableState_enum_NVML_FEATURE_DISABLED;
+use nvml_wrapper_sys::bindings::nvmlEnableState_t;
 use nvml_wrapper_sys::bindings::nvmlMemory_t;
 use nvml_wrapper_sys::bindings::nvmlMemory_v2_t;
 use nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
@@ -101,6 +103,17 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
     }
 }
 
+#[hook_fn]
+pub(crate) unsafe fn nvml_device_get_persistence_mode_detour(
+    _device: nvmlDevice_t,
+    mode: *mut nvmlEnableState_t,
+) -> nvmlReturn_t {
+    // fix: https://forums.developer.nvidia.com/t/nvidia-smi-uses-all-of-ram-and-swap/295639/15
+    let mode_ref = &mut *mode;
+    *mode_ref = nvmlEnableState_enum_NVML_FEATURE_DISABLED;
+    nvmlReturn_enum_NVML_SUCCESS
+}
+
 pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
     replace_symbol!(
         hook_manager,
@@ -134,5 +147,14 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         nvml_device_get_handle_by_index_v2_detour,
         FnNvml_device_get_handle_by_index_v2,
         FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
+    );
+
+    replace_symbol!(
+        hook_manager,
+        Some("libnvidia-ml."),
+        "nvmlDeviceGetPersistenceMode",
+        nvml_device_get_persistence_mode_detour,
+        FnNvml_device_get_persistence_mode,
+        FN_NVML_DEVICE_GET_PERSISTENCE_MODE
     );
 }
