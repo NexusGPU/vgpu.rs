@@ -96,6 +96,28 @@ impl Tasks {
         }
     }
 
+    /// Start device plugin task
+    #[tracing::instrument(skip_all)]
+    async fn run_device_plugin_task(
+        device_plugin: Arc<GpuDevicePlugin>,
+        device_plugin_socket_path: String,
+        kubelet_socket_path: String,
+        token: CancellationToken,
+    ) -> Result<()> {
+        tracing::info!("Starting device plugin task");
+
+        device_plugin
+            .start(&device_plugin_socket_path, token)
+            .await?;
+
+        device_plugin
+            .register_with_kubelet(&kubelet_socket_path)
+            .await?;
+
+        tracing::info!("Device plugin task completed");
+        Ok(())
+    }
+
     /// Start all background tasks
     pub fn spawn_all_tasks(&mut self, app: &crate::app::Application) -> Result<()> {
         let cli = &app.daemon_args;
@@ -255,22 +277,16 @@ impl Tasks {
                 let token = self.cancellation_token.clone();
 
                 tokio::spawn(async move {
-                    tracing::info!("Starting device plugin task");
-
-                    if let Err(e) = device_plugin.start(&device_plugin_socket_path, token).await {
-                        tracing::error!("Failed to start device plugin: {}", e);
-                        return;
-                    }
-
-                    if let Err(e) = device_plugin
-                        .register_with_kubelet(&kubelet_socket_path)
-                        .await
+                    if let Err(e) = Self::run_device_plugin_task(
+                        device_plugin,
+                        device_plugin_socket_path,
+                        kubelet_socket_path,
+                        token,
+                    )
+                    .await
                     {
-                        tracing::error!("Failed to register device plugin with kubelet: {}", e);
-                        return;
+                        tracing::error!("Device plugin task failed: {}", e);
                     }
-
-                    tracing::info!("Device plugin task completed");
                 })
             };
             self.tasks.push(device_plugin_task);
