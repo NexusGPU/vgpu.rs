@@ -1,6 +1,12 @@
+
 //! Shared Memory Module
 //! This module provides utilities for managing shared memory segments used for
 //! GPU resource coordination between processes.
+/// Error type for reference count operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefCountError {
+    Underflow,
+}
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicI32;
@@ -215,6 +221,7 @@ pub struct SharedDeviceState {
     /// Reference count for tracking how many processes are using this shared memory
     pub reference_count: AtomicU32,
 }
+
 
 impl SharedDeviceState {
     /// Creates a new SharedDeviceState instance.
@@ -468,11 +475,11 @@ impl SharedDeviceState {
     }
 
     /// Safely decrements reference count using compare-and-swap to avoid underflow.
-    pub fn try_decrement_ref_count(&self) -> Result<u32, ()> {
+    pub fn try_decrement_ref_count(&self) -> Result<u32, RefCountError> {
         loop {
             let current = self.reference_count.load(Ordering::Acquire);
             if current == 0 {
-                return Err(());
+                return Err(RefCountError::Underflow);
             }
             let new_value = current - 1;
             if self
@@ -1215,7 +1222,7 @@ mod tests {
         let mut handles = vec![];
 
         // Spawn multiple threads incrementing and decrementing reference count
-        for i in 0..5 {
+        for _ in 0..5 {
             let handle_clone = Arc::clone(&handle);
 
             let thread_handle = thread::spawn(move || {
