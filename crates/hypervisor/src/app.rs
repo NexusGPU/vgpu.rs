@@ -103,19 +103,26 @@ impl Tasks {
         device_plugin_socket_path: String,
         kubelet_socket_path: String,
         token: CancellationToken,
-    ) -> Result<()> {
+    ) {
         tracing::info!("Starting device plugin task");
 
-        device_plugin
-            .start(&device_plugin_socket_path, token)
-            .await?;
+        if let Err(e) = device_plugin
+            .start(&device_plugin_socket_path, token.clone())
+            .await
+        {
+            tracing::error!("Failed to start device plugin: {}", e);
+            return;
+        }
 
-        device_plugin
+        if let Err(e) = device_plugin
             .register_with_kubelet(&kubelet_socket_path)
-            .await?;
+            .await
+        {
+            tracing::error!("Failed to register device plugin with kubelet: {}", e);
+            return;
+        }
 
         tracing::info!("Device plugin task completed");
-        Ok(())
     }
 
     /// Start all background tasks
@@ -277,16 +284,13 @@ impl Tasks {
                 let token = self.cancellation_token.clone();
 
                 tokio::spawn(async move {
-                    if let Err(e) = Self::run_device_plugin_task(
+                    Self::run_device_plugin_task(
                         device_plugin,
                         device_plugin_socket_path,
                         kubelet_socket_path,
                         token,
                     )
-                    .await
-                    {
-                        tracing::error!("Device plugin task failed: {}", e);
-                    }
+                    .await;
                 })
             };
             self.tasks.push(device_plugin_task);
