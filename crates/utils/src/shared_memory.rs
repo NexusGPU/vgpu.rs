@@ -212,6 +212,8 @@ pub struct SharedDeviceState {
     pub device_count: AtomicU32,
     /// Last heartbeat timestamp from hypervisor (for health monitoring).
     pub last_heartbeat: AtomicU64,
+    /// Reference count for tracking how many processes are using this shared memory
+    pub reference_count: AtomicU32,
 }
 
 impl SharedDeviceState {
@@ -221,6 +223,7 @@ impl SharedDeviceState {
             devices: std::array::from_fn(|_| DeviceEntry::new()),
             device_count: AtomicU32::new(0),
             last_heartbeat: AtomicU64::new(0),
+            reference_count: AtomicU32::new(1),
         };
 
         // Add devices from configs
@@ -442,6 +445,45 @@ impl SharedDeviceState {
         // we don't actually need mutable access to modify its values
         self.with_device_by_uuid(device_uuid, f)
     }
+
+    /// Increments the reference count and returns the new value.
+    pub fn increment_ref_count(&self) -> u32 {
+        self.reference_count.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    /// Decrements the reference count and returns the new value.
+    /// Returns 0 if the reference count would underflow.
+    pub fn decrement_ref_count(&self) -> u32 {
+        let current = self.reference_count.load(Ordering::Acquire);
+        if current > 0 {
+            self.reference_count.fetch_sub(1, Ordering::AcqRel) - 1
+        } else {
+            0
+        }
+    }
+
+    /// Gets the current reference count.
+    pub fn get_ref_count(&self) -> u32 {
+        self.reference_count.load(Ordering::Acquire)
+    }
+
+    /// Safely decrements reference count using compare-and-swap to avoid underflow.
+    pub fn try_decrement_ref_count(&self) -> Result<u32, ()> {
+        loop {
+            let current = self.reference_count.load(Ordering::Acquire);
+            if current == 0 {
+                return Err(());
+            }
+            let new_value = current - 1;
+            if self
+                .reference_count
+                .compare_exchange_weak(current, new_value, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Ok(new_value);
+            }
+        }
+    }
 }
 
 /// Device configuration information.
@@ -525,6 +567,49 @@ impl ThreadSafeSharedMemoryManager {
         Ok(())
     }
 
+    /// Force cleanup of a shared memory segment, ignoring reference count.
+    /// This should only be used in emergency situations or during shutdown.
+    pub fn force_cleanup(&self, identifier: &str) -> Result<()> {
+        self.cleanup(identifier)
+    }
+
+    /// Checks if a shared memory segment should be cleaned up based on reference count.
+    /// Returns true if the segment exists and has zero references.
+    pub fn should_cleanup(&self, identifier: &str) -> bool {
+        let memories = self.active_memories.read();
+        if let Some(shmem) = memories.get(identifier) {
+            let state = shmem.get_state();
+            state.get_ref_count() == 0
+        } else {
+            false
+        }
+    }
+
+    /// Attempt to cleanup shared memory segments with zero reference count.
+    pub fn cleanup_unused(&self) -> Result<Vec<String>> {
+        let mut cleaned_up = Vec::new();
+        let identifiers: Vec<String> = {
+            let memories = self.active_memories.read();
+            memories.keys().cloned().collect()
+        };
+
+        for identifier in identifiers {
+            if self.should_cleanup(&identifier) {
+                match self.cleanup(&identifier) {
+                    Ok(_) => {
+                        cleaned_up.push(identifier.clone());
+                        info!(identifier = %identifier, "Cleaned up unused shared memory segment");
+                    }
+                    Err(e) => {
+                        warn!(identifier = %identifier, error = %e, "Failed to cleanup unused shared memory segment");
+                    }
+                }
+            }
+        }
+
+        Ok(cleaned_up)
+    }
+
     /// Checks if a shared memory segment exists.
     pub fn contains(&self, identifier: &str) -> bool {
         let memories = self.active_memories.read();
@@ -546,6 +631,7 @@ unsafe impl Sync for ThreadSafeSharedMemoryManager {}
 pub struct SharedMemoryHandle {
     _shmem: Shmem,
     ptr: *mut SharedDeviceState,
+    identifier: String,
 }
 
 impl SharedMemoryHandle {
@@ -559,7 +645,16 @@ impl SharedMemoryHandle {
 
         let ptr = shmem.as_ptr() as *mut SharedDeviceState;
 
-        Ok(Self { _shmem: shmem, ptr })
+        // Increment reference count when opening existing shared memory
+        unsafe {
+            (*ptr).increment_ref_count();
+        }
+
+        Ok(Self {
+            _shmem: shmem,
+            ptr,
+            identifier: identifier.to_string(),
+        })
     }
 
     /// Creates a new shared memory segment.
@@ -607,7 +702,11 @@ impl SharedMemoryHandle {
             "Created shared memory segment"
         );
 
-        Ok(Self { _shmem: shmem, ptr })
+        Ok(Self {
+            _shmem: shmem,
+            ptr,
+            identifier: identifier.to_string(),
+        })
     }
 
     /// Gets a pointer to the shared device state.
@@ -618,6 +717,36 @@ impl SharedMemoryHandle {
     /// Gets a reference to the shared device state.
     pub fn get_state(&self) -> &SharedDeviceState {
         unsafe { &*self.ptr }
+    }
+
+    /// Gets the shared memory identifier.
+    pub fn get_identifier(&self) -> &str {
+        &self.identifier
+    }
+}
+
+// Implement Drop to handle reference counting cleanup
+impl Drop for SharedMemoryHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let ref_count = (*self.ptr).try_decrement_ref_count().unwrap_or(0);
+            if ref_count == 0 {
+                // Last reference dropped, try to clean up the shared memory
+                // Note: We can't guarantee cleanup here due to potential race conditions
+                // with other processes. The OS will clean up when the last process exits.
+                info!(
+                    identifier = %self.identifier,
+                    "Last reference to shared memory dropped, reference count: {}",
+                    ref_count
+                );
+            } else {
+                info!(
+                    identifier = %self.identifier,
+                    "Dropped shared memory reference, remaining count: {}",
+                    ref_count
+                );
+            }
+        }
     }
 }
 
@@ -978,5 +1107,141 @@ mod tests {
         for i in (0..10).step_by(2) {
             assert!(!state.has_device(&format!("device-{i}")));
         }
+    }
+
+    #[test]
+    fn reference_counting_basic_operations() {
+        let state = SharedDeviceState::new(&[]);
+
+        // Initial reference count should be 1
+        assert_eq!(state.get_ref_count(), 1);
+
+        // Increment reference count
+        let new_count = state.increment_ref_count();
+        assert_eq!(new_count, 2);
+        assert_eq!(state.get_ref_count(), 2);
+
+        // Decrement reference count
+        let new_count = state.decrement_ref_count();
+        assert_eq!(new_count, 1);
+        assert_eq!(state.get_ref_count(), 1);
+
+        // Try safe decrement
+        let result = state.try_decrement_ref_count();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+        assert_eq!(state.get_ref_count(), 0);
+
+        // Try to decrement when already at 0
+        let result = state.try_decrement_ref_count();
+        assert!(result.is_err());
+        assert_eq!(state.get_ref_count(), 0);
+    }
+
+    #[test]
+    fn shared_memory_handle_reference_counting() {
+        let configs = create_test_configs();
+        let identifier = create_unique_identifier("ref_counting");
+
+        // Create first handle
+        let handle1 = SharedMemoryHandle::create(&identifier, &configs)
+            .expect("should create shared memory successfully");
+
+        let state1 = handle1.get_state();
+        assert_eq!(state1.get_ref_count(), 1);
+
+        // Open second handle to same memory
+        let handle2 = SharedMemoryHandle::open(&identifier)
+            .expect("should open existing shared memory successfully");
+
+        let state2 = handle2.get_state();
+        assert_eq!(state2.get_ref_count(), 2);
+
+        // Verify they access the same memory
+        assert_eq!(state1.get_ref_count(), 2);
+
+        // Drop first handle
+        drop(handle1);
+        assert_eq!(state2.get_ref_count(), 1);
+
+        // Drop second handle
+        drop(handle2);
+        // Note: Can't check state after drop since we no longer have access
+    }
+
+    #[test]
+    fn thread_safe_manager_cleanup_operations() {
+        let manager = ThreadSafeSharedMemoryManager::new();
+        let configs = create_test_configs();
+        let identifier = create_unique_identifier("cleanup_test");
+
+        // Create shared memory
+        manager
+            .create_or_get_shared_memory(&identifier, &configs)
+            .unwrap();
+        assert!(manager.contains(&identifier));
+
+        // Initially should not be ready for cleanup (has 1 reference)
+        assert!(!manager.should_cleanup(&identifier));
+
+        // Manually set reference count to 0 for testing
+        {
+            let ptr = manager.get_shared_memory(&identifier).unwrap();
+            unsafe {
+                (*ptr).try_decrement_ref_count().ok();
+            }
+        }
+
+        // Now should be ready for cleanup
+        assert!(manager.should_cleanup(&identifier));
+
+        // Cleanup unused segments
+        let cleaned = manager.cleanup_unused().unwrap();
+        assert_eq!(cleaned.len(), 1);
+        assert_eq!(cleaned[0], identifier);
+        assert!(!manager.contains(&identifier));
+    }
+
+    #[test]
+    fn concurrent_reference_counting() {
+        let configs = create_test_configs();
+        let identifier = create_unique_identifier("concurrent_ref_count");
+
+        let handle = Arc::new(
+            SharedMemoryHandle::create(&identifier, &configs)
+                .expect("should create shared memory successfully"),
+        );
+
+        let mut handles = vec![];
+
+        // Spawn multiple threads incrementing and decrementing reference count
+        for i in 0..5 {
+            let handle_clone = Arc::clone(&handle);
+
+            let thread_handle = thread::spawn(move || {
+                let state = handle_clone.get_state();
+
+                for _ in 0..10 {
+                    // Increment
+                    state.increment_ref_count();
+                    thread::sleep(Duration::from_millis(1));
+
+                    // Try to decrement (may fail if already at 0)
+                    let _ = state.try_decrement_ref_count();
+                    thread::sleep(Duration::from_millis(1));
+                }
+            });
+
+            handles.push(thread_handle);
+        }
+
+        // Wait for all threads
+        for handle in handles {
+            handle.join().expect("Thread should complete successfully");
+        }
+
+        // Reference count should be >= 1 (the original reference)
+        let final_count = handle.get_state().get_ref_count();
+        assert!(final_count >= 1);
     }
 }
