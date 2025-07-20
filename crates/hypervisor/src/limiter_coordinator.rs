@@ -121,7 +121,11 @@ pub struct LimiterCoordinator {
 }
 
 impl LimiterCoordinator {
-    pub fn new(watch_interval: Duration, device_count: u32, shared_memory_file_prefix: String) -> Self {
+    pub fn new(
+        watch_interval: Duration,
+        device_count: u32,
+        shared_memory_file_prefix: String,
+    ) -> Self {
         Self {
             shared_memory_manager: Arc::new(ThreadSafeSharedMemoryManager::new()),
             active_pods: Arc::new(RwLock::new(HashMap::new())),
@@ -565,11 +569,12 @@ impl LimiterCoordinator {
     /// Clean up orphaned shared memory files on startup
     async fn cleanup_orphaned_files_on_startup(&self) -> Result<()> {
         tracing::info!("Cleaning up orphaned shared memory files on startup...");
-        
-        let cleaned_files = self.shared_memory_manager
+
+        let cleaned_files = self
+            .shared_memory_manager
             .cleanup_orphaned_files(&self.shared_memory_file_prefix)
             .context("Failed to cleanup orphaned shared memory files")?;
-        
+
         if !cleaned_files.is_empty() {
             tracing::info!(
                 "Cleaned up {} orphaned shared memory files with prefix '{}': {:?}",
@@ -578,28 +583,31 @@ impl LimiterCoordinator {
                 cleaned_files
             );
         } else {
-            tracing::info!("No orphaned shared memory files found with prefix '{}'", self.shared_memory_file_prefix);
+            tracing::info!(
+                "No orphaned shared memory files found with prefix '{}'",
+                self.shared_memory_file_prefix
+            );
         }
-        
+
         Ok(())
     }
 
     /// Start periodic cleanup task for unused shared memory segments
     fn start_periodic_cleanup_task(&self, cancellation_token: CancellationToken) -> JoinHandle<()> {
         let shared_memory_manager = self.shared_memory_manager.clone();
-        
+
         tokio::spawn(async move {
             // Run cleanup every 5 minutes
             let mut cleanup_interval = interval(Duration::from_secs(300));
             cleanup_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            
+
             tracing::info!("Starting periodic shared memory cleanup task (every 5 minutes)");
-            
+
             loop {
                 tokio::select! {
                     _ = cleanup_interval.tick() => {
                         tracing::debug!("Running periodic cleanup of unused shared memory segments");
-                        
+
                         match shared_memory_manager.cleanup_unused() {
                             Ok(cleaned_files) => {
                                 if !cleaned_files.is_empty() {
@@ -711,7 +719,8 @@ mod tests {
 
     /// Create test coordinator
     fn create_test_coordinator() -> LimiterCoordinator {
-        LimiterCoordinator::new(Duration::from_millis(100), 1, "test_".to_string()) // Assume there is only one GPU device
+        LimiterCoordinator::new(Duration::from_millis(100), 1, "test_".to_string())
+        // Assume there is only one GPU device
     }
 
     /// Create unique test pod identifier

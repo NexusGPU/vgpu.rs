@@ -1,4 +1,3 @@
-
 //! Shared Memory Module
 //! This module provides utilities for managing shared memory segments used for
 //! GPU resource coordination between processes.
@@ -221,7 +220,6 @@ pub struct SharedDeviceState {
     /// Reference count for tracking how many processes are using this shared memory
     pub reference_count: AtomicU32,
 }
-
 
 impl SharedDeviceState {
     /// Creates a new SharedDeviceState instance.
@@ -585,22 +583,22 @@ impl ThreadSafeSharedMemoryManager {
     pub fn cleanup_orphaned_files(&self, pattern_prefix: &str) -> Result<Vec<String>> {
         let mut cleaned_files = Vec::new();
         let shm_dir = std::path::Path::new("/dev/shm");
-        
+
         if !shm_dir.exists() {
             return Ok(cleaned_files);
         }
 
         let entries = std::fs::read_dir(shm_dir).context("Failed to read /dev/shm directory")?;
-        
+
         for entry in entries {
             let entry = entry.context("Failed to read directory entry")?;
             let file_name = entry.file_name();
             let file_name_str = file_name.to_string_lossy();
-            
+
             // Only process files that match our pattern
             if file_name_str.starts_with(pattern_prefix) {
                 let file_path = entry.path();
-                
+
                 // Try to determine if this file is actually in use by attempting to open it
                 let identifier = file_name_str.to_string();
                 let is_orphaned = match ShmemConf::new()
@@ -622,7 +620,7 @@ impl ThreadSafeSharedMemoryManager {
                         true
                     }
                 };
-                
+
                 if is_orphaned {
                     match std::fs::remove_file(&file_path) {
                         Ok(_) => {
@@ -636,7 +634,7 @@ impl ThreadSafeSharedMemoryManager {
                 }
             }
         }
-        
+
         Ok(cleaned_files)
     }
 
@@ -844,7 +842,7 @@ mod tests {
 
     /// Helper function to check if shared memory file exists in /dev/shm
     fn shared_memory_file_exists(identifier: &str) -> bool {
-        let path = format!("/dev/shm/{}", identifier);
+        let path = format!("/dev/shm/{identifier}");
         std::path::Path::new(&path).exists()
     }
 
@@ -1022,7 +1020,7 @@ mod tests {
 
         let state1 = handle1.get_state();
         assert_eq!(state1.device_count(), 1);
-        
+
         // Verify shared memory file exists after creation
         assert!(shared_memory_file_exists(&identifier));
 
@@ -1041,7 +1039,7 @@ mod tests {
 
         let cores = state2.with_device_by_uuid(device_uuid, |device| device.get_available_cores());
         assert_eq!(cores, Some(42));
-        
+
         // File should still exist while handles are active
         assert!(shared_memory_file_exists(&identifier));
     }
@@ -1112,7 +1110,7 @@ mod tests {
             .create_or_get_shared_memory(&identifier, &configs)
             .unwrap();
         assert!(manager.contains(&identifier));
-        
+
         // Verify shared memory file exists
         assert!(shared_memory_file_exists(&identifier));
 
@@ -1210,7 +1208,7 @@ mod tests {
 
         let state1 = handle1.get_state();
         assert_eq!(state1.get_ref_count(), 1);
-        
+
         // Verify shared memory file exists
         assert!(shared_memory_file_exists(&identifier));
 
@@ -1227,7 +1225,7 @@ mod tests {
         // Drop first handle
         drop(handle1);
         assert_eq!(state2.get_ref_count(), 1);
-        
+
         // What we care about is that the reference count is correctly maintained
         let final_ref_count = state2.get_ref_count();
         assert_eq!(final_ref_count, 1);
@@ -1247,7 +1245,7 @@ mod tests {
             .create_or_get_shared_memory(&identifier, &configs)
             .unwrap();
         assert!(manager.contains(&identifier));
-        
+
         // Verify shared memory file exists
         assert!(shared_memory_file_exists(&identifier));
 
@@ -1270,7 +1268,7 @@ mod tests {
         assert_eq!(cleaned.len(), 1);
         assert_eq!(cleaned[0], identifier);
         assert!(!manager.contains(&identifier));
-        
+
         assert!(!shared_memory_file_exists(&identifier));
     }
 
@@ -1320,38 +1318,40 @@ mod tests {
     #[test]
     fn orphaned_file_cleanup() {
         let manager = ThreadSafeSharedMemoryManager::new();
-        
+
         // Create a fake orphaned file in /tmp (since we can't write to /dev/shm in tests)
         let test_file = "/tmp/test_orphaned_shm_file";
         std::fs::write(test_file, "fake shared memory data").unwrap();
-        
+
         // Verify file exists
         assert!(std::path::Path::new(test_file).exists());
-        
+
         // Test cleanup with a pattern that won't match
-        let cleaned = manager.cleanup_orphaned_files("nonexistent_pattern").unwrap();
+        let cleaned = manager
+            .cleanup_orphaned_files("nonexistent_pattern")
+            .unwrap();
         assert_eq!(cleaned.len(), 0);
-        
+
         // File should still exist since pattern didn't match
         assert!(std::path::Path::new(test_file).exists());
-        
+
         // Clean up test file
         std::fs::remove_file(test_file).unwrap();
     }
 
-    #[test] 
+    #[test]
     fn reference_counting_with_zero_refs() {
         let state = SharedDeviceState::new(&[]);
-        
+
         // Start with 1 reference
         assert_eq!(state.get_ref_count(), 1);
-        
+
         // Decrement to 0
         let result = state.try_decrement_ref_count();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
         assert_eq!(state.get_ref_count(), 0);
-        
+
         // Try to decrement below 0 - should fail
         let result = state.try_decrement_ref_count();
         assert!(result.is_err());
