@@ -1,7 +1,3 @@
----
-alwaysApply: true
----
-
 # general rules
 
 ## No Apologies

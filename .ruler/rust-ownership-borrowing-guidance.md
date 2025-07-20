@@ -1,9 +1,3 @@
----
-alwaysApply: false
-globs: "**/*.rs"
-alwaysApply: false
----
-
 # Rust Ownership and Borrowing Guidance
 
 When writing Rust code, be deliberate about ownership. Avoid taking or storing

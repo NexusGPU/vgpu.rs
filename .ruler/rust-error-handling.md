@@ -1,8 +1,3 @@
----
-description: Rust Error Handling
-globs: "**/*.rs"
-alwaysApply: false
----
 # Rust Error Handling Practices
 
 ## Error Handling Basics

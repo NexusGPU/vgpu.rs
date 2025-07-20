@@ -1,9 +1,3 @@
----
-description: Prefer Static Dispatch Over Dynamic Dispatch
-globs: "**/*.rs"
-alwaysApply: false
----
-
 # Prefer Static Dispatch Over Dynamic Dispatch
 
 Avoid using dynamic dispatch (dyn Trait) unless strictly necessary. Whenever

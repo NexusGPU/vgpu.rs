@@ -1,8 +1,3 @@
----
-description: Rust Coding Style
-globs: "**/*.rs"
-alwaysApply: false
----
 # Rust Coding Style
 
 ## Project-Specific Patterns

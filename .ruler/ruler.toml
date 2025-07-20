@@ -1,0 +1,1 @@
+default_agents = ["cursor", "claude", "gemini-cli"]

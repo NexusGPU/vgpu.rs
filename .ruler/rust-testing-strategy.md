@@ -1,8 +1,3 @@
----
-description: Rust Testing strategy
-globs: "**/*.rs"
-alwaysApply: false
----
 # Rust Testing Strategy
 
 ## Verification Commands
