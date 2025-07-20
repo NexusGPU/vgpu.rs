@@ -77,6 +77,7 @@ impl ApplicationBuilder {
         let limiter_coordinator = Arc::new(LimiterCoordinator::new(
             Duration::from_millis(100),
             gpu_system.device_count,
+            self.daemon_args.shared_memory_file_prefix.clone(),
         ));
 
         let device_plugin_socket_path = Path::new(&self.daemon_args.device_plugin_socket_path);
