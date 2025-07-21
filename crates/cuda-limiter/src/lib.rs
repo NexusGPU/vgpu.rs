@@ -150,11 +150,12 @@ fn init_ngpu_library() {
         };
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
 
-        command_handler::start_background_handler(
-            &hypervisor_ip,
-            &hypervisor_port,
-            config.host_pid,
-        );
+
+        // command_handler::start_background_handler(
+        //     &hypervisor_ip,
+        //     &hypervisor_port,
+        //     config.host_pid,
+        // );
 
         // Load tensor-fusion/ngpu.so
         if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
@@ -266,14 +267,20 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
 
     static DLSYM_HOOK_ONCE: Once = Once::new();
     DLSYM_HOOK_ONCE.call_once(|| unsafe {
-        replace_symbol!(
-            &mut hook_manager,
-            None,
-            "dlsym",
-            dlsym_detour,
-            FnDlsym,
-            FN_DLSYM
-        );
+        if let Ok(enable_hooks) = std::env::var("ENABLE_DLSYM_HOOKS") {
+            if enable_hooks == "false" {
+                return
+            }
+            tracing::info!("enable_dlsym_hooks: {enable_hooks}");
+            replace_symbol!(
+                &mut hook_manager,
+                None,
+                "dlsym",
+                dlsym_detour,
+                FnDlsym,
+                FN_DLSYM
+            );
+        }
     });
 }
 
