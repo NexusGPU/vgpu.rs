@@ -25,6 +25,7 @@ nvml-wrapper = { workspace = true }
 nvml-wrapper-sys = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde", "std"] }
 hex = "0.4"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

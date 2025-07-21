@@ -4,6 +4,7 @@
 //! with the new generic HTTP bidirectional communication library.
 
 use std::ffi::c_int;
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 use api_types::LimiterCommand;
@@ -16,6 +17,11 @@ use http_bidir_comm::TaskProcessor;
 use tracing::error;
 use tracing::info;
 use tracing::instrument;
+
+#[cfg(target_os = "linux")]
+use libloading::os::unix::Library;
+#[cfg(target_os = "windows")]
+use libloading::os::windows::Library;
 
 use crate::GLOBAL_NGPU_LIBRARY;
 
@@ -36,29 +42,30 @@ impl TaskProcessor<LimiterCommand, LimiterCommandResponse> for CommandProcessor 
                 type TfSuspend = unsafe extern "C" fn() -> c_int;
                 type TfResume = unsafe extern "C" fn() -> c_int;
                 type TfVramReclaim = unsafe extern "C" fn() -> c_int;
+                let ngpu_lib = GLOBAL_NGPU_LIBRARY.get().expect("GLOBAL_NGPU_LIBRARY");
 
+                // use ManuallyDrop to avoid dlclose the library
+                let lib = ManuallyDrop::new(libloading::Library::from(Library::from_raw(
+                    ngpu_lib.handle,
+                )));
                 match task.kind {
                     LimiterCommandType::TfHealthCheck => {
-                        let lib = GLOBAL_NGPU_LIBRARY.get().unwrap();
                         let symbol: libloading::Symbol<TfHealthCheck> =
                             lib.get(b"tf_health_check").unwrap();
                         let result = symbol();
                         (result, "tf_health_check")
                     }
                     LimiterCommandType::TfSuspend => {
-                        let lib = GLOBAL_NGPU_LIBRARY.get().unwrap();
                         let symbol: libloading::Symbol<TfSuspend> = lib.get(b"tf_suspend").unwrap();
                         let result = symbol();
                         (result, "tf_suspend")
                     }
                     LimiterCommandType::TfResume => {
-                        let lib = GLOBAL_NGPU_LIBRARY.get().unwrap();
                         let symbol: libloading::Symbol<TfResume> = lib.get(b"tf_resume").unwrap();
                         let result = symbol();
                         (result, "tf_resume")
                     }
                     LimiterCommandType::TfVramReclaim => {
-                        let lib = GLOBAL_NGPU_LIBRARY.get().unwrap();
                         let symbol: libloading::Symbol<TfVramReclaim> =
                             lib.get(b"tf_vram_reclaim").unwrap();
                         let result = symbol();

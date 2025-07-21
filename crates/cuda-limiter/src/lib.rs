@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 use std::ffi::c_char;
-use std::ffi::c_int;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::OsStr;
+use std::os::raw;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Once;
@@ -26,11 +27,7 @@ mod detour;
 mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
-static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
-
-static NGPU_INITIALIZED: Once = Once::new();
-static CUDA_HOOKS_INITIALIZED: Once = Once::new();
-static NVML_HOOKS_INITIALIZED: Once = Once::new();
+static GLOBAL_NGPU_LIBRARY: OnceLock<NgpuLibrary> = OnceLock::new();
 
 #[ctor]
 unsafe fn entry_point() {
@@ -38,7 +35,22 @@ unsafe fn entry_point() {
     init_hooks();
 }
 
+#[derive(Debug)]
+struct NgpuLibrary {
+    pub handle: *mut raw::c_void,
+}
+
+impl NgpuLibrary {
+    pub fn new(handle: *mut raw::c_void) -> Self {
+        Self { handle }
+    }
+}
+
+unsafe impl Send for NgpuLibrary {}
+unsafe impl Sync for NgpuLibrary {}
+
 fn init_ngpu_library() {
+    static NGPU_INITIALIZED: Once = Once::new();
     NGPU_INITIALIZED.call_once(|| {
         // Get pod name from environment variable
         let pod_identifier = match limiter::get_pod_identifier() {
@@ -122,50 +134,78 @@ fn init_ngpu_library() {
         // Load tensor-fusion/ngpu.so
         if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
             tracing::debug!("loading ngpu.so from: {ngpu_path}");
-            match unsafe { libloading::Library::new(ngpu_path.as_str()) } {
-                Ok(lib) => {
-                    GLOBAL_NGPU_LIBRARY
-                        .set(lib)
-                        .expect("set GLOBAL_NGPU_LIBRARY");
-                    tracing::debug!("loaded ngpu.so");
-                }
+
+            // Convert Rust String to CString for FFI
+            let c_ngpu_path = match std::ffi::CString::new(ngpu_path.clone()) {
+                Ok(cstr) => cstr,
                 Err(e) => {
-                    tracing::error!("failed to load ngpu.so: {e}, path: {ngpu_path}");
+                    tracing::error!("failed to convert ngpu.so path to CString: {e}");
+                    return;
                 }
+            };
+
+            let handle =
+                unsafe { libc::dlopen(c_ngpu_path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+            if handle.is_null() {
+                tracing::error!("failed to load ngpu.so: {ngpu_path}");
+                return;
             }
+            let ngpu_lib = NgpuLibrary::new(handle);
+            GLOBAL_NGPU_LIBRARY
+                .set(ngpu_lib)
+                .expect("set GLOBAL_NGPU_LIBRARY");
+            tracing::debug!("loaded ngpu.so");
         }
     });
 }
 
 fn init_cuda_hooks() {
-    CUDA_HOOKS_INITIALIZED.call_once(|| {
-        init_ngpu_library();
+    static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
+    if CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+        return;
+    }
+    init_ngpu_library();
 
-        let mut hook_manager = HookManager::default();
-        hook_manager.collect_module_names();
+    let mut hook_manager = HookManager::default();
+    hook_manager.collect_module_names();
 
+    if hook_manager
+        .module_names
+        .iter()
+        .any(|m| m.starts_with("libcuda."))
+    {
         unsafe {
             detour::gpu::enable_hooks(&mut hook_manager);
             detour::mem::enable_hooks(&mut hook_manager);
         }
-
+        CUDA_HOOKS_INITIALIZED.store(true, Ordering::Release);
         tracing::debug!("CUDA hooks initialized successfully");
-    });
+    }
 }
 
 fn init_nvml_hooks() {
-    NVML_HOOKS_INITIALIZED.call_once(|| {
-        init_ngpu_library();
+    static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-        let mut hook_manager = HookManager::default();
-        hook_manager.collect_module_names();
+    if NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+        return;
+    }
+    init_ngpu_library();
 
+    let mut hook_manager = HookManager::default();
+    hook_manager.collect_module_names();
+
+    if hook_manager
+        .module_names
+        .iter()
+        .any(|m| m.starts_with("libnvidia-ml."))
+    {
         unsafe {
             detour::nvml::enable_hooks(&mut hook_manager);
         }
 
+        NVML_HOOKS_INITIALIZED.store(true, Ordering::Release);
         tracing::debug!("NVML hooks initialized successfully");
-    });
+    }
 }
 
 fn init_hooks() {
@@ -191,18 +231,48 @@ fn init_hooks() {
     }
 
     if !has_libcuda || !has_libnvml {
-        static DLOPEN_HOOK_ONCE: Once = Once::new();
-        DLOPEN_HOOK_ONCE.call_once(|| unsafe {
+        static DLSYM_HOOK_ONCE: Once = Once::new();
+        DLSYM_HOOK_ONCE.call_once(|| unsafe {
             replace_symbol!(
                 &mut hook_manager,
                 None,
-                "dlopen",
-                dlopen_detour,
-                FnDlopen,
-                FN_DLOPEN
+                "dlsym",
+                dlsym_detour,
+                FnDlsym,
+                FN_DLSYM
             );
         });
     }
+}
+
+#[hook_fn]
+unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) -> *const c_void {
+    if !symbol.is_null() {
+        let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
+        tracing::trace!("dlsym: {symbol_str}");
+        let may_be_cuda = symbol_str.starts_with("cu");
+        let may_be_nvml = symbol_str.starts_with("nvml");
+        if may_be_cuda || may_be_nvml {
+            if may_be_cuda {
+                init_cuda_hooks();
+            }
+
+            if may_be_nvml {
+                init_nvml_hooks();
+            }
+
+            let ngpu_lib = GLOBAL_NGPU_LIBRARY
+                .get()
+                .expect("GLOBAL_NGPU_LIBRARY not initialized");
+
+            let symbol = FN_DLSYM(ngpu_lib.handle, symbol);
+            if !symbol.is_null() {
+                return symbol;
+            }
+        }
+    }
+
+    return FN_DLSYM(handle, symbol);
 }
 
 enum TrapImpl {
@@ -257,25 +327,6 @@ pub fn global_trap() -> impl trap::Trap {
     });
 
     trap.lock().expect("poisoned").clone()
-}
-
-#[hook_fn]
-pub(crate) unsafe extern "C" fn dlopen_detour(name: *const c_char, mode: c_int) -> *const c_void {
-    let ret = FN_DLOPEN(name, mode);
-    if !name.is_null() {
-        let lib = CStr::from_ptr(name).to_str().unwrap();
-
-        tracing::trace!("dlopen: {lib}, {ret:?}");
-
-        if lib.contains("libcuda.") {
-            init_cuda_hooks();
-        }
-
-        if lib.contains("libnvidia-ml.") {
-            init_nvml_hooks();
-        }
-    }
-    ret
 }
 
 fn get_hypervisor_config() -> Option<(String, String)> {
