@@ -182,26 +182,30 @@ fn init_hooks() {
         .iter()
         .any(|m| m.starts_with("libnvidia-ml."));
 
-    if has_libcuda {
-        init_cuda_hooks();
-    }
+    // if has_libcuda {
+    //     init_cuda_hooks();
+    // }
 
-    if has_libnvml {
-        init_nvml_hooks();
-    }
+    // if has_libnvml {
+    //     init_nvml_hooks();
+    // }
 
     if !has_libcuda || !has_libnvml {
-        static DLOPEN_HOOK_ONCE: Once = Once::new();
-        DLOPEN_HOOK_ONCE.call_once(|| unsafe {
-            replace_symbol!(
-                &mut hook_manager,
-                None,
-                "dlopen",
-                dlopen_detour,
-                FnDlopen,
-                FN_DLOPEN
-            );
-        });
+        if let Ok(hook_dlopen) = std::env::var("HOOK_DLOPEN") {
+            if hook_dlopen == "1" {
+                static DLOPEN_HOOK_ONCE: Once = Once::new();
+                DLOPEN_HOOK_ONCE.call_once(|| unsafe {
+                    replace_symbol!(
+                        &mut hook_manager,
+                        None,
+                        "dlopen",
+                        dlopen_detour,
+                        FnDlopen,
+                        FN_DLOPEN
+                    );
+                });
+            }
+        }
     }
 }
 
@@ -267,12 +271,16 @@ pub(crate) unsafe extern "C" fn dlopen_detour(name: *const c_char, mode: c_int) 
 
         tracing::trace!("dlopen: {lib}, {ret:?}");
 
-        if lib.contains("libcuda.") {
-            init_cuda_hooks();
-        }
+        if let Ok(hook_cuda_and_nvml) = std::env::var("HOOK_CUDA_AND_NVML") {
+            if hook_cuda_and_nvml == "1" {
+                if lib.contains("libcuda.") {
+                    init_cuda_hooks();
+                }
 
-        if lib.contains("libnvidia-ml.") {
-            init_nvml_hooks();
+                if lib.contains("libnvidia-ml.") {
+                    init_nvml_hooks();
+                }
+            }
         }
     }
     ret
