@@ -292,31 +292,26 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
     });
 }
 
+static IN_DLSYM_DETOUR: AtomicBool = AtomicBool::new(false);
+
 #[hook_fn]
 unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) -> *const c_void {
-    // Check if we're already in a dlsym detour call to prevent recursion
-    let already_in_detour = IN_DLSYM_DETOUR.with(|flag| {
-        if flag.get() {
-            true // Already in detour, avoid recursion
-        } else {
-            flag.set(true); // Mark that we're entering detour
-            false
-        }
-    });
-
-    if already_in_detour {
+     // Use atomic compare_exchange to check and set the flag atomically
+     if IN_DLSYM_DETOUR.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
         tracing::trace!("dlsym recursion detected, calling original function directly");
         return FN_DLSYM(handle, symbol);
     }
+
 
     // Ensure we reset the flag when exiting, even in case of panic
     struct ResetGuard;
     impl Drop for ResetGuard {
         fn drop(&mut self) {
-            IN_DLSYM_DETOUR.with(|flag| flag.set(false));
+            IN_DLSYM_DETOUR.store(false, Ordering::Release);
         }
     }
     let _guard = ResetGuard;
+
 
     if !symbol.is_null() {
         let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
