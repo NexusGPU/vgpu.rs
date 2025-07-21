@@ -424,7 +424,7 @@ jobs:
       - release
       - publish_libraries
       - merge_images
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger ngpu release workflow_dispatch
