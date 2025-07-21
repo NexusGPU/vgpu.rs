@@ -418,3 +418,28 @@ jobs:
             -t tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }} \
             tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64 \
             tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
+
+  trigger_ngpu_release:
+    needs:
+      - release
+      - publish_libraries
+      - merge_images
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ngpu release workflow_dispatch
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'NexusGPU',
+              repo: 'ngpu',
+              workflow_id: 'release.yml',
+              ref: 'main',
+              inputs: {
+                version: '${{ needs.release.outputs.version }}',
+                source_repo: '${{ github.repository }}',
+                triggered_by: '${{ github.actor }}'
+              }
+            });

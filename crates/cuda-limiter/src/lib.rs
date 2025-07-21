@@ -32,7 +32,21 @@ static GLOBAL_NGPU_LIBRARY: OnceLock<NgpuLibrary> = OnceLock::new();
 #[ctor]
 unsafe fn entry_point() {
     logging::init();
-    init_hooks();
+    let enable_nvml_hooks = if let Ok(enable_nvml_hooks) = std::env::var("ENABLE_NVML_HOOKS") {
+        enable_nvml_hooks != "false"
+    } else {
+        true
+    };
+    let enable_cuda_hooks = if let Ok(enable_cuda_hooks) = std::env::var("ENABLE_CUDA_HOOKS") {
+        enable_cuda_hooks != "false"
+    } else {
+        true
+    };
+
+    tracing::info!(
+        "enable_nvml_hooks: {enable_nvml_hooks}, enable_cuda_hooks: {enable_cuda_hooks}"
+    );
+    init_hooks(enable_nvml_hooks, enable_cuda_hooks);
 }
 
 #[derive(Debug)]
@@ -159,7 +173,7 @@ fn init_ngpu_library() {
     });
 }
 
-fn init_cuda_hooks() {
+fn init_cuda_hooks(enable_cuda_hooks: bool) {
     static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
     if CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
         return;
@@ -183,7 +197,7 @@ fn init_cuda_hooks() {
     }
 }
 
-fn init_nvml_hooks() {
+fn init_nvml_hooks(enable_nvml_hooks: bool) {
     static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
     if NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
@@ -208,7 +222,7 @@ fn init_nvml_hooks() {
     }
 }
 
-fn init_hooks() {
+fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
 
@@ -224,11 +238,11 @@ fn init_hooks() {
 
     tracing::debug!("has_libcuda: {has_libcuda}, has_libnvml: {has_libnvml}");
     if has_libcuda {
-        init_cuda_hooks();
+        init_cuda_hooks(enable_cuda_hooks);
     }
 
     if has_libnvml {
-        init_nvml_hooks();
+        init_nvml_hooks(enable_nvml_hooks);
     }
 
     static DLSYM_HOOK_ONCE: Once = Once::new();
