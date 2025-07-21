@@ -31,6 +31,8 @@ static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
 static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
 static SYMBOL_CONDVAR: Condvar = Condvar::new();
 static SYMBOL_MUTEX: Mutex<bool> = Mutex::new(false);
+static DLSYM_CONDVAR: Condvar = Condvar::new();
+static DLSYM_MUTEX: Mutex<bool> = Mutex::new(false);
 static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -91,9 +93,6 @@ fn init_ngpu_library() {
                 return;
             }
         };
-        std::thread::spawn(|| {
-            tracing::info!("test thread spawn");
-        });
 
         // Get device indices from environment variable
         let config = match config::get_device_configs(&hypervisor_ip, &hypervisor_port) {
@@ -103,7 +102,6 @@ fn init_ngpu_library() {
                 return;
             }
         };
-        tracing::info!("config: {config:?}");
 
         if !config.gpu_uuids.is_empty() {
             let lower_case_uuids: HashSet<_> =
@@ -297,6 +295,12 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
             } else {
                 tracing::debug!("Not all hooks ready yet, continuing to wait for notifications");
             }
+
+            // notify dlsym_detour if any hooks were initialized
+            if let Ok(mut guard) = DLSYM_MUTEX.lock() {
+                *guard = true;
+                DLSYM_CONDVAR.notify_all();
+            }
         }
     });
 }
@@ -347,6 +351,15 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
                     "Notified: detected {} symbol, hooks not ready yet",
                     if may_be_cuda { "CUDA" } else { "NVML" }
                 );
+
+                // Wait for from hook initialization thread
+                if let Ok(mut guard) = DLSYM_MUTEX.lock() {
+                    while !*guard {
+                        guard = DLSYM_CONDVAR.wait(guard).unwrap_or_else(|e| e.into_inner());
+                    }
+                    // Reset the flag for next time
+                    *guard = false;
+                }
             }
         }
     }
