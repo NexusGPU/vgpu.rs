@@ -248,10 +248,11 @@ fn init_hooks() {
 unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) -> *const c_void {
     if !symbol.is_null() {
         let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
-        tracing::trace!("dlsym: {symbol_str}");
+
         let may_be_cuda = symbol_str.starts_with("cu");
         let may_be_nvml = symbol_str.starts_with("nvml");
         if may_be_cuda || may_be_nvml {
+            tracing::trace!("dlsym: {symbol_str}");
             if may_be_cuda {
                 init_cuda_hooks();
             }
