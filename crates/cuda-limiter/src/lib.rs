@@ -30,11 +30,6 @@ mod limiter;
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
 static GLOBAL_NGPU_LIBRARY: OnceLock<NgpuLibrary> = OnceLock::new();
 
-// Thread-local flag to prevent dlsym recursion
-thread_local! {
-    static IN_DLSYM_DETOUR: Cell<bool> = const { Cell::new(false) };
-}
-
 #[ctor]
 unsafe fn entry_point() {
     logging::init();
