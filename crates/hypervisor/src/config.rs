@@ -197,6 +197,14 @@ pub struct DaemonArgs {
         action = clap::ArgAction::Set
     )]
     pub detect_in_used_gpus: bool,
+
+    #[arg(
+        long,
+        help = "Prefix for shared memory file names used for orphaned file cleanup",
+        default_value = "",
+        env = "SHARED_MEMORY_FILE_PREFIX"
+    )]
+    pub shared_memory_file_prefix: String,
 }
 
 #[derive(Parser)]

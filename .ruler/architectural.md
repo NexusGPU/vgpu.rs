@@ -1,9 +1,3 @@
-
----
-description: architecture
-alwaysApply: true
----
-
 # Architecture
 
 ## Project Overview & Core Architecture

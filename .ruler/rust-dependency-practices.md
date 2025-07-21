@@ -1,8 +1,3 @@
----
-description: 
-globs: Cargo.toml
-alwaysApply: false
----
 1. If a dependency is used in multiple crates in the workspace, move it into the `[workspace.dependencies]` section of the top-level Cargo.toml if it's not already there.
 
 2. In the crate's own `[dependencies]`, replace the full dependency declaration with a workspace reference:

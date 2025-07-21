@@ -226,7 +226,7 @@ impl WorkerManager {
 
         // Create worker and update registry in a limited scope to reduce lock hold time
         info!("About to acquire registry write lock for {worker_key}");
-        let (worker, entry_for_pid_registry) = {
+        let (worker, worker_entry) = {
             let mut registry = self.registry.write().await;
             info!("Registry write lock acquired for {worker_key}");
             if let Some(entry) = registry.get_mut(&worker_key) {
@@ -284,6 +284,7 @@ impl WorkerManager {
         if let Err(e) = register_worker_to_limiter_coordinator(
             &self.limiter_coordinator,
             &worker,
+            &worker_entry,
             container_name,
             container_pid,
             host_pid,
@@ -298,7 +299,7 @@ impl WorkerManager {
 
         {
             let mut pid_registry = self.pid_registry.write().await;
-            pid_registry.insert(host_pid, entry_for_pid_registry);
+            pid_registry.insert(host_pid, worker_entry);
         }
 
         info!(

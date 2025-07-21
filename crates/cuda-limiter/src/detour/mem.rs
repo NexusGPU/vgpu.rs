@@ -56,7 +56,9 @@ macro_rules! check_and_alloc {
 
 // Helper function for allocation with retry logic
 unsafe fn cuda_alloc_with_retry<F>(request_size: u64, alloc_fn: F) -> CUresult
-where F: Fn() -> CUresult {
+where
+    F: Fn() -> CUresult,
+{
     loop {
         let result = alloc_fn();
         match result {

@@ -45,21 +45,21 @@ impl GpuDeviceStateWatcher {
         cancellation_token: CancellationToken,
         kubeconfig: Option<PathBuf>,
     ) -> Result<(), Report<KubernetesError>> {
-        info!("Starting pod watcher");
+        info!("Starting gpu allocation watcher");
 
         loop {
             select! {
                 _ = cancellation_token.cancelled() => {
-                    info!("Pod watcher shutdown requested");
+                    info!("GPU allocation watcher shutdown requested");
                     break;
                 }
                 result = self.watch_and_patch_gpu_device_state(kubeconfig.clone()) => {
                     match result {
                         Ok(()) => {
-                            warn!("Pod watch stream ended unexpectedly, restarting...");
+                            warn!("GPU allocation watch stream ended unexpectedly, restarting...");
                         }
                         Err(e) => {
-                            error!("Pod watch failed: {e:?}");
+                            error!("GPU allocation watch failed: {e:?}");
                             // Wait before retrying
                             tokio::time::sleep(Duration::from_secs(5)).await;
                         }
@@ -273,29 +273,33 @@ impl GpuDeviceStateWatcher {
     ) -> Result<HashSet<String>, Report<KubernetesError>> {
         let mut device_ids = HashSet::new();
 
-        for entry in &device_state.data.pod_device_entries {
-            // just extract GPU devices from resource allocation state
-            if resource_to_system_map.contains_key(&entry.resource_name) {
-                for device_list in entry.device_ids.values() {
-                    for device_id in device_list {
-                        device_ids.insert(device_id.to_lowercase());
+        if let Some(pod_device_entries) = &device_state.data.pod_device_entries {
+            for entry in pod_device_entries {
+                // just extract GPU devices from resource allocation state
+                if resource_to_system_map.contains_key(&entry.resource_name) {
+                    for device_list in entry.device_ids.values() {
+                        for device_id in device_list {
+                            device_ids.insert(device_id.to_lowercase());
+                        }
                     }
                 }
             }
+            debug!("Extracted {} unique device IDs", device_ids.len());
         }
 
-        debug!("Extracted {} unique device IDs", device_ids.len());
         Ok(device_ids)
     }
 
     fn log_device_allocation_details(&self, device_state: &KubeletDeviceState, device_id: &str) {
-        for entry in &device_state.data.pod_device_entries {
-            for device_list in entry.device_ids.values() {
-                if device_list.contains(&device_id.to_string()) {
-                    info!(
+        if let Some(pod_device_entries) = &device_state.data.pod_device_entries {
+            for entry in pod_device_entries {
+                for device_list in entry.device_ids.values() {
+                    if device_list.contains(&device_id.to_string()) {
+                        info!(
                         "Device allocation details - PodUID: {}, ContainerName: {}, ResourceName: {}, DeviceID: {}",
                         entry.pod_uid, entry.container_name, entry.resource_name, device_id
                     );
+                    }
                 }
             }
         }
@@ -428,10 +432,12 @@ impl GpuDeviceStateWatcher {
         device_state: &KubeletDeviceState,
         device_id: &str,
     ) -> Result<String, Report<KubernetesError>> {
-        for entry in &device_state.data.pod_device_entries {
-            for device_list in entry.device_ids.values() {
-                if device_list.iter().any(|d| d.to_lowercase() == device_id) {
-                    return Ok(entry.resource_name.clone());
+        if let Some(pod_device_entries) = &device_state.data.pod_device_entries {
+            for entry in pod_device_entries {
+                for device_list in entry.device_ids.values() {
+                    if device_list.iter().any(|d| d.to_lowercase() == device_id) {
+                        return Ok(entry.resource_name.clone());
+                    }
                 }
             }
         }
@@ -467,7 +473,7 @@ struct KubeletDeviceState {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 struct DeviceStateData {
-    pod_device_entries: Vec<PodDeviceEntry>,
+    pod_device_entries: Option<Vec<PodDeviceEntry>>,
     registered_devices: HashMap<String, Vec<String>>,
 }
 
@@ -555,9 +561,10 @@ mod tests {
 
     fn create_test_device_state() -> KubeletDeviceState {
         let mut device_ids = HashMap::new();
-        device_ids.insert("-1".to_string(), vec![
-            "GPU-7d8429d5-531d-d6a6-6510-3b662081a75a".to_string(),
-        ]);
+        device_ids.insert(
+            "-1".to_string(),
+            vec!["GPU-7d8429d5-531d-d6a6-6510-3b662081a75a".to_string()],
+        );
 
         let pod_entry = PodDeviceEntry {
             pod_uid: "a7461dc1-023a-4bd5-a403-c738bb1d7db4".to_string(),
@@ -568,13 +575,14 @@ mod tests {
         };
 
         let mut registered_devices = HashMap::new();
-        registered_devices.insert("nvidia.com/gpu".to_string(), vec![
-            "GPU-7d8429d5-531d-d6a6-6510-3b662081a75a".to_string(),
-        ]);
+        registered_devices.insert(
+            "nvidia.com/gpu".to_string(),
+            vec!["GPU-7d8429d5-531d-d6a6-6510-3b662081a75a".to_string()],
+        );
 
         KubeletDeviceState {
             data: DeviceStateData {
-                pod_device_entries: vec![pod_entry],
+                pod_device_entries: Some(vec![pod_entry]),
                 registered_devices,
             },
             checksum: 2262205670,
@@ -584,7 +592,7 @@ mod tests {
     fn create_empty_device_state() -> KubeletDeviceState {
         KubeletDeviceState {
             data: DeviceStateData {
-                pod_device_entries: vec![],
+                pod_device_entries: None,
                 registered_devices: HashMap::new(),
             },
             checksum: 0,
@@ -618,7 +626,7 @@ mod tests {
             "checksum should match"
         );
         assert_eq!(
-            parsed_state.data.pod_device_entries.len(),
+            parsed_state.data.pod_device_entries.unwrap().len(),
             1,
             "should have one pod device entry"
         );
@@ -699,10 +707,10 @@ mod tests {
         let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
 
         let mut device_ids_1 = HashMap::new();
-        device_ids_1.insert("-1".to_string(), vec![
-            "GPU-1".to_string(),
-            "GPU-2".to_string(),
-        ]);
+        device_ids_1.insert(
+            "-1".to_string(),
+            vec!["GPU-1".to_string(), "GPU-2".to_string()],
+        );
 
         let mut device_ids_2 = HashMap::new();
         device_ids_2.insert("-1".to_string(), vec!["GPU-3".to_string()]);
@@ -725,7 +733,7 @@ mod tests {
 
         let device_state = KubeletDeviceState {
             data: DeviceStateData {
-                pod_device_entries: vec![pod_entry_1, pod_entry_2],
+                pod_device_entries: Some(vec![pod_entry_1, pod_entry_2]),
                 registered_devices: HashMap::new(),
             },
             checksum: 12345,
@@ -842,8 +850,8 @@ mod tests {
             "checksum should match after round-trip"
         );
         assert_eq!(
-            deserialized.data.pod_device_entries.len(),
-            device_state.data.pod_device_entries.len(),
+            deserialized.data.pod_device_entries.unwrap().len(),
+            device_state.data.pod_device_entries.unwrap().len(),
             "pod entries count should match"
         );
     }
@@ -962,10 +970,10 @@ mod tests {
         // Create a more complex device ID structure
         let mut device_ids = HashMap::new();
         device_ids.insert("-1".to_string(), vec!["GPU-1".to_string()]);
-        device_ids.insert("0".to_string(), vec![
-            "GPU-2".to_string(),
-            "GPU-3".to_string(),
-        ]);
+        device_ids.insert(
+            "0".to_string(),
+            vec!["GPU-2".to_string(), "GPU-3".to_string()],
+        );
 
         let pod_entry = PodDeviceEntry {
             pod_uid: "complex-pod".to_string(),
@@ -977,7 +985,7 @@ mod tests {
 
         let device_state = KubeletDeviceState {
             data: DeviceStateData {
-                pod_device_entries: vec![pod_entry],
+                pod_device_entries: Some(vec![pod_entry]),
                 registered_devices: HashMap::new(),
             },
             checksum: 54321,

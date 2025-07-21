@@ -1,9 +1,3 @@
-
----
-description: Rust Tracing Practices
-globs: "**/*.rs"
-alwaysApply: false
----
 # Rust Tracing Practices
 
 ## Event Recording

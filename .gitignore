@@ -1,3 +1,18 @@
 /target
 /crates/*/target
 logs
+
+
+# START Ruler Generated Files
+*.bak
+.cursor/rules/ruler_cursor_instructions.mdc
+.cursor/rules/ruler_cursor_instructions.mdc.bak
+.gemini/settings.json
+.gemini/settings.json.bak
+CLAUDE.md
+CLAUDE.md.bak
+GEMINI.md
+GEMINI.md.bak
+claude_desktop_config.json
+claude_desktop_config.json.bak
+# END Ruler Generated Files
