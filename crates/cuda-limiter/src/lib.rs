@@ -113,40 +113,40 @@ fn init_ngpu_library() {
             }
         };
         // Get device indices from environment variable
-        let config = match config::get_device_configs(&hypervisor_ip, &hypervisor_port) {
-            Ok(config) => config,
-            Err(err) => {
-                tracing::error!("failed to get device configs: {err}");
-                return;
-            }
-        };
+        // let config = match config::get_device_configs(&hypervisor_ip, &hypervisor_port) {
+        //     Ok(config) => config,
+        //     Err(err) => {
+        //         tracing::error!("failed to get device configs: {err}");
+        //         return;
+        //     }
+        // };
 
-        if !config.gpu_uuids.is_empty() {
-            let lower_case_uuids: HashSet<_> =
-                config.gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
-            let device_count = nvml.device_count().expect("failed to get device count");
+        // if !config.gpu_uuids.is_empty() {
+        //     let lower_case_uuids: HashSet<_> =
+        //         config.gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
+        //     let device_count = nvml.device_count().expect("failed to get device count");
 
-            let mut device_indices = Vec::new();
-            for i in 0..device_count {
-                let device = nvml
-                    .device_by_index(i)
-                    .expect("failed to get device by index");
-                let uuid = device.uuid().expect("failed to get device uuid");
-                if lower_case_uuids.contains(&uuid.to_lowercase()) {
-                    device_indices.push(i.to_string());
-                }
-            }
+        //     let mut device_indices = Vec::new();
+        //     for i in 0..device_count {
+        //         let device = nvml
+        //             .device_by_index(i)
+        //             .expect("failed to get device by index");
+        //         let uuid = device.uuid().expect("failed to get device uuid");
+        //         if lower_case_uuids.contains(&uuid.to_lowercase()) {
+        //             device_indices.push(i.to_string());
+        //         }
+        //     }
 
-            if !device_indices.is_empty() {
-                let visible_devices = device_indices.join(",");
-                tracing::info!(
-                    "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
-                    &visible_devices
-                );
-                std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
-                std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
-            }
-        }
+        //     if !device_indices.is_empty() {
+        //         let visible_devices = device_indices.join(",");
+        //         tracing::info!(
+        //             "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
+        //             &visible_devices
+        //         );
+        //         std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
+        //         std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+        //     }
+        // }
 
         // let limiter = match Limiter::new(config.host_pid, nvml, pod_identifier, &config.gpu_uuids) {
         //     Ok(limiter) => limiter,
