@@ -1,15 +1,15 @@
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::OsStr;
-use std::os::raw;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::Once;
 use std::sync::OnceLock;
-use std::sync::Condvar;
 
 use ctor::ctor;
 use limiter::Limiter;
@@ -28,7 +28,7 @@ mod detour;
 mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
-static GLOBAL_NGPU_LIBRARY: OnceLock<NgpuLibrary> = OnceLock::new();
+static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
 static SYMBOL_CONDVAR: Condvar = Condvar::new();
 static SYMBOL_MUTEX: Mutex<bool> = Mutex::new(false);
 static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -37,12 +37,6 @@ static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 #[ctor]
 unsafe fn entry_point() {
     logging::init();
-
-    if let Ok(visible_devices) = std::env::var("TF_VISIBLE_DEVICES") {
-        std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
-        std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
-        tracing::info!("TF_VISIBLE_DEVICES: {visible_devices}");
-    }
 
     let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();
     tracing::info!(
@@ -64,20 +58,6 @@ fn are_hooks_enabled() -> (bool, bool) {
     };
     (enable_nvml_hooks, enable_cuda_hooks)
 }
-
-#[derive(Debug)]
-struct NgpuLibrary {
-    pub handle: *mut raw::c_void,
-}
-
-impl NgpuLibrary {
-    pub fn new(handle: *mut raw::c_void) -> Self {
-        Self { handle }
-    }
-}
-
-unsafe impl Send for NgpuLibrary {}
-unsafe impl Sync for NgpuLibrary {}
 
 fn init_ngpu_library() {
     static NGPU_INITIALIZED: Once = Once::new();
@@ -161,7 +141,6 @@ fn init_ngpu_library() {
         };
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
 
-
         command_handler::start_background_handler(
             &hypervisor_ip,
             &hypervisor_port,
@@ -172,26 +151,17 @@ fn init_ngpu_library() {
         if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
             tracing::debug!("loading ngpu.so from: {ngpu_path}");
 
-            // Convert Rust String to CString for FFI
-            let c_ngpu_path = match std::ffi::CString::new(ngpu_path.clone()) {
-                Ok(cstr) => cstr,
-                Err(e) => {
-                    tracing::error!("failed to convert ngpu.so path to CString: {e}");
-                    return;
+            match unsafe { libloading::Library::new(ngpu_path.as_str()) } {
+                Ok(lib) => {
+                    GLOBAL_NGPU_LIBRARY
+                        .set(lib)
+                        .expect("set GLOBAL_NGPU_LIBRARY");
+                    tracing::debug!("loaded ngpu.so");
                 }
-            };
-
-            let handle =
-                unsafe { libc::dlopen(c_ngpu_path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
-            if handle.is_null() {
-                tracing::error!("failed to load ngpu.so: {ngpu_path}");
-                return;
+                Err(e) => {
+                    tracing::error!("failed to load ngpu.so: {e}, path: {ngpu_path}");
+                }
             }
-            let ngpu_lib = NgpuLibrary::new(handle);
-            GLOBAL_NGPU_LIBRARY
-                .set(ngpu_lib)
-                .expect("set GLOBAL_NGPU_LIBRARY");
-            tracing::debug!("loaded ngpu.so");
         }
     });
 }
@@ -200,7 +170,7 @@ fn init_cuda_hooks(enable_cuda_hooks: bool) -> bool {
     init_ngpu_library();
 
     if !enable_cuda_hooks {
-        return  true;
+        return true;
     }
 
     let mut hook_manager = HookManager::default();
@@ -219,11 +189,10 @@ fn init_cuda_hooks(enable_cuda_hooks: bool) -> bool {
         tracing::debug!("CUDA hooks initialized successfully");
         return true;
     }
-    return false;
+    false
 }
 
 fn init_nvml_hooks(enable_nvml_hooks: bool) -> bool {
-   
     init_ngpu_library();
 
     if !enable_nvml_hooks {
@@ -246,7 +215,7 @@ fn init_nvml_hooks(enable_nvml_hooks: bool) -> bool {
         tracing::debug!("NVML hooks initialized successfully");
         return true;
     }
-    return false;
+    false
 }
 
 fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
@@ -284,22 +253,22 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
         );
     });
 
-
-
     // wait for CUDA/NVML symbols to be detected before initializing hooks, support retry until all hooks are successfully initialized
     std::thread::spawn(move || {
         loop {
             if let Ok(mut guard) = SYMBOL_MUTEX.lock() {
                 while !*guard {
-                    guard = SYMBOL_CONDVAR.wait(guard).unwrap_or_else(|e| e.into_inner());
+                    guard = SYMBOL_CONDVAR
+                        .wait(guard)
+                        .unwrap_or_else(|e| e.into_inner());
                 }
-                
+
                 // reset notification state
                 *guard = false;
             }
-            
+
             tracing::debug!("Symbol detected, attempting to initialize hooks");
-            
+
             // try to initialize CUDA hooks
             if enable_cuda_hooks && !CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
                 if init_cuda_hooks(enable_cuda_hooks) {
@@ -308,7 +277,7 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                     tracing::debug!("CUDA hooks initialization failed, will retry");
                 }
             }
-            
+
             // try to initialize NVML hooks
             if enable_nvml_hooks && !NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
                 if init_nvml_hooks(enable_nvml_hooks) {
@@ -317,11 +286,11 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                     tracing::debug!("NVML hooks initialization failed, will retry");
                 }
             }
-            
+
             // check if all hooks are initialized
             let cuda_done = !enable_cuda_hooks || CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
             let nvml_done = !enable_nvml_hooks || NVML_HOOKS_INITIALIZED.load(Ordering::Acquire);
-            
+
             if cuda_done && nvml_done {
                 tracing::debug!("All required hooks initialized successfully, stopping retry loop");
                 break;
@@ -330,25 +299,27 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
             }
         }
     });
-
 }
 
-static IN_DLSYM_DETOUR: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static IN_DLSYM_DETOUR: Cell<bool> = const { Cell::new(false) };
+}
 
 #[hook_fn]
 unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) -> *const c_void {
-     // Use atomic compare_exchange to check and set the flag atomically
-     if IN_DLSYM_DETOUR.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+    // Check if we're already in dlsym to prevent recursion
+    if IN_DLSYM_DETOUR.with(|flag| flag.get()) {
         tracing::trace!("dlsym recursion detected, calling original function directly");
         return FN_DLSYM(handle, symbol);
     }
-
+    // Set the flag to indicate we're in dlsym
+    IN_DLSYM_DETOUR.with(|flag| flag.set(true));
 
     // Ensure we reset the flag when exiting, even in case of panic
     struct ResetGuard;
     impl Drop for ResetGuard {
         fn drop(&mut self) {
-            IN_DLSYM_DETOUR.store(false, Ordering::Release);
+            IN_DLSYM_DETOUR.with(|flag| flag.set(false));
         }
     }
     let _guard = ResetGuard;
@@ -360,20 +331,22 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         let may_be_nvml = symbol_str.starts_with("nvml");
         if may_be_cuda || may_be_nvml {
             tracing::trace!("dlsym: {symbol_str}");
-            
+
             // check if the corresponding hooks have been initialized successfully
             let cuda_ready = CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
             let nvml_ready = NVML_HOOKS_INITIALIZED.load(Ordering::Acquire);
-            
+
             let should_notify = (may_be_cuda && !cuda_ready) || (may_be_nvml && !nvml_ready);
-            
+
             if should_notify {
                 if let Ok(mut guard) = SYMBOL_MUTEX.lock() {
                     *guard = true;
                     SYMBOL_CONDVAR.notify_all();
                 }
-                tracing::debug!("Notified: detected {} symbol, hooks not ready yet", 
-                    if may_be_cuda { "CUDA" } else { "NVML" });
+                tracing::debug!(
+                    "Notified: detected {} symbol, hooks not ready yet",
+                    if may_be_cuda { "CUDA" } else { "NVML" }
+                );
             }
         }
     }

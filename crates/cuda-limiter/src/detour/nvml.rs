@@ -131,23 +131,23 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         FnNvml_device_get_memory_info_v2,
         FN_NVML_DEVICE_GET_MEMORY_INFO_V2
     );
-    // replace_symbol!(
-    //     hook_manager,
-    //     Some("libnvidia-ml."),
-    //     "nvmlDeviceGetCount_v2",
-    //     nvml_device_get_count_v2_detour,
-    //     FnNvml_device_get_count_v2,
-    //     FN_NVML_DEVICE_GET_COUNT_V2
-    // );
+    replace_symbol!(
+        hook_manager,
+        Some("libnvidia-ml."),
+        "nvmlDeviceGetCount_v2",
+        nvml_device_get_count_v2_detour,
+        FnNvml_device_get_count_v2,
+        FN_NVML_DEVICE_GET_COUNT_V2
+    );
 
-    // replace_symbol!(
-    //     hook_manager,
-    //     Some("libnvidia-ml."),
-    //     "nvmlDeviceGetHandleByIndex_v2",
-    //     nvml_device_get_handle_by_index_v2_detour,
-    //     FnNvml_device_get_handle_by_index_v2,
-    //     FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
-    // );
+    replace_symbol!(
+        hook_manager,
+        Some("libnvidia-ml."),
+        "nvmlDeviceGetHandleByIndex_v2",
+        nvml_device_get_handle_by_index_v2_detour,
+        FnNvml_device_get_handle_by_index_v2,
+        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
+    );
 
     replace_symbol!(
         hook_manager,

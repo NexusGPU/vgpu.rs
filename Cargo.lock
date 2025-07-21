@@ -692,7 +692,6 @@ dependencies = [
  "error-stack",
  "hex",
  "http-bidir-comm",
- "libc",
  "libloading",
  "nvml-wrapper",
  "nvml-wrapper-sys",
