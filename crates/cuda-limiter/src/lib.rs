@@ -81,9 +81,9 @@ unsafe impl Send for NgpuLibrary {}
 unsafe impl Sync for NgpuLibrary {}
 
 fn init_ngpu_library() {
-    tracing::info!("init_ngpu_library");
     static NGPU_INITIALIZED: Once = Once::new();
     NGPU_INITIALIZED.call_once(|| {
+        tracing::info!("init_ngpu_library");
         // Get pod name from environment variable
         let pod_identifier = match limiter::get_pod_identifier() {
             Ok(name) => name,
@@ -325,13 +325,13 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         if may_be_cuda || may_be_nvml {
             tracing::trace!("dlsym: {symbol_str}");
             let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();
-            if may_be_cuda {
-                init_cuda_hooks(enable_cuda_hooks);
-            }
+            // if may_be_cuda {
+            //     init_cuda_hooks(enable_cuda_hooks);
+            // }
 
-            if may_be_nvml {
-                init_nvml_hooks(enable_nvml_hooks);
-            }
+            // if may_be_nvml {
+            //     init_nvml_hooks(enable_nvml_hooks);
+            // }
         }
     }
 
