@@ -4,7 +4,6 @@ use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::OsStr;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Condvar;
@@ -36,7 +35,6 @@ static DLSYM_CONDVAR: Condvar = Condvar::new();
 static DLSYM_MUTEX: Mutex<bool> = Mutex::new(false);
 static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
-static INIT_HOOK_THREAD_RUNNING: AtomicBool = AtomicBool::new(true);
 
 #[ctor]
 unsafe fn entry_point() {
@@ -323,8 +321,6 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
             }
         }
 
-        INIT_HOOK_THREAD_RUNNING.store(false, Ordering::Release);
-
         // notify all waiting dlsym calls, let them know that they don't need to wait anymore
         if let Ok(mut guard) = DLSYM_MUTEX.lock() {
             *guard = true;
@@ -338,9 +334,19 @@ thread_local! {
     static IN_HOOK_INITIALIZATION: Cell<bool> = const { Cell::new(false) };
 }
 
-static COUNT: AtomicUsize = AtomicUsize::new(0);
 #[hook_fn]
 unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) -> *const c_void {
+    if symbol.is_null() {
+        return FN_DLSYM(handle, symbol);
+    }
+    let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
+    let may_be_cuda = symbol_str.starts_with("cu");
+    let may_be_nvml = symbol_str.starts_with("nvml");
+
+    if !may_be_cuda && !may_be_nvml {
+        return FN_DLSYM(handle, symbol);
+    }
+
     // Check if we're already in dlsym or in hook initialization to prevent recursion
     if IN_DLSYM_DETOUR.with(|flag| flag.get()) || IN_HOOK_INITIALIZATION.with(|flag| flag.get()) {
         tracing::trace!(
@@ -360,47 +366,36 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     }
     let _guard = ResetGuard;
 
-    if !symbol.is_null() {
-        let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
+    tracing::trace!("dlsym: {symbol_str}");
 
-        let may_be_cuda = symbol_str.starts_with("cu");
-        let may_be_nvml = symbol_str.starts_with("nvml");
-        if may_be_cuda || may_be_nvml {
-            tracing::trace!("dlsym: {symbol_str}");
+    // check if the corresponding hooks have been initialized successfully
+    let cuda_ready = CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
+    let nvml_ready = NVML_HOOKS_INITIALIZED.load(Ordering::Acquire);
 
-            // check if the corresponding hooks have been initialized successfully
-            let cuda_ready = CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
-            let nvml_ready = NVML_HOOKS_INITIALIZED.load(Ordering::Acquire);
+    let should_notify = (may_be_cuda && !cuda_ready) || (may_be_nvml && !nvml_ready);
 
-            let should_notify = (may_be_cuda && !cuda_ready) || (may_be_nvml && !nvml_ready);
+    if should_notify {
+        if let Ok(mut guard) = SYMBOL_MUTEX.lock() {
+            *guard = true;
+            SYMBOL_CONDVAR.notify_all();
+        }
+        tracing::debug!(
+            "Notified: detected {} symbol, hooks not ready yet",
+            if may_be_cuda { "CUDA" } else { "NVML" }
+        );
 
-            if should_notify {
-                if let Ok(mut guard) = SYMBOL_MUTEX.lock() {
-                    *guard = true;
-                    SYMBOL_CONDVAR.notify_all();
+        // only wait if not in hook initialization
+        if !IN_HOOK_INITIALIZATION.with(|flag| flag.get())
+            && (!CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire)
+                || !NVML_HOOKS_INITIALIZED.load(Ordering::Acquire))
+        {
+            // Wait for from hook initialization thread
+            if let Ok(mut guard) = DLSYM_MUTEX.lock() {
+                while !*guard {
+                    guard = DLSYM_CONDVAR.wait(guard).unwrap_or_else(|e| e.into_inner());
                 }
-                tracing::debug!(
-                    "Notified: detected {} symbol, hooks not ready yet",
-                    if may_be_cuda { "CUDA" } else { "NVML" }
-                );
-
-                COUNT.fetch_add(1, Ordering::SeqCst);
-                tracing::debug!("COUNT-A: {}", COUNT.load(Ordering::SeqCst));
-                // only wait if not in hook initialization
-                if !IN_HOOK_INITIALIZATION.with(|flag| flag.get())
-                    && INIT_HOOK_THREAD_RUNNING.load(Ordering::Acquire)
-                {
-                    // Wait for from hook initialization thread
-                    if let Ok(mut guard) = DLSYM_MUTEX.lock() {
-                        while !*guard {
-                            guard = DLSYM_CONDVAR.wait(guard).unwrap_or_else(|e| e.into_inner());
-                        }
-                        // Reset the flag for next time
-                        *guard = false;
-                    }
-                }
-                COUNT.fetch_sub(1, Ordering::SeqCst);
-                tracing::debug!("COUNT-B: {}", COUNT.load(Ordering::SeqCst));
+                // Reset the flag for next time
+                *guard = false;
             }
         }
     }

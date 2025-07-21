@@ -115,7 +115,6 @@ pub(crate) unsafe fn nvml_device_get_persistence_mode_detour(
 }
 
 pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
-    tracing::debug!("enable_hooks1");
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),
@@ -124,7 +123,6 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         FnNvml_device_get_memory_info,
         FN_NVML_DEVICE_GET_MEMORY_INFO
     );
-    tracing::debug!("enable_hooks2");
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),
@@ -133,7 +131,6 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         FnNvml_device_get_memory_info_v2,
         FN_NVML_DEVICE_GET_MEMORY_INFO_V2
     );
-    tracing::debug!("enable_hooks3");
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),
@@ -142,7 +139,6 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         FnNvml_device_get_count_v2,
         FN_NVML_DEVICE_GET_COUNT_V2
     );
-    tracing::debug!("enable_hooks4");
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),
@@ -151,7 +147,6 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         FnNvml_device_get_handle_by_index_v2,
         FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
     );
-    tracing::debug!("enable_hooks5");
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),
@@ -160,5 +155,4 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         FnNvml_device_get_persistence_mode,
         FN_NVML_DEVICE_GET_PERSISTENCE_MODE
     );
-    tracing::debug!("enable_hooks6");
 }
