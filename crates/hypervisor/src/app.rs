@@ -257,16 +257,21 @@ impl Tasks {
                 tokio::spawn(async move {
                     tracing::info!("Starting device plugin task");
 
-                    if let Err(e) = device_plugin.start(&device_plugin_socket_path, token).await {
-                        tracing::error!("Failed to start device plugin: {}", e);
+                    // Start device plugin server
+                    if let Err(e) = device_plugin
+                        .start(&device_plugin_socket_path, token.clone())
+                        .await
+                    {
+                        tracing::error!("Failed to start device plugin: {e}");
                         return;
                     }
 
+                    // Register with kubelet
                     if let Err(e) = device_plugin
                         .register_with_kubelet(&kubelet_socket_path)
                         .await
                     {
-                        tracing::error!("Failed to register device plugin with kubelet: {}", e);
+                        tracing::error!("Failed to register device plugin with kubelet: {e}");
                         return;
                     }
 

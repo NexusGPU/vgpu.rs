@@ -1,7 +1,6 @@
 use std::ffi::c_int;
 use std::ffi::c_uint;
 use std::ffi::c_void;
-use std::sync::OnceLock;
 
 use cudarc::driver::sys::CUfunction;
 use cudarc::driver::sys::CUresult;
@@ -298,26 +297,6 @@ pub(crate) unsafe extern "C" fn cu_func_set_block_shape_detour(
     FN_CU_FUNC_SET_BLOCK_SHAPE(hfunc, x, y, z)
 }
 
-#[hook_fn]
-pub(crate) unsafe extern "C" fn cu_init_detour(flag: c_uint) -> CUresult {
-    static INIT: OnceLock<()> = OnceLock::new();
-
-    // Call original cuInit first
-    let result = FN_CU_INIT(flag);
-
-    // If initialization failed, return the error
-    if result != CUresult::CUDA_SUCCESS {
-        return result;
-    }
-
-    let _ = INIT.get_or_try_init(|| -> Result<(), ()> {
-        tracing::debug!("CUDA initialized successfully, monitoring is handled by hypervisor");
-        Ok(())
-    });
-
-    result
-}
-
 pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
     replace_symbol!(
         hook_manager,
@@ -389,14 +368,5 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_func_set_block_shape_detour,
         FnCu_func_set_block_shape,
         FN_CU_FUNC_SET_BLOCK_SHAPE
-    );
-
-    replace_symbol!(
-        hook_manager,
-        Some("libcuda."),
-        "cuInit",
-        cu_init_detour,
-        FnCu_init,
-        FN_CU_INIT
     );
 }

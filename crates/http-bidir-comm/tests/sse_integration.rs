@@ -111,9 +111,12 @@ async fn end_to_end_sse() {
     // 4. enqueue task for client
     let client_id = "test_client".to_string();
     server
-        .enqueue_task_for_client(&client_id, TestTask {
-            value: "hello".into(),
-        })
+        .enqueue_task_for_client(
+            &client_id,
+            TestTask {
+                value: "hello".into(),
+            },
+        )
         .await
         .unwrap();
 

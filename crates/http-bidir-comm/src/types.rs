@@ -54,7 +54,8 @@ pub struct TaskItem<T> {
 }
 
 impl<T> TaskItem<T>
-where T: Clone
+where
+    T: Clone,
 {
     /// Create a new task item with the given data.
     pub fn new(data: T) -> Self {
