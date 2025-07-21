@@ -93,17 +93,17 @@ fn init_ngpu_library() {
             }
         };
 
-        let nvml = match Nvml::init().and(
-            Nvml::builder()
-                .lib_path(OsStr::new("libnvidia-ml.so.1"))
-                .init(),
-        ) {
-            Ok(nvml) => nvml,
-            Err(e) => {
-                tracing::error!("failed to initialize NVML: {}", e);
-                return;
-            }
-        };
+        // let nvml = match Nvml::init().and(
+        //     Nvml::builder()
+        //         .lib_path(OsStr::new("libnvidia-ml.so.1"))
+        //         .init(),
+        // ) {
+        //     Ok(nvml) => nvml,
+        //     Err(e) => {
+        //         tracing::error!("failed to initialize NVML: {}", e);
+        //         return;
+        //     }
+        // };
 
         let (hypervisor_ip, hypervisor_port) = match get_hypervisor_config() {
             Some((ip, port)) => (ip, port),
@@ -113,13 +113,14 @@ fn init_ngpu_library() {
             }
         };
         // Get device indices from environment variable
-        // let config = match config::get_device_configs(&hypervisor_ip, &hypervisor_port) {
-        //     Ok(config) => config,
-        //     Err(err) => {
-        //         tracing::error!("failed to get device configs: {err}");
-        //         return;
-        //     }
-        // };
+        let config = match config::get_device_configs(&hypervisor_ip, &hypervisor_port) {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::error!("failed to get device configs: {err}");
+                return;
+            }
+        };
+        tracing::info!("config: {config:?}");
 
         // if !config.gpu_uuids.is_empty() {
         //     let lower_case_uuids: HashSet<_> =
