@@ -286,23 +286,23 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
 
 #[hook_fn]
 unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) -> *const c_void {
-    if !symbol.is_null() {
-        let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
+    // if !symbol.is_null() {
+    //     let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
 
-        let may_be_cuda = symbol_str.starts_with("cu");
-        let may_be_nvml = symbol_str.starts_with("nvml");
-        if may_be_cuda || may_be_nvml {
-            tracing::trace!("dlsym: {symbol_str}");
-            let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();
-            if may_be_cuda {
-                init_cuda_hooks(enable_cuda_hooks);
-            }
+    //     let may_be_cuda = symbol_str.starts_with("cu");
+    //     let may_be_nvml = symbol_str.starts_with("nvml");
+    //     if may_be_cuda || may_be_nvml {
+    //         tracing::trace!("dlsym: {symbol_str}");
+    //         let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();
+    //         if may_be_cuda {
+    //             init_cuda_hooks(enable_cuda_hooks);
+    //         }
 
-            if may_be_nvml {
-                init_nvml_hooks(enable_nvml_hooks);
-            }
-        }
-    }
+    //         if may_be_nvml {
+    //             init_nvml_hooks(enable_nvml_hooks);
+    //         }
+    //     }
+    // }
 
     return FN_DLSYM(handle, symbol);
 }
