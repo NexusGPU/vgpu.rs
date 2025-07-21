@@ -32,6 +32,13 @@ static GLOBAL_NGPU_LIBRARY: OnceLock<NgpuLibrary> = OnceLock::new();
 #[ctor]
 unsafe fn entry_point() {
     logging::init();
+
+    if let Ok(visible_devices) = std::env::var("TF_VISIBLE_DEVICES") {
+        std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
+        std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+        tracing::info!("TF_VISIBLE_DEVICES: {visible_devices}");
+    }
+
     let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();
     tracing::info!(
         "enable_nvml_hooks: {enable_nvml_hooks}, enable_cuda_hooks: {enable_cuda_hooks}"
@@ -184,6 +191,10 @@ fn init_cuda_hooks(enable_cuda_hooks: bool) {
     }
     init_ngpu_library();
 
+    if !enable_cuda_hooks {
+        return;
+    }
+
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
 
@@ -208,6 +219,10 @@ fn init_nvml_hooks(enable_nvml_hooks: bool) {
         return;
     }
     init_ngpu_library();
+
+    if !enable_nvml_hooks {
+        return;
+    }
 
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
