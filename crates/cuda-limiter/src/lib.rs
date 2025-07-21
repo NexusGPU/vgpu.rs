@@ -1,5 +1,3 @@
-#![feature(once_cell_try)]
-
 use std::collections::HashSet;
 use std::ffi::c_char;
 use std::ffi::c_int;
