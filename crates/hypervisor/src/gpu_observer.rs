@@ -162,34 +162,41 @@ impl GpuObserver {
 
             for process_info in running_compute_processes {
                 if let UsedGpuMemory::Used(used) = process_info.used_gpu_memory {
-                    process_metrics.insert(process_info.pid, GpuResources {
-                        memory_bytes: used,
-                        compute_percentage: match utilizations.get(&process_info.pid) {
-                            Some(utilization_samples) if !utilization_samples.is_empty() => {
-                                // Calculate average utilization across all samples
-                                let total: u32 = utilization_samples
-                                    .iter()
-                                    .filter_map(|sample| {
-                                        if sample.sm_util > 100
-                                            || sample.enc_util > 100
-                                            || sample.dec_util > 100
-                                            || sample.timestamp < last_seen_timestamp
-                                        {
-                                            None
-                                        } else {
-                                            Some(sample.sm_util + sample.enc_util + sample.dec_util)
-                                        }
-                                    })
-                                    .sum();
+                    process_metrics.insert(
+                        process_info.pid,
+                        GpuResources {
+                            memory_bytes: used,
+                            compute_percentage: match utilizations.get(&process_info.pid) {
+                                Some(utilization_samples) if !utilization_samples.is_empty() => {
+                                    // Calculate average utilization across all samples
+                                    let total: u32 = utilization_samples
+                                        .iter()
+                                        .filter_map(|sample| {
+                                            if sample.sm_util > 100
+                                                || sample.enc_util > 100
+                                                || sample.dec_util > 100
+                                                || sample.timestamp < last_seen_timestamp
+                                            {
+                                                None
+                                            } else {
+                                                Some(
+                                                    sample.sm_util
+                                                        + sample.enc_util
+                                                        + sample.dec_util,
+                                                )
+                                            }
+                                        })
+                                        .sum();
 
-                                total / utilization_samples.len() as u32
-                            }
-                            _ => 0,
+                                    total / utilization_samples.len() as u32
+                                }
+                                _ => 0,
+                            },
+                            tflops_request: None,
+                            tflops_limit: None,
+                            memory_limit: None,
                         },
-                        tflops_request: None,
-                        tflops_limit: None,
-                        memory_limit: None,
-                    });
+                    );
                 }
             }
 
@@ -204,18 +211,21 @@ impl GpuObserver {
             // Get GPU utilization info
             let utilization = device.utilization_rates()?;
 
-            gpu_metrics.insert(gpu_uuid.clone(), GpuMetrics {
-                rx,
-                tx,
-                temperature,
-                resources: GpuResources {
-                    memory_bytes: memory_info.used,
-                    compute_percentage: utilization.gpu,
-                    tflops_request: None,
-                    tflops_limit: None,
-                    memory_limit: None,
+            gpu_metrics.insert(
+                gpu_uuid.clone(),
+                GpuMetrics {
+                    rx,
+                    tx,
+                    temperature,
+                    resources: GpuResources {
+                        memory_bytes: memory_info.used,
+                        compute_percentage: utilization.gpu,
+                        tflops_request: None,
+                        tflops_limit: None,
+                        memory_limit: None,
+                    },
                 },
-            });
+            );
             gpu_process_metrics.insert(gpu_uuid, (process_metrics, newest_timestamp_candidate));
         }
 

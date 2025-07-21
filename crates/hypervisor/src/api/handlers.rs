@@ -223,24 +223,30 @@ mod tests {
             info: worker_info.clone(),
             containers: {
                 let mut containers = HashMap::new();
-                containers.insert("container1".to_string(), ContainerInfo {
-                    container_pid_to_host_pid: {
-                        let mut map = HashMap::new();
-                        map.insert(100, 1234);
-                        map.insert(101, 1235);
-                        map
+                containers.insert(
+                    "container1".to_string(),
+                    ContainerInfo {
+                        container_pid_to_host_pid: {
+                            let mut map = HashMap::new();
+                            map.insert(100, 1234);
+                            map.insert(101, 1235);
+                            map
+                        },
+                        worker: None,
                     },
-                    worker: None,
-                });
-                containers.insert("container2".to_string(), ContainerInfo {
-                    container_pid_to_host_pid: {
-                        let mut map = HashMap::new();
-                        map.insert(200, 2234);
-                        map.insert(201, 2235);
-                        map
+                );
+                containers.insert(
+                    "container2".to_string(),
+                    ContainerInfo {
+                        container_pid_to_host_pid: {
+                            let mut map = HashMap::new();
+                            map.insert(200, 2234);
+                            map.insert(201, 2235);
+                            map
+                        },
+                        worker: None,
                     },
-                    worker: None,
-                });
+                );
                 containers
             },
         }
@@ -298,16 +304,19 @@ mod tests {
             info: worker_info.clone(),
             containers: {
                 let mut containers = HashMap::new();
-                containers.insert("test-container".to_string(), ContainerInfo {
-                    container_pid_to_host_pid: {
-                        let mut map = HashMap::new();
-                        map.insert(100, 1234);
-                        map.insert(101, 1235);
-                        map.insert(102, 1236);
-                        map
+                containers.insert(
+                    "test-container".to_string(),
+                    ContainerInfo {
+                        container_pid_to_host_pid: {
+                            let mut map = HashMap::new();
+                            map.insert(100, 1234);
+                            map.insert(101, 1235);
+                            map.insert(102, 1236);
+                            map
+                        },
+                        worker: None,
                     },
-                    worker: None,
-                });
+                );
                 containers
             },
         };

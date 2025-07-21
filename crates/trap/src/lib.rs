@@ -51,7 +51,8 @@ pub trait TrapHandler {
 }
 
 impl<T> TrapHandler for Arc<T>
-where T: TrapHandler + ?Sized
+where
+    T: TrapHandler + ?Sized,
 {
     fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Box<dyn Waker>) {
         (**self).handle_trap(pid, trap_id, frame, waker);

@@ -1,5 +1,3 @@
-#![feature(once_cell_try)]
-
 use std::collections::HashSet;
 use std::ffi::c_char;
 use std::ffi::c_int;
@@ -193,7 +191,8 @@ fn init_hooks() {
     }
 
     if !has_libcuda || !has_libnvml {
-        unsafe {
+        static DLOPEN_HOOK_ONCE: Once = Once::new();
+        DLOPEN_HOOK_ONCE.call_once(|| unsafe {
             replace_symbol!(
                 &mut hook_manager,
                 None,
@@ -202,7 +201,7 @@ fn init_hooks() {
                 FnDlopen,
                 FN_DLOPEN
             );
-        }
+        });
     }
 }
 

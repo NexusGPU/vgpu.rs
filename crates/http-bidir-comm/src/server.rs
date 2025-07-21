@@ -48,7 +48,8 @@ impl Default for ServerConfig {
 /// Task queue manager for a single client.
 #[derive(Debug)]
 struct ClientQueue<T, R>
-where T: Clone
+where
+    T: Clone,
 {
     /// Tasks waiting to be processed
     pending: VecDeque<TaskItem<T>>,
@@ -61,7 +62,8 @@ where T: Clone
 }
 
 impl<T, R> ClientQueue<T, R>
-where T: Clone
+where
+    T: Clone,
 {
     fn new() -> Self {
         Self {
@@ -149,7 +151,8 @@ pub struct ClientStats {
 
 /// HTTP server for bidirectional communication.
 pub struct HttpServer<T, R>
-where T: Clone
+where
+    T: Clone,
 {
     config: ServerConfig,
     queues: Arc<RwLock<HashMap<String, ClientQueue<T, R>>>>,
