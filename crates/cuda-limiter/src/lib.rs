@@ -10,6 +10,7 @@ use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::Once;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use ctor::ctor;
 use limiter::Limiter;
@@ -307,24 +308,18 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
             let cuda_done = !enable_cuda_hooks || CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
             let nvml_done = !enable_nvml_hooks || NVML_HOOKS_INITIALIZED.load(Ordering::Acquire);
 
+            // notify all waiting dlsym calls, let them know that they don't need to wait anymore
+            if let Ok(mut guard) = DLSYM_MUTEX.lock() {
+                *guard = true;
+                DLSYM_CONDVAR.notify_all();
+            }
+
             if cuda_done && nvml_done {
                 tracing::debug!("All required hooks initialized successfully, stopping retry loop");
                 break;
             } else {
                 tracing::debug!("Not all hooks ready yet, continuing to wait for notifications");
             }
-
-            // notify dlsym_detour if any hooks were initialized
-            if let Ok(mut guard) = DLSYM_MUTEX.lock() {
-                *guard = true;
-                DLSYM_CONDVAR.notify_all();
-            }
-        }
-
-        // notify all waiting dlsym calls, let them know that they don't need to wait anymore
-        if let Ok(mut guard) = DLSYM_MUTEX.lock() {
-            *guard = true;
-            DLSYM_CONDVAR.notify_all();
         }
     });
 }
@@ -391,11 +386,37 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         {
             // Wait for from hook initialization thread
             if let Ok(mut guard) = DLSYM_MUTEX.lock() {
-                while !*guard {
-                    guard = DLSYM_CONDVAR.wait(guard).unwrap_or_else(|e| e.into_inner());
+                loop {
+                    if *guard {
+                        // Reset the flag for next time and exit
+                        *guard = false;
+                        break;
+                    }
+
+                    match DLSYM_CONDVAR.wait_timeout(guard, Duration::from_millis(1000)) {
+                        Ok((new_guard, timeout_result)) => {
+                            if timeout_result.timed_out() {
+                                tracing::warn!(
+                                    "dlsym wait timed out for symbol: {}, continuing",
+                                    symbol_str
+                                );
+                                break;
+                            }
+                            guard = new_guard;
+                        }
+                        Err(poisoned) => {
+                            let (new_guard, timeout_result) = poisoned.into_inner();
+                            if timeout_result.timed_out() {
+                                tracing::warn!(
+                                    "dlsym wait timed out (poisoned) for symbol: {}, continuing",
+                                    symbol_str
+                                );
+                                break;
+                            }
+                            guard = new_guard;
+                        }
+                    }
                 }
-                // Reset the flag for next time
-                *guard = false;
             }
         }
     }
