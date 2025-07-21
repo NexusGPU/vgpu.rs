@@ -32,6 +32,14 @@ static GLOBAL_NGPU_LIBRARY: OnceLock<NgpuLibrary> = OnceLock::new();
 #[ctor]
 unsafe fn entry_point() {
     logging::init();
+    let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();
+    tracing::info!(
+        "enable_nvml_hooks: {enable_nvml_hooks}, enable_cuda_hooks: {enable_cuda_hooks}"
+    );
+    init_hooks(enable_nvml_hooks, enable_cuda_hooks);
+}
+
+fn are_hooks_enabled() -> (bool, bool) {
     let enable_nvml_hooks = if let Ok(enable_nvml_hooks) = std::env::var("ENABLE_NVML_HOOKS") {
         enable_nvml_hooks != "false"
     } else {
@@ -42,11 +50,7 @@ unsafe fn entry_point() {
     } else {
         true
     };
-
-    tracing::info!(
-        "enable_nvml_hooks: {enable_nvml_hooks}, enable_cuda_hooks: {enable_cuda_hooks}"
-    );
-    init_hooks(enable_nvml_hooks, enable_cuda_hooks);
+    (enable_nvml_hooks, enable_cuda_hooks)
 }
 
 #[derive(Debug)]
@@ -267,12 +271,13 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         let may_be_nvml = symbol_str.starts_with("nvml");
         if may_be_cuda || may_be_nvml {
             tracing::trace!("dlsym: {symbol_str}");
+            let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();
             if may_be_cuda {
-                init_cuda_hooks();
+                init_cuda_hooks(enable_cuda_hooks);
             }
 
             if may_be_nvml {
-                init_nvml_hooks();
+                init_nvml_hooks(enable_nvml_hooks);
             }
         }
     }
