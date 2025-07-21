@@ -4,6 +4,7 @@ use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::OsStr;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Condvar;
@@ -35,6 +36,7 @@ static DLSYM_CONDVAR: Condvar = Condvar::new();
 static DLSYM_MUTEX: Mutex<bool> = Mutex::new(false);
 static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static INIT_HOOK_THREAD_RUNNING: AtomicBool = AtomicBool::new(true);
 
 #[ctor]
 unsafe fn entry_point() {
@@ -64,7 +66,6 @@ fn are_hooks_enabled() -> (bool, bool) {
 fn init_ngpu_library() {
     static NGPU_INITIALIZED: Once = Once::new();
     NGPU_INITIALIZED.call_once(|| {
-        tracing::info!("init_ngpu_library");
         // Get pod name from environment variable
         let pod_identifier = match limiter::get_pod_identifier() {
             Ok(name) => name,
@@ -165,6 +166,17 @@ fn init_ngpu_library() {
 }
 
 fn init_cuda_hooks(enable_cuda_hooks: bool) -> bool {
+    IN_HOOK_INITIALIZATION.with(|flag| flag.set(true));
+
+    // Ensure we reset the flag when exiting, even in case of panic
+    struct ResetGuard;
+    impl Drop for ResetGuard {
+        fn drop(&mut self) {
+            IN_HOOK_INITIALIZATION.with(|flag| flag.set(false));
+        }
+    }
+    let _guard = ResetGuard;
+
     init_ngpu_library();
 
     if !enable_cuda_hooks {
@@ -184,15 +196,24 @@ fn init_cuda_hooks(enable_cuda_hooks: bool) -> bool {
             detour::mem::enable_hooks(&mut hook_manager);
         }
         CUDA_HOOKS_INITIALIZED.store(true, Ordering::Release);
-        tracing::debug!("CUDA hooks initialized successfully");
         return true;
     }
     false
 }
 
 fn init_nvml_hooks(enable_nvml_hooks: bool) -> bool {
-    init_ngpu_library();
+    IN_HOOK_INITIALIZATION.with(|flag| flag.set(true));
 
+    // Ensure we reset the flag when exiting, even in case of panic
+    struct ResetGuard;
+    impl Drop for ResetGuard {
+        fn drop(&mut self) {
+            IN_HOOK_INITIALIZATION.with(|flag| flag.set(false));
+        }
+    }
+    let _guard = ResetGuard;
+
+    init_ngpu_library();
     if !enable_nvml_hooks {
         return true;
     }
@@ -210,7 +231,6 @@ fn init_nvml_hooks(enable_nvml_hooks: bool) -> bool {
         }
 
         NVML_HOOKS_INITIALIZED.store(true, Ordering::Release);
-        tracing::debug!("NVML hooks initialized successfully");
         return true;
     }
     false
@@ -302,18 +322,30 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                 DLSYM_CONDVAR.notify_all();
             }
         }
+
+        INIT_HOOK_THREAD_RUNNING.store(false, Ordering::Release);
+
+        // notify all waiting dlsym calls, let them know that they don't need to wait anymore
+        if let Ok(mut guard) = DLSYM_MUTEX.lock() {
+            *guard = true;
+            DLSYM_CONDVAR.notify_all();
+        }
     });
 }
 
 thread_local! {
     static IN_DLSYM_DETOUR: Cell<bool> = const { Cell::new(false) };
+    static IN_HOOK_INITIALIZATION: Cell<bool> = const { Cell::new(false) };
 }
 
+static COUNT: AtomicUsize = AtomicUsize::new(0);
 #[hook_fn]
 unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) -> *const c_void {
-    // Check if we're already in dlsym to prevent recursion
-    if IN_DLSYM_DETOUR.with(|flag| flag.get()) {
-        tracing::trace!("dlsym recursion detected, calling original function directly");
+    // Check if we're already in dlsym or in hook initialization to prevent recursion
+    if IN_DLSYM_DETOUR.with(|flag| flag.get()) || IN_HOOK_INITIALIZATION.with(|flag| flag.get()) {
+        tracing::trace!(
+            "dlsym recursion or hook initialization detected, calling original function directly"
+        );
         return FN_DLSYM(handle, symbol);
     }
     // Set the flag to indicate we're in dlsym
@@ -352,14 +384,23 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
                     if may_be_cuda { "CUDA" } else { "NVML" }
                 );
 
-                // Wait for from hook initialization thread
-                if let Ok(mut guard) = DLSYM_MUTEX.lock() {
-                    while !*guard {
-                        guard = DLSYM_CONDVAR.wait(guard).unwrap_or_else(|e| e.into_inner());
+                COUNT.fetch_add(1, Ordering::SeqCst);
+                tracing::debug!("COUNT-A: {}", COUNT.load(Ordering::SeqCst));
+                // only wait if not in hook initialization
+                if !IN_HOOK_INITIALIZATION.with(|flag| flag.get())
+                    && INIT_HOOK_THREAD_RUNNING.load(Ordering::Acquire)
+                {
+                    // Wait for from hook initialization thread
+                    if let Ok(mut guard) = DLSYM_MUTEX.lock() {
+                        while !*guard {
+                            guard = DLSYM_CONDVAR.wait(guard).unwrap_or_else(|e| e.into_inner());
+                        }
+                        // Reset the flag for next time
+                        *guard = false;
                     }
-                    // Reset the flag for next time
-                    *guard = false;
                 }
+                COUNT.fetch_sub(1, Ordering::SeqCst);
+                tracing::debug!("COUNT-B: {}", COUNT.load(Ordering::SeqCst));
             }
         }
     }
