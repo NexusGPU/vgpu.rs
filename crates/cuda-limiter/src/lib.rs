@@ -75,6 +75,7 @@ unsafe impl Send for NgpuLibrary {}
 unsafe impl Sync for NgpuLibrary {}
 
 fn init_ngpu_library() {
+    tracing::info!("init_ngpu_library");
     static NGPU_INITIALIZED: Once = Once::new();
     NGPU_INITIALIZED.call_once(|| {
         // Get pod name from environment variable
@@ -271,38 +272,38 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
             if enable_hooks == "false" {
                 return
             }
-            tracing::info!("enable_dlsym_hooks: {enable_hooks}");
-            replace_symbol!(
-                &mut hook_manager,
-                None,
-                "dlsym",
-                dlsym_detour,
-                FnDlsym,
-                FN_DLSYM
-            );
         }
+
+        replace_symbol!(
+            &mut hook_manager,
+            None,
+            "dlsym",
+            dlsym_detour,
+            FnDlsym,
+            FN_DLSYM
+        );
     });
 }
 
 #[hook_fn]
 unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) -> *const c_void {
-    // if !symbol.is_null() {
-    //     let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
+    if !symbol.is_null() {
+        let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
 
-    //     let may_be_cuda = symbol_str.starts_with("cu");
-    //     let may_be_nvml = symbol_str.starts_with("nvml");
-    //     if may_be_cuda || may_be_nvml {
-    //         tracing::trace!("dlsym: {symbol_str}");
-    //         let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();
-    //         if may_be_cuda {
-    //             init_cuda_hooks(enable_cuda_hooks);
-    //         }
+        let may_be_cuda = symbol_str.starts_with("cu");
+        let may_be_nvml = symbol_str.starts_with("nvml");
+        if may_be_cuda || may_be_nvml {
+            tracing::trace!("dlsym: {symbol_str}");
+            let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();
+            if may_be_cuda {
+                init_cuda_hooks(enable_cuda_hooks);
+            }
 
-    //         if may_be_nvml {
-    //             init_nvml_hooks(enable_nvml_hooks);
-    //         }
-    //     }
-    // }
+            if may_be_nvml {
+                init_nvml_hooks(enable_nvml_hooks);
+            }
+        }
+    }
 
     return FN_DLSYM(handle, symbol);
 }
