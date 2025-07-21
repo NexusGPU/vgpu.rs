@@ -438,14 +438,18 @@ impl SharedDeviceState {
 
     /// Executes a closure with a device by UUID efficiently.
     pub fn with_device_by_uuid<T, F>(&self, device_uuid: &str, f: F) -> Option<T>
-    where F: FnOnce(&SharedDeviceInfo) -> T {
+    where
+        F: FnOnce(&SharedDeviceInfo) -> T,
+    {
         self.find_device_index(device_uuid)
             .map(|i| f(&self.devices[i].device_info))
     }
 
     /// Executes a closure with a mutable device by UUID efficiently.
     pub fn with_device_by_uuid_mut<T, F>(&self, device_uuid: &str, f: F) -> Option<T>
-    where F: FnOnce(&SharedDeviceInfo) -> T {
+    where
+        F: FnOnce(&SharedDeviceInfo) -> T,
+    {
         // Note: Since SharedDeviceInfo uses atomic operations internally,
         // we don't actually need mutable access to modify its values
         self.with_device_by_uuid(device_uuid, f)

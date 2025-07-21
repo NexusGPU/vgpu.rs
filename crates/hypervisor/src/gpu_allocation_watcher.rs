@@ -561,9 +561,10 @@ mod tests {
 
     fn create_test_device_state() -> KubeletDeviceState {
         let mut device_ids = HashMap::new();
-        device_ids.insert("-1".to_string(), vec![
-            "GPU-7d8429d5-531d-d6a6-6510-3b662081a75a".to_string(),
-        ]);
+        device_ids.insert(
+            "-1".to_string(),
+            vec!["GPU-7d8429d5-531d-d6a6-6510-3b662081a75a".to_string()],
+        );
 
         let pod_entry = PodDeviceEntry {
             pod_uid: "a7461dc1-023a-4bd5-a403-c738bb1d7db4".to_string(),
@@ -574,9 +575,10 @@ mod tests {
         };
 
         let mut registered_devices = HashMap::new();
-        registered_devices.insert("nvidia.com/gpu".to_string(), vec![
-            "GPU-7d8429d5-531d-d6a6-6510-3b662081a75a".to_string(),
-        ]);
+        registered_devices.insert(
+            "nvidia.com/gpu".to_string(),
+            vec!["GPU-7d8429d5-531d-d6a6-6510-3b662081a75a".to_string()],
+        );
 
         KubeletDeviceState {
             data: DeviceStateData {
@@ -705,10 +707,10 @@ mod tests {
         let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
 
         let mut device_ids_1 = HashMap::new();
-        device_ids_1.insert("-1".to_string(), vec![
-            "GPU-1".to_string(),
-            "GPU-2".to_string(),
-        ]);
+        device_ids_1.insert(
+            "-1".to_string(),
+            vec!["GPU-1".to_string(), "GPU-2".to_string()],
+        );
 
         let mut device_ids_2 = HashMap::new();
         device_ids_2.insert("-1".to_string(), vec!["GPU-3".to_string()]);
@@ -968,10 +970,10 @@ mod tests {
         // Create a more complex device ID structure
         let mut device_ids = HashMap::new();
         device_ids.insert("-1".to_string(), vec!["GPU-1".to_string()]);
-        device_ids.insert("0".to_string(), vec![
-            "GPU-2".to_string(),
-            "GPU-3".to_string(),
-        ]);
+        device_ids.insert(
+            "0".to_string(),
+            vec!["GPU-2".to_string(), "GPU-3".to_string()],
+        );
 
         let pod_entry = PodDeviceEntry {
             pod_uid: "complex-pod".to_string(),

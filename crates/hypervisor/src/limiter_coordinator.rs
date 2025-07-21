@@ -538,10 +538,13 @@ impl LimiterCoordinator {
                         newest_timestamp = sample.timestamp;
                     }
 
-                    process_utilizations.insert(sample.pid, ProcessUtilization {
-                        sm_util: sample.sm_util,
-                        codec_util: codec_normalize(sample.enc_util + sample.dec_util),
-                    });
+                    process_utilizations.insert(
+                        sample.pid,
+                        ProcessUtilization {
+                            sm_util: sample.sm_util,
+                            codec_util: codec_normalize(sample.enc_util + sample.dec_util),
+                        },
+                    );
                 }
 
                 // Process memory data
@@ -742,9 +745,13 @@ mod tests {
 
         // Register device
         coordinator
-            .register_device(&pod_identifier, "container-1", 1001, 12345, vec![
-                config.clone()
-            ])
+            .register_device(
+                &pod_identifier,
+                "container-1",
+                1001,
+                12345,
+                vec![config.clone()],
+            )
             .unwrap();
 
         // Unregister device
@@ -761,14 +768,22 @@ mod tests {
 
         // Register multiple containers
         coordinator
-            .register_device(&pod_identifier, "container-1", 1001, 12345, vec![
-                config.clone()
-            ])
+            .register_device(
+                &pod_identifier,
+                "container-1",
+                1001,
+                12345,
+                vec![config.clone()],
+            )
             .unwrap();
         coordinator
-            .register_device(&pod_identifier, "container-2", 1002, 12346, vec![
-                config.clone()
-            ])
+            .register_device(
+                &pod_identifier,
+                "container-2",
+                1002,
+                12346,
+                vec![config.clone()],
+            )
             .unwrap();
 
         // Unregister containers

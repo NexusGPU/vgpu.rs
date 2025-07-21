@@ -141,9 +141,13 @@ async fn test_successful_task_flow() {
     assert_eq!(task_item.id, task_id);
     assert_eq!(task_item.data, task);
 
-    let result = TaskResult::success(task_item.id, "client_ok".to_string(), TestResult {
-        output: "world".to_string(),
-    });
+    let result = TaskResult::success(
+        task_item.id,
+        "client_ok".to_string(),
+        TestResult {
+            output: "world".to_string(),
+        },
+    );
     let resp = harness
         .client
         .post("/submit")
@@ -202,18 +206,24 @@ async fn test_multiple_clients() {
 
     harness
         .server
-        .enqueue_task_for_client("client_A", TestTask {
-            command: "echo".to_string(),
-            data: "data_A".to_string(),
-        })
+        .enqueue_task_for_client(
+            "client_A",
+            TestTask {
+                command: "echo".to_string(),
+                data: "data_A".to_string(),
+            },
+        )
         .await
         .unwrap();
     harness
         .server
-        .enqueue_task_for_client("client_B", TestTask {
-            command: "echo".to_string(),
-            data: "data_B".to_string(),
-        })
+        .enqueue_task_for_client(
+            "client_B",
+            TestTask {
+                command: "echo".to_string(),
+                data: "data_B".to_string(),
+            },
+        )
         .await
         .unwrap();
 

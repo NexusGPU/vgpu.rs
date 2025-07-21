@@ -58,7 +58,9 @@ where
 
     /// start event loop (block current thread)
     pub fn start<P>(&self, base_path: impl AsRef<str>, processor: Arc<P>) -> CommResult<()>
-    where P: TaskProcessor<T, R> + Send + Sync + 'static {
+    where
+        P: TaskProcessor<T, R> + Send + Sync + 'static,
+    {
         let base_path = base_path.as_ref();
         let events_url = format!(
             "{}{}/events/{}",

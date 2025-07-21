@@ -297,7 +297,6 @@ pub(crate) unsafe extern "C" fn cu_func_set_block_shape_detour(
     FN_CU_FUNC_SET_BLOCK_SHAPE(hfunc, x, y, z)
 }
 
-
 pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
     replace_symbol!(
         hook_manager,

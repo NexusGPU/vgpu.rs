@@ -59,7 +59,8 @@ fn extract_jwt_payload(token: &str) -> Result<JwtPayload, Report<ApiError>> {
 }
 
 impl<E> Middleware<E> for JwtAuthMiddleware
-where E: Endpoint
+where
+    E: Endpoint,
 {
     type Output = JwtAuthEndpoint<E>;
 
@@ -78,7 +79,8 @@ pub struct JwtAuthEndpoint<E> {
 }
 
 impl<E> Endpoint for JwtAuthEndpoint<E>
-where E: Endpoint
+where
+    E: Endpoint,
 {
     type Output = E::Output;
 
