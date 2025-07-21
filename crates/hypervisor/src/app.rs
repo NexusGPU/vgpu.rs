@@ -254,7 +254,7 @@ impl Tasks {
                 let device_plugin_socket_path = cli.device_plugin_socket_path.clone();
                 let token = self.cancellation_token.clone();
 
-                                tokio::spawn(async move {
+                tokio::spawn(async move {
                     tracing::info!("Starting device plugin task");
 
                     // Start device plugin server

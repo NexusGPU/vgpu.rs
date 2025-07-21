@@ -194,17 +194,15 @@ fn init_hooks() {
 
     if !has_libcuda || !has_libnvml {
         static DLOPEN_HOOK_ONCE: Once = Once::new();
-        DLOPEN_HOOK_ONCE.call_once(|| {
-            unsafe {
-                replace_symbol!(
-                    &mut hook_manager,
-                    None,
-                    "dlopen",
-                    dlopen_detour,
-                    FnDlopen,
-                    FN_DLOPEN
-                );
-            }
+        DLOPEN_HOOK_ONCE.call_once(|| unsafe {
+            replace_symbol!(
+                &mut hook_manager,
+                None,
+                "dlopen",
+                dlopen_detour,
+                FnDlopen,
+                FN_DLOPEN
+            );
         });
     }
 }
