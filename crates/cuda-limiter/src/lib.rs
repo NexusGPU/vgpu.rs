@@ -107,6 +107,10 @@ fn init_ngpu_library() {
                 return;
             }
         };
+        std::thread::spawn(|| {
+            tracing::info!("test thread spawn");
+        });
+
         // Get device indices from environment variable
         // let config = match config::get_device_configs(&hypervisor_ip, &hypervisor_port) {
         //     Ok(config) => config,
