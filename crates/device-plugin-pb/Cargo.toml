@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 tonic = "0.13"
-prost = "0.14"
+prost = "0.13"
 
 [build-dependencies]
 tonic-build = "0.13"
