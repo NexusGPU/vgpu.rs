@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Once;
 use std::sync::OnceLock;
+use std::cell::Cell;
 
 use ctor::ctor;
 use limiter::Limiter;
@@ -28,6 +29,11 @@ mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
 static GLOBAL_NGPU_LIBRARY: OnceLock<NgpuLibrary> = OnceLock::new();
+
+// Thread-local flag to prevent dlsym recursion
+thread_local! {
+    static IN_DLSYM_DETOUR: Cell<bool> = const { Cell::new(false) };
+}
 
 #[ctor]
 unsafe fn entry_point() {
@@ -287,6 +293,30 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
 
 #[hook_fn]
 unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) -> *const c_void {
+    // Check if we're already in a dlsym detour call to prevent recursion
+    let already_in_detour = IN_DLSYM_DETOUR.with(|flag| {
+        if flag.get() {
+            true // Already in detour, avoid recursion
+        } else {
+            flag.set(true); // Mark that we're entering detour
+            false
+        }
+    });
+
+    if already_in_detour {
+        tracing::trace!("dlsym recursion detected, calling original function directly");
+        return FN_DLSYM(handle, symbol);
+    }
+
+    // Ensure we reset the flag when exiting, even in case of panic
+    struct ResetGuard;
+    impl Drop for ResetGuard {
+        fn drop(&mut self) {
+            IN_DLSYM_DETOUR.with(|flag| flag.set(false));
+        }
+    }
+    let _guard = ResetGuard;
+
     if !symbol.is_null() {
         let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
 
