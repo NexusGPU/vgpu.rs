@@ -1,9 +1,3 @@
----
-description: Guidelines for AI Assistants
-globs: "**/*"
-alwaysApply: true
----
-
 # Guidelines for AI Assistants
 
 This file contains standards for how AI assistants should interact with codebases and follow project guidelines.
