@@ -259,15 +259,6 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
             if may_be_nvml {
                 init_nvml_hooks();
             }
-
-            let ngpu_lib = GLOBAL_NGPU_LIBRARY
-                .get()
-                .expect("GLOBAL_NGPU_LIBRARY not initialized");
-
-            let symbol = FN_DLSYM(ngpu_lib.handle, symbol);
-            if !symbol.is_null() {
-                return symbol;
-            }
         }
     }
 
