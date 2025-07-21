@@ -121,41 +121,41 @@ fn init_ngpu_library() {
             }
         };
 
-        if !config.gpu_uuids.is_empty() {
-            let lower_case_uuids: HashSet<_> =
-                config.gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
-            let device_count = nvml.device_count().expect("failed to get device count");
+        // if !config.gpu_uuids.is_empty() {
+        //     let lower_case_uuids: HashSet<_> =
+        //         config.gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
+        //     let device_count = nvml.device_count().expect("failed to get device count");
 
-            let mut device_indices = Vec::new();
-            for i in 0..device_count {
-                let device = nvml
-                    .device_by_index(i)
-                    .expect("failed to get device by index");
-                let uuid = device.uuid().expect("failed to get device uuid");
-                if lower_case_uuids.contains(&uuid.to_lowercase()) {
-                    device_indices.push(i.to_string());
-                }
-            }
+        //     let mut device_indices = Vec::new();
+        //     for i in 0..device_count {
+        //         let device = nvml
+        //             .device_by_index(i)
+        //             .expect("failed to get device by index");
+        //         let uuid = device.uuid().expect("failed to get device uuid");
+        //         if lower_case_uuids.contains(&uuid.to_lowercase()) {
+        //             device_indices.push(i.to_string());
+        //         }
+        //     }
 
-            if !device_indices.is_empty() {
-                let visible_devices = device_indices.join(",");
-                tracing::info!(
-                    "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
-                    &visible_devices
-                );
-                std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
-                std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
-            }
-        }
+        //     if !device_indices.is_empty() {
+        //         let visible_devices = device_indices.join(",");
+        //         tracing::info!(
+        //             "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
+        //             &visible_devices
+        //         );
+        //         std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
+        //         std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+        //     }
+        // }
 
-        let limiter = match Limiter::new(config.host_pid, nvml, pod_identifier, &config.gpu_uuids) {
-            Ok(limiter) => limiter,
-            Err(err) => {
-                tracing::error!("failed to init limiter, err: {err}");
-                return;
-            }
-        };
-        GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
+        // let limiter = match Limiter::new(config.host_pid, nvml, pod_identifier, &config.gpu_uuids) {
+        //     Ok(limiter) => limiter,
+        //     Err(err) => {
+        //         tracing::error!("failed to init limiter, err: {err}");
+        //         return;
+        //     }
+        // };
+        // GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
 
 
         // command_handler::start_background_handler(
@@ -325,13 +325,13 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         if may_be_cuda || may_be_nvml {
             tracing::trace!("dlsym: {symbol_str}");
             let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();
-            // if may_be_cuda {
-            //     init_cuda_hooks(enable_cuda_hooks);
-            // }
+            if may_be_cuda {
+                init_cuda_hooks(enable_cuda_hooks);
+            }
 
-            // if may_be_nvml {
-            //     init_nvml_hooks(enable_nvml_hooks);
-            // }
+            if may_be_nvml {
+                init_nvml_hooks(enable_nvml_hooks);
+            }
         }
     }
 
