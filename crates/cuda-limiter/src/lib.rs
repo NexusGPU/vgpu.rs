@@ -222,6 +222,7 @@ fn init_hooks() {
         .iter()
         .any(|m| m.starts_with("libnvidia-ml."));
 
+    tracing::debug!("has_libcuda: {has_libcuda}, has_libnvml: {has_libnvml}");
     if has_libcuda {
         init_cuda_hooks();
     }
@@ -230,19 +231,17 @@ fn init_hooks() {
         init_nvml_hooks();
     }
 
-    if !has_libcuda || !has_libnvml {
-        static DLSYM_HOOK_ONCE: Once = Once::new();
-        DLSYM_HOOK_ONCE.call_once(|| unsafe {
-            replace_symbol!(
-                &mut hook_manager,
-                None,
-                "dlsym",
-                dlsym_detour,
-                FnDlsym,
-                FN_DLSYM
-            );
-        });
-    }
+    static DLSYM_HOOK_ONCE: Once = Once::new();
+    DLSYM_HOOK_ONCE.call_once(|| unsafe {
+        replace_symbol!(
+            &mut hook_manager,
+            None,
+            "dlsym",
+            dlsym_detour,
+            FnDlsym,
+            FN_DLSYM
+        );
+    });
 }
 
 #[hook_fn]
