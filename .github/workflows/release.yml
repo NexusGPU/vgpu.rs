@@ -421,9 +421,7 @@ jobs:
 
   trigger_ngpu_release:
     needs:
-      - release
       - publish_libraries
-      - merge_images
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -436,10 +434,5 @@ jobs:
               owner: 'NexusGPU',
               repo: 'ngpu',
               workflow_id: 'release.yml',
-              ref: 'main',
-              inputs: {
-                version: '${{ needs.release.outputs.version }}',
-                source_repo: '${{ github.repository }}',
-                triggered_by: '${{ github.actor }}'
-              }
+              ref: 'main'
             });
