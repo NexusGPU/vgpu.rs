@@ -276,14 +276,22 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                 let (dlsym_mutex, dlsym_condvar) = &CUDA_DLSYM_SYNC;
 
                 loop {
-                    if let Ok(mut guard) = mutex.lock() {
-                        while !*guard {
-                            guard = condvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+                    let mut guard = match mutex.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            tracing::warn!("CUDA symbol sync mutex poisoned, recovering");
+                            poisoned.into_inner()
                         }
-                        // reset notification state
-                        *guard = false;
-                        tracing::debug!("CUDA thread received symbol notification, waking up");
+                    };
+                    while !*guard {
+                        guard = condvar.wait(guard).unwrap_or_else(|e| {
+                            tracing::warn!("CUDA condvar wait failed, recovering from poison");
+                            e.into_inner()
+                        });
                     }
+                    // reset notification state
+                    *guard = false;
+                    tracing::debug!("CUDA thread received symbol notification, waking up");
 
                     tracing::debug!("CUDA symbol detected, attempting to initialize CUDA hooks");
 
@@ -313,11 +321,16 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                     }
 
                     // Always notify waiting dlsym calls regardless of initialization status
-                    if let Ok(mut guard) = dlsym_mutex.lock() {
-                        *guard = true;
-                        dlsym_condvar.notify_all();
-                        tracing::trace!("CUDA thread notified all waiting dlsym calls");
-                    }
+                    let mut guard = match dlsym_mutex.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            tracing::warn!("CUDA dlsym sync mutex poisoned, recovering");
+                            poisoned.into_inner()
+                        }
+                    };
+                    *guard = true;
+                    dlsym_condvar.notify_all();
+                    tracing::trace!("CUDA thread notified all waiting dlsym calls");
                 }
             });
         });
@@ -333,14 +346,22 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                 let (dlsym_mutex, dlsym_condvar) = &NVML_DLSYM_SYNC;
 
                 loop {
-                    if let Ok(mut guard) = mutex.lock() {
-                        while !*guard {
-                            guard = condvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+                    let mut guard = match mutex.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            tracing::warn!("NVML symbol sync mutex poisoned, recovering");
+                            poisoned.into_inner()
                         }
-                        // reset notification state
-                        *guard = false;
-                        tracing::debug!("NVML thread received symbol notification, waking up");
+                    };
+                    while !*guard {
+                        guard = condvar.wait(guard).unwrap_or_else(|e| {
+                            tracing::warn!("NVML condvar wait failed, recovering from poison");
+                            e.into_inner()
+                        });
                     }
+                    // reset notification state
+                    *guard = false;
+                    tracing::debug!("NVML thread received symbol notification, waking up");
 
                     tracing::debug!("NVML symbol detected, attempting to initialize NVML hooks");
 
@@ -370,11 +391,16 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                     }
 
                     // Always notify waiting dlsym calls regardless of initialization status
-                    if let Ok(mut guard) = dlsym_mutex.lock() {
-                        *guard = true;
-                        dlsym_condvar.notify_all();
-                        tracing::trace!("NVML thread notified all waiting dlsym calls");
-                    }
+                    let mut guard = match dlsym_mutex.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            tracing::warn!("NVML dlsym sync mutex poisoned, recovering");
+                            poisoned.into_inner()
+                        }
+                    };
+                    *guard = true;
+                    dlsym_condvar.notify_all();
+                    tracing::trace!("NVML thread notified all waiting dlsym calls");
                 }
             });
         });
@@ -452,19 +478,29 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     if should_notify {
         if may_be_cuda && !cuda_ready {
             let (mutex, condvar) = &CUDA_SYMBOL_SYNC;
-            if let Ok(mut guard) = mutex.lock() {
-                *guard = true;
-                condvar.notify_all();
-            }
+            let mut guard = match mutex.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("CUDA symbol sync mutex poisoned in dlsym, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            *guard = true;
+            condvar.notify_all();
             tracing::debug!("Notified: detected CUDA symbol, hooks not ready yet");
         }
 
         if may_be_nvml && !nvml_ready {
             let (mutex, condvar) = &NVML_SYMBOL_SYNC;
-            if let Ok(mut guard) = mutex.lock() {
-                *guard = true;
-                condvar.notify_all();
-            }
+            let mut guard = match mutex.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("NVML symbol sync mutex poisoned in dlsym, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            *guard = true;
+            condvar.notify_all();
             tracing::debug!("Notified: detected NVML symbol, hooks not ready yet");
         }
 
@@ -472,9 +508,17 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         if !IN_HOOK_INITIALIZATION.with(|flag| flag.get()) {
             // Wait for corresponding hook initialization thread based on symbol type
             if may_be_cuda && !cuda_ready {
-                tracing::debug!("Starting CUDA dlsym wait for symbol: {}", symbol_str);
-                let (dlsym_mutex, dlsym_condvar) = &CUDA_DLSYM_SYNC;
-                if let Ok(mut guard) = dlsym_mutex.lock() {
+                // Check again after notification to avoid race condition
+                if !CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+                    tracing::debug!("Starting CUDA dlsym wait for symbol: {}", symbol_str);
+                    let (dlsym_mutex, dlsym_condvar) = &CUDA_DLSYM_SYNC;
+                    let mut guard = match dlsym_mutex.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            tracing::warn!("CUDA dlsym sync mutex poisoned in dlsym wait, recovering");
+                            poisoned.into_inner()
+                        }
+                    };
                     loop {
                         if *guard || CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
                             // Reset the flag for next time and exit
@@ -510,9 +554,17 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
             }
 
             if may_be_nvml && !nvml_ready {
-                tracing::debug!("Starting NVML dlsym wait for symbol: {}", symbol_str);
-                let (dlsym_mutex, dlsym_condvar) = &NVML_DLSYM_SYNC;
-                if let Ok(mut guard) = dlsym_mutex.lock() {
+                // Check again after notification to avoid race condition
+                if !NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+                    tracing::debug!("Starting NVML dlsym wait for symbol: {}", symbol_str);
+                    let (dlsym_mutex, dlsym_condvar) = &NVML_DLSYM_SYNC;
+                    let mut guard = match dlsym_mutex.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            tracing::warn!("NVML dlsym sync mutex poisoned in dlsym wait, recovering");
+                            poisoned.into_inner()
+                        }
+                    };
                     loop {
                         if *guard || NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
                             // Reset the flag for next time and exit
@@ -549,7 +601,7 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         }
     }
 
-    return FN_DLSYM(handle, symbol);
+    FN_DLSYM(handle, symbol)
 }
 
 enum TrapImpl {
