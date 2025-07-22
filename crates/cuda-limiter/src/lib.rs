@@ -203,6 +203,12 @@ fn init_cuda_hooks(enable_cuda_hooks: bool) -> bool {
         return true;
     }
 
+    // Early return if CUDA hooks are already initialized to prevent redundant initialization
+    if CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+        tracing::debug!("CUDA hooks already initialized, skipping re-initialization on thread '{}'", thread_name);
+        return true;
+    }
+
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
 
@@ -269,6 +275,12 @@ fn init_nvml_hooks(enable_nvml_hooks: bool) -> bool {
 
     init_ngpu_library();
     if !enable_nvml_hooks {
+        return true;
+    }
+
+    // Early return if NVML hooks are already initialized to prevent redundant initialization
+    if NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+        tracing::debug!("NVML hooks already initialized, skipping re-initialization");
         return true;
     }
 
