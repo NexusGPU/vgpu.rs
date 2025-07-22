@@ -196,6 +196,7 @@ fn init_cuda_hooks(enable_cuda_hooks: bool) -> bool {
             detour::mem::enable_hooks(&mut hook_manager);
         }
         CUDA_HOOKS_INITIALIZED.store(true, Ordering::Release);
+        tracing::debug!("CUDA_HOOKS_INITIALIZED flag set to true");
         return true;
     }
     false
@@ -231,6 +232,7 @@ fn init_nvml_hooks(enable_nvml_hooks: bool) -> bool {
         }
 
         NVML_HOOKS_INITIALIZED.store(true, Ordering::Release);
+        tracing::debug!("NVML_HOOKS_INITIALIZED flag set to true");
         return true;
     }
     false
@@ -261,20 +263,12 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
         tracing::debug!("Entry point NVML hooks initialization result: {nvml_result}");
     }
 
-    static DLSYM_HOOK_ONCE: Once = Once::new();
-    DLSYM_HOOK_ONCE.call_once(|| unsafe {
-        replace_symbol!(
-            &mut hook_manager,
-            None,
-            "dlsym",
-            dlsym_detour,
-            FnDlsym,
-            FN_DLSYM
-        );
-    });
-
+    // Create initialization threads BEFORE installing dlsym hook
+    // to avoid race condition where dlsym is called before threads exist
+    
     // CUDA initialization thread
     if enable_cuda_hooks {
+        tracing::debug!("Creating CUDA initialization thread");
         std::thread::spawn(move || {
             let (mutex, condvar) = &CUDA_SYMBOL_SYNC;
             let (dlsym_mutex, dlsym_condvar) = &CUDA_DLSYM_SYNC;
@@ -344,8 +338,9 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
         });
     }
 
-    // NVML initialization thread
+    // NVML initialization thread  
     if enable_nvml_hooks {
+        tracing::debug!("Creating NVML initialization thread");
         std::thread::spawn(move || {
             let (mutex, condvar) = &NVML_SYMBOL_SYNC;
             let (dlsym_mutex, dlsym_condvar) = &NVML_DLSYM_SYNC;
@@ -414,6 +409,22 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
             }
         });
     }
+
+    // Install dlsym hook AFTER all initialization threads are created
+    // to prevent race conditions
+    static DLSYM_HOOK_ONCE: Once = Once::new();
+    DLSYM_HOOK_ONCE.call_once(|| unsafe {
+        replace_symbol!(
+            &mut hook_manager,
+            None,
+            "dlsym",
+            dlsym_detour,
+            FnDlsym,
+            FN_DLSYM
+        );
+    });
+    
+    tracing::debug!("All initialization threads created, dlsym hook installed");
 }
 
 thread_local! {
@@ -459,6 +470,8 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     let cuda_ready = CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
     let nvml_ready = NVML_HOOKS_INITIALIZED.load(Ordering::Acquire);
 
+    tracing::trace!("dlsym for {}: cuda_ready={}, nvml_ready={}", symbol_str, cuda_ready, nvml_ready);
+
     let should_notify = (may_be_cuda && !cuda_ready) || (may_be_nvml && !nvml_ready);
 
     if should_notify {
@@ -484,6 +497,7 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         if !IN_HOOK_INITIALIZATION.with(|flag| flag.get()) {
             // Wait for corresponding hook initialization thread based on symbol type
             if may_be_cuda && !cuda_ready {
+                tracing::debug!("Starting CUDA dlsym wait for symbol: {}", symbol_str);
                 let (dlsym_mutex, dlsym_condvar) = &CUDA_DLSYM_SYNC;
                 if let Ok(mut guard) = dlsym_mutex.lock() {
                     loop {
@@ -521,6 +535,7 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
             }
 
             if may_be_nvml && !nvml_ready {
+                tracing::debug!("Starting NVML dlsym wait for symbol: {}", symbol_str);
                 let (dlsym_mutex, dlsym_condvar) = &NVML_DLSYM_SYNC;
                 if let Ok(mut guard) = dlsym_mutex.lock() {
                     loop {
