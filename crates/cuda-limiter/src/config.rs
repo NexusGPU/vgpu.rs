@@ -67,6 +67,9 @@ fn fetch_device_configs_from_hypervisor(
 
     tracing::debug!("Fetching pod information from: {}", url);
 
+    // Record request start time
+    let request_start = std::time::Instant::now();
+
     // Make HTTP request with Bearer token and container_pid query parameter
     let pid_string = container_pid.to_string();
     let query_params: &[(&str, &str)] = &[
@@ -117,7 +120,10 @@ fn fetch_device_configs_from_hypervisor(
         DeviceLimit::default()
     };
 
-    tracing::info!("Successfully fetched device limit from hypervisor: {device_limit:?}",);
+    let request_duration = request_start.elapsed();
+    tracing::info!(
+        "Successfully fetched device limit from hypervisor: {device_limit:?}, request_time: {request_duration:?}",
+    );
 
     Ok(DeviceConfigResult {
         device_limit,

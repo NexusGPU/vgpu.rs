@@ -30,10 +30,11 @@ mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
 static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
-static SYMBOL_CONDVAR: Condvar = Condvar::new();
-static SYMBOL_MUTEX: Mutex<bool> = Mutex::new(false);
-static DLSYM_CONDVAR: Condvar = Condvar::new();
-static DLSYM_MUTEX: Mutex<bool> = Mutex::new(false);
+// Synchronization pairs for CUDA and NVML symbol detection and hook initialization
+static CUDA_SYMBOL_SYNC: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+static NVML_SYMBOL_SYNC: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+static CUDA_DLSYM_SYNC: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+static NVML_DLSYM_SYNC: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -270,58 +271,81 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
         );
     });
 
-    // wait for CUDA/NVML symbols to be detected before initializing hooks, support retry until all hooks are successfully initialized
-    std::thread::spawn(move || {
-        loop {
-            if let Ok(mut guard) = SYMBOL_MUTEX.lock() {
-                while !*guard {
-                    guard = SYMBOL_CONDVAR
-                        .wait(guard)
-                        .unwrap_or_else(|e| e.into_inner());
+    // spawn separate threads for CUDA and NVML hook initialization
+
+    // CUDA initialization thread
+    if enable_cuda_hooks {
+        std::thread::spawn(move || {
+            let (mutex, condvar) = &CUDA_SYMBOL_SYNC;
+            let (dlsym_mutex, dlsym_condvar) = &CUDA_DLSYM_SYNC;
+
+            loop {
+                if let Ok(mut guard) = mutex.lock() {
+                    while !*guard {
+                        guard = condvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+                    }
+                    // reset notification state
+                    *guard = false;
                 }
 
-                // reset notification state
-                *guard = false;
-            }
+                tracing::debug!("CUDA symbol detected, attempting to initialize CUDA hooks");
 
-            tracing::debug!("Symbol detected, attempting to initialize hooks");
+                if !CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+                    if init_cuda_hooks(true) {
+                        tracing::debug!("CUDA hooks initialized successfully");
 
-            // try to initialize CUDA hooks
-            if enable_cuda_hooks && !CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-                if init_cuda_hooks(enable_cuda_hooks) {
-                    tracing::debug!("CUDA hooks initialized successfully");
+                        // notify waiting dlsym calls
+                        if let Ok(mut guard) = dlsym_mutex.lock() {
+                            *guard = true;
+                            dlsym_condvar.notify_all();
+                        }
+                        break;
+                    } else {
+                        tracing::debug!("CUDA hooks initialization failed, will retry");
+                    }
                 } else {
-                    tracing::debug!("CUDA hooks initialization failed, will retry");
+                    break;
                 }
             }
+        });
+    }
 
-            // try to initialize NVML hooks
-            if enable_nvml_hooks && !NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-                if init_nvml_hooks(enable_nvml_hooks) {
-                    tracing::debug!("NVML hooks initialized successfully");
+    // NVML initialization thread
+    if enable_nvml_hooks {
+        std::thread::spawn(move || {
+            let (mutex, condvar) = &NVML_SYMBOL_SYNC;
+            let (dlsym_mutex, dlsym_condvar) = &NVML_DLSYM_SYNC;
+
+            loop {
+                if let Ok(mut guard) = mutex.lock() {
+                    while !*guard {
+                        guard = condvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+                    }
+                    // reset notification state
+                    *guard = false;
+                }
+
+                tracing::debug!("NVML symbol detected, attempting to initialize NVML hooks");
+
+                if !NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+                    if init_nvml_hooks(true) {
+                        tracing::debug!("NVML hooks initialized successfully");
+
+                        // notify waiting dlsym calls
+                        if let Ok(mut guard) = dlsym_mutex.lock() {
+                            *guard = true;
+                            dlsym_condvar.notify_all();
+                        }
+                        break;
+                    } else {
+                        tracing::debug!("NVML hooks initialization failed, will retry");
+                    }
                 } else {
-                    tracing::debug!("NVML hooks initialization failed, will retry");
+                    break;
                 }
             }
-
-            // check if all hooks are initialized
-            let cuda_done = !enable_cuda_hooks || CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
-            let nvml_done = !enable_nvml_hooks || NVML_HOOKS_INITIALIZED.load(Ordering::Acquire);
-
-            // notify all waiting dlsym calls, let them know that they don't need to wait anymore
-            if let Ok(mut guard) = DLSYM_MUTEX.lock() {
-                *guard = true;
-                DLSYM_CONDVAR.notify_all();
-            }
-
-            if cuda_done && nvml_done {
-                tracing::debug!("All required hooks initialized successfully, stopping retry loop");
-                break;
-            } else {
-                tracing::debug!("Not all hooks ready yet, continuing to wait for notifications");
-            }
-        }
-    });
+        });
+    }
 }
 
 thread_local! {
@@ -370,62 +394,97 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     let should_notify = (may_be_cuda && !cuda_ready) || (may_be_nvml && !nvml_ready);
 
     if should_notify {
-        if let Ok(mut guard) = SYMBOL_MUTEX.lock() {
-            *guard = true;
-            SYMBOL_CONDVAR.notify_all();
+        if may_be_cuda && !cuda_ready {
+            let (mutex, condvar) = &CUDA_SYMBOL_SYNC;
+            if let Ok(mut guard) = mutex.lock() {
+                *guard = true;
+                condvar.notify_all();
+            }
+            tracing::debug!("Notified: detected CUDA symbol, hooks not ready yet");
         }
-        tracing::debug!(
-            "Notified: detected {} symbol, hooks not ready yet",
-            if may_be_cuda { "CUDA" } else { "NVML" }
-        );
+
+        if may_be_nvml && !nvml_ready {
+            let (mutex, condvar) = &NVML_SYMBOL_SYNC;
+            if let Ok(mut guard) = mutex.lock() {
+                *guard = true;
+                condvar.notify_all();
+            }
+            tracing::debug!("Notified: detected NVML symbol, hooks not ready yet");
+        }
 
         // only wait if not in hook initialization
-        if !IN_HOOK_INITIALIZATION.with(|flag| flag.get())
-            && (!CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire)
-                || !NVML_HOOKS_INITIALIZED.load(Ordering::Acquire))
-        {
-            // Wait for from hook initialization thread
-            if let Ok(mut guard) = DLSYM_MUTEX.lock() {
-                loop {
-                    if *guard {
-                        // Reset the flag for next time and exit
-                        *guard = false;
-                        break;
-                    }
-
-                    match DLSYM_CONDVAR.wait_timeout(guard, Duration::from_millis(1000)) {
-                        Ok((new_guard, timeout_result)) => {
-                            if timeout_result.timed_out() {
-                                tracing::warn!(
-                                    "dlsym wait timed out for symbol: {}, continuing",
-                                    symbol_str
-                                );
-                                break;
-                            }
-                            guard = new_guard;
+        if !IN_HOOK_INITIALIZATION.with(|flag| flag.get()) {
+            // Wait for corresponding hook initialization thread based on symbol type
+            if may_be_cuda && !cuda_ready {
+                let (dlsym_mutex, dlsym_condvar) = &CUDA_DLSYM_SYNC;
+                if let Ok(mut guard) = dlsym_mutex.lock() {
+                    loop {
+                        if *guard || CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+                            // Reset the flag for next time and exit
+                            *guard = false;
+                            break;
                         }
-                        Err(poisoned) => {
-                            let (new_guard, timeout_result) = poisoned.into_inner();
-                            if timeout_result.timed_out() {
-                                tracing::warn!(
-                                    "dlsym wait timed out (poisoned) for symbol: {}, continuing",
-                                    symbol_str
-                                );
-                                break;
+
+                        match dlsym_condvar.wait_timeout(guard, Duration::from_millis(1000)) {
+                            Ok((new_guard, timeout_result)) => {
+                                if timeout_result.timed_out() {
+                                    tracing::warn!(
+                                        "CUDA dlsym wait timed out for symbol: {}, continuing",
+                                        symbol_str
+                                    );
+                                    break;
+                                }
+                                guard = new_guard;
                             }
-                            guard = new_guard;
+                            Err(poisoned) => {
+                                let (new_guard, timeout_result) = poisoned.into_inner();
+                                if timeout_result.timed_out() {
+                                    tracing::warn!(
+                                        "CUDA dlsym wait timed out (poisoned) for symbol: {}, continuing",
+                                        symbol_str
+                                    );
+                                    break;
+                                }
+                                guard = new_guard;
+                            }
                         }
                     }
+                }
+            }
 
-                    if CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire)
-                        && NVML_HOOKS_INITIALIZED.load(Ordering::Acquire)
-                    {
-                        tracing::debug!(
-                            "All required hooks initialized successfully, stopping retry loop"
-                        );
-                        *guard = true;
-                        DLSYM_CONDVAR.notify_all();
-                        break;
+            if may_be_nvml && !nvml_ready {
+                let (dlsym_mutex, dlsym_condvar) = &NVML_DLSYM_SYNC;
+                if let Ok(mut guard) = dlsym_mutex.lock() {
+                    loop {
+                        if *guard || NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+                            // Reset the flag for next time and exit
+                            *guard = false;
+                            break;
+                        }
+
+                        match dlsym_condvar.wait_timeout(guard, Duration::from_millis(1000)) {
+                            Ok((new_guard, timeout_result)) => {
+                                if timeout_result.timed_out() {
+                                    tracing::warn!(
+                                        "NVML dlsym wait timed out for symbol: {}, continuing",
+                                        symbol_str
+                                    );
+                                    break;
+                                }
+                                guard = new_guard;
+                            }
+                            Err(poisoned) => {
+                                let (new_guard, timeout_result) = poisoned.into_inner();
+                                if timeout_result.timed_out() {
+                                    tracing::warn!(
+                                        "NVML dlsym wait timed out (poisoned) for symbol: {}, continuing",
+                                        symbol_str
+                                    );
+                                    break;
+                                }
+                                guard = new_guard;
+                            }
+                        }
                     }
                 }
             }
