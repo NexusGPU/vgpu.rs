@@ -6,11 +6,9 @@ use std::ffi::CStr;
 use std::ffi::OsStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::Once;
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use ctor::ctor;
 use limiter::Limiter;
@@ -30,17 +28,9 @@ mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
 static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
-// Synchronization pairs for CUDA and NVML symbol detection and hook initialization
-static CUDA_SYMBOL_SYNC: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
-static NVML_SYMBOL_SYNC: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
-static CUDA_DLSYM_SYNC: (Mutex<u32>, Condvar) = (Mutex::new(0), Condvar::new());
-static NVML_DLSYM_SYNC: (Mutex<u32>, Condvar) = (Mutex::new(0), Condvar::new());
 static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
-static IN_HOOK_INITIALIZATION_GLOBAL: AtomicBool = AtomicBool::new(false);
-// Atomic counter to track the total number of ongoing hook initializations
-// This provides cross-thread protection even when Frida operates on different threads
-static HOOK_INITIALIZATION_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static HOOKS_ENABLED: (AtomicBool, AtomicBool) = (AtomicBool::new(false), AtomicBool::new(false));
 
 #[ctor]
 unsafe fn entry_point() {
@@ -50,7 +40,12 @@ unsafe fn entry_point() {
     tracing::info!(
         "enable_nvml_hooks: {enable_nvml_hooks}, enable_cuda_hooks: {enable_cuda_hooks}"
     );
-    init_hooks(enable_nvml_hooks, enable_cuda_hooks);
+    
+    // Store the enabled state
+    HOOKS_ENABLED.0.store(enable_nvml_hooks, Ordering::Release);
+    HOOKS_ENABLED.1.store(enable_cuda_hooks, Ordering::Release);
+    
+    init_hooks();
 }
 
 fn are_hooks_enabled() -> (bool, bool) {
@@ -169,365 +164,98 @@ fn init_ngpu_library() {
     });
 }
 
-fn init_cuda_hooks(enable_cuda_hooks: bool) -> bool {
-    let current_thread = std::thread::current();
-    let thread_name = current_thread.name().unwrap_or("unnamed");
-    let thread_id = current_thread.id();
-    tracing::debug!("init_cuda_hooks called on thread '{}' (id: {:?})", thread_name, thread_id);
-    
-    IN_HOOK_INITIALIZATION.with(|flag| flag.set(true));
-    IN_HOOK_INITIALIZATION_GLOBAL.store(true, Ordering::Release);
-    let _count = HOOK_INITIALIZATION_COUNT.fetch_add(1, Ordering::SeqCst);
-    
-    tracing::debug!("Set hook initialization flags (local=true, global=true, count={}) on thread '{}'", _count + 1, thread_name);
-
-    // Ensure we reset all flags when exiting, even in case of panic
-    struct ResetGuard {
-        thread_name: String,
-    }
-    impl Drop for ResetGuard {
-        fn drop(&mut self) {
-            IN_HOOK_INITIALIZATION.with(|flag| flag.set(false));
-            IN_HOOK_INITIALIZATION_GLOBAL.store(false, Ordering::Release);
-            let count = HOOK_INITIALIZATION_COUNT.fetch_sub(1, Ordering::SeqCst);
-            tracing::debug!("Reset hook initialization flags (count={}) on thread '{}'", count - 1, self.thread_name);
-        }
-    }
-    let _guard = ResetGuard {
-        thread_name: thread_name.to_string(),
-    };
-
-    init_ngpu_library();
-
-    if !enable_cuda_hooks {
-        return true;
-    }
-
-    // Early return if CUDA hooks are already initialized to prevent redundant initialization
+fn try_install_cuda_hooks() -> bool {
     if CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-        tracing::debug!("CUDA hooks already initialized, skipping re-initialization on thread '{}'", thread_name);
         return true;
+    }
+
+    if !HOOKS_ENABLED.1.load(Ordering::Acquire) {
+        return false;
     }
 
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
 
-    if hook_manager
-        .module_names
-        .iter()
-        .any(|m| m.starts_with("libcuda."))
-    {
-        tracing::debug!("Starting CUDA hooks installation...");
-        
-        // Use a timeout mechanism to prevent infinite hanging
-        let start_time = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(5); // 5 second timeout
-        
-        let hook_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tracing::debug!("Starting detour::gpu::enable_hooks");
-            unsafe {
-                detour::gpu::enable_hooks(&mut hook_manager);
-            }
-            tracing::debug!("Completed detour::gpu::enable_hooks, starting detour::mem::enable_hooks");
-            unsafe {
-                detour::mem::enable_hooks(&mut hook_manager);
-            }
-            tracing::debug!("Completed detour::mem::enable_hooks");
-        }));
-        
-        match hook_result {
-            Ok(_) => {
-                let elapsed = start_time.elapsed();
-                tracing::debug!("CUDA hooks installation completed in {:?}", elapsed);
-                
-                if elapsed > timeout {
-                    tracing::warn!("CUDA hooks installation took longer than expected: {:?}", elapsed);
-                    // Still set to true, but with a warning
-                }
-                
-                CUDA_HOOKS_INITIALIZED.store(true, Ordering::Release);
-                tracing::debug!("CUDA_HOOKS_INITIALIZED flag set to true with Ordering::Release");
-                return true;
-            }
-            Err(e) => {
-                tracing::error!("CUDA hooks installation panicked: {:?}", e);
-                // Don't set CUDA_HOOKS_INITIALIZED to true if installation failed
-                return false;
-            }
+    if !hook_manager.module_names.iter().any(|m| m.starts_with("libcuda.")) {
+        return false;
+    }
+
+    tracing::debug!("Installing CUDA hooks...");
+    
+    let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        detour::gpu::enable_hooks(&mut hook_manager);
+        detour::mem::enable_hooks(&mut hook_manager);
+    }));
+
+    match install_result {
+        Ok(_) => {
+            CUDA_HOOKS_INITIALIZED.store(true, Ordering::Release);
+            tracing::debug!("CUDA hooks installed successfully");
+            true
+        }
+        Err(e) => {
+            tracing::error!("CUDA hooks installation panicked: {:?}", e);
+            false
         }
     }
-    false
 }
 
-fn init_nvml_hooks(enable_nvml_hooks: bool) -> bool {
-    IN_HOOK_INITIALIZATION.with(|flag| flag.set(true));
-    IN_HOOK_INITIALIZATION_GLOBAL.store(true, Ordering::Release);
-
-    // Ensure we reset the flag when exiting, even in case of panic
-    struct ResetGuard;
-    impl Drop for ResetGuard {
-        fn drop(&mut self) {
-            IN_HOOK_INITIALIZATION.with(|flag| flag.set(false));
-            IN_HOOK_INITIALIZATION_GLOBAL.store(false, Ordering::Release);
-        }
-    }
-    let _guard = ResetGuard;
-
-    init_ngpu_library();
-    if !enable_nvml_hooks {
-        return true;
-    }
-
-    // Early return if NVML hooks are already initialized to prevent redundant initialization
+fn try_install_nvml_hooks() -> bool {
     if NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-        tracing::debug!("NVML hooks already initialized, skipping re-initialization");
         return true;
     }
 
+    if !HOOKS_ENABLED.0.load(Ordering::Acquire) {
+        return false;
+    }
+
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
 
-    if hook_manager
-        .module_names
-        .iter()
-        .any(|m| m.starts_with("libnvidia-ml."))
-    {
-        tracing::debug!("Starting NVML hooks installation...");
-        
-        // Use a timeout mechanism to prevent infinite hanging
-        let start_time = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(5); // 5 second timeout
-        
-        let hook_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            unsafe {
-                detour::nvml::enable_hooks(&mut hook_manager);
-            }
-        }));
-        
-        match hook_result {
-            Ok(_) => {
-                let elapsed = start_time.elapsed();
-                tracing::debug!("NVML hooks installation completed in {:?}", elapsed);
-                
-                if elapsed > timeout {
-                    tracing::warn!("NVML hooks installation took longer than expected: {:?}", elapsed);
-                    // Still set to true, but with a warning
-                }
+    if !hook_manager.module_names.iter().any(|m| m.starts_with("libnvidia-ml.")) {
+        return false;
+    }
 
-                NVML_HOOKS_INITIALIZED.store(true, Ordering::Release);
-                tracing::debug!("NVML_HOOKS_INITIALIZED flag set to true with Ordering::Release");
-                return true;
-            }
-            Err(e) => {
-                tracing::error!("NVML hooks installation panicked: {:?}", e);
-                // Don't set NVML_HOOKS_INITIALIZED to true if installation failed
-                return false;
-            }
+    tracing::debug!("Installing NVML hooks...");
+    
+    let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        detour::nvml::enable_hooks(&mut hook_manager);
+    }));
+
+    match install_result {
+        Ok(_) => {
+            NVML_HOOKS_INITIALIZED.store(true, Ordering::Release);
+            tracing::debug!("NVML hooks installed successfully");
+            true
+        }
+        Err(e) => {
+            tracing::error!("NVML hooks installation panicked: {:?}", e);
+            false
         }
     }
-    false
 }
 
-fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
+fn init_hooks() {
+    init_ngpu_library();
+
+    // Try to install hooks immediately if libraries are already loaded
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
 
-    let has_libcuda = hook_manager
-        .module_names
-        .iter()
-        .any(|m| m.starts_with("libcuda."));
-
-    let has_libnvml = hook_manager
-        .module_names
-        .iter()
-        .any(|m| m.starts_with("libnvidia-ml."));
+    let has_libcuda = hook_manager.module_names.iter().any(|m| m.starts_with("libcuda."));
+    let has_libnvml = hook_manager.module_names.iter().any(|m| m.starts_with("libnvidia-ml."));
 
     tracing::debug!("has_libcuda: {has_libcuda}, has_libnvml: {has_libnvml}");
+
     if has_libcuda {
-        let cuda_result = init_cuda_hooks(enable_cuda_hooks);
-        tracing::debug!("Entry point CUDA hooks initialization result: {cuda_result}");
+        try_install_cuda_hooks();
     }
 
     if has_libnvml {
-        let nvml_result = init_nvml_hooks(enable_nvml_hooks);
-        tracing::debug!("Entry point NVML hooks initialization result: {nvml_result}");
+        try_install_nvml_hooks();
     }
 
-    // Create initialization threads BEFORE installing dlsym hook
-    // to avoid race condition where dlsym is called before threads exist
-
-    // CUDA initialization thread - use static Once to ensure only one thread is created
-    if enable_cuda_hooks {
-        static CUDA_THREAD_ONCE: Once = Once::new();
-        CUDA_THREAD_ONCE.call_once(|| {
-            tracing::debug!("Creating CUDA initialization thread");
-            std::thread::spawn(move || {
-                let (mutex, condvar) = &CUDA_SYMBOL_SYNC;
-                let (dlsym_mutex, dlsym_condvar) = &CUDA_DLSYM_SYNC;
-
-                loop {
-                    let mut guard = match mutex.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => {
-                            tracing::warn!("CUDA symbol sync mutex poisoned, recovering");
-                            poisoned.into_inner()
-                        }
-                    };
-                    while !*guard {
-                        guard = condvar.wait(guard).unwrap_or_else(|e| {
-                            tracing::warn!("CUDA condvar wait failed, recovering from poison");
-                            e.into_inner()
-                        });
-                    }
-                    // reset notification state
-                    *guard = false;
-                    tracing::debug!("CUDA thread received symbol notification, waking up");
-
-                    tracing::debug!("CUDA symbol detected, attempting to initialize CUDA hooks");
-
-                    if !CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-                        // Force re-collection of module names in case library was loaded after startup
-                        let mut hook_manager = HookManager::default();
-                        hook_manager.collect_module_names();
-
-                        let has_libcuda = hook_manager
-                            .module_names
-                            .iter()
-                            .any(|m| m.starts_with("libcuda."));
-
-                        tracing::debug!("CUDA thread: has_libcuda = {has_libcuda}");
-
-                        let init_start = std::time::Instant::now();
-                        let init_result = if has_libcuda {
-                            init_cuda_hooks(true)
-                        } else {
-                            false
-                        };
-                        let init_duration = init_start.elapsed();
-                        
-                        if has_libcuda && init_result {
-                            tracing::debug!("CUDA hooks initialized successfully in thread (took {:?})", init_duration);
-                        } else if has_libcuda {
-                            tracing::warn!(
-                                "CUDA hooks initialization failed in thread (took {:?}), will retry",
-                                init_duration
-                            );
-                            // Even if initialization failed, we should still notify waiting threads
-                            // to prevent them from hanging forever
-                        } else {
-                            tracing::debug!(
-                                "CUDA library not yet loaded, will retry after next notification"
-                            );
-                        }
-                    } else {
-                        tracing::trace!("CUDA hooks already initialized, skipping initialization");
-                    }
-
-                    // Always notify waiting dlsym calls regardless of initialization status
-                    let mut guard = match dlsym_mutex.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => {
-                            tracing::warn!("CUDA dlsym sync mutex poisoned, recovering");
-                            poisoned.into_inner()
-                        }
-                    };
-                    let old_guard_value = *guard;
-                    *guard = guard.saturating_add(1);
-                    let new_guard_value = *guard;
-                    dlsym_condvar.notify_all();
-                    tracing::debug!("CUDA thread notified all waiting dlsym calls: guard {} -> {}", old_guard_value, new_guard_value);
-                }
-            });
-        });
-    }
-
-    // NVML initialization thread - use static Once to ensure only one thread is created
-    if enable_nvml_hooks {
-        static NVML_THREAD_ONCE: Once = Once::new();
-        NVML_THREAD_ONCE.call_once(|| {
-            tracing::debug!("Creating NVML initialization thread");
-            std::thread::spawn(move || {
-                let (mutex, condvar) = &NVML_SYMBOL_SYNC;
-                let (dlsym_mutex, dlsym_condvar) = &NVML_DLSYM_SYNC;
-
-                loop {
-                    let mut guard = match mutex.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => {
-                            tracing::warn!("NVML symbol sync mutex poisoned, recovering");
-                            poisoned.into_inner()
-                        }
-                    };
-                    while !*guard {
-                        guard = condvar.wait(guard).unwrap_or_else(|e| {
-                            tracing::warn!("NVML condvar wait failed, recovering from poison");
-                            e.into_inner()
-                        });
-                    }
-                    // reset notification state
-                    *guard = false;
-                    tracing::debug!("NVML thread received symbol notification, waking up");
-
-                    tracing::debug!("NVML symbol detected, attempting to initialize NVML hooks");
-
-                    if !NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-                        // Force re-collection of module names in case library was loaded after startup
-                        let mut hook_manager = HookManager::default();
-                        hook_manager.collect_module_names();
-
-                        let has_libnvml = hook_manager
-                            .module_names
-                            .iter()
-                            .any(|m| m.starts_with("libnvidia-ml."));
-
-                        tracing::debug!("NVML thread: has_libnvml = {has_libnvml}");
-
-                        let init_start = std::time::Instant::now();
-                        let init_result = if has_libnvml {
-                            init_nvml_hooks(true)
-                        } else {
-                            false
-                        };
-                        let init_duration = init_start.elapsed();
-                        
-                        if has_libnvml && init_result {
-                            tracing::debug!("NVML hooks initialized successfully in thread (took {:?})", init_duration);
-                        } else if has_libnvml {
-                            tracing::warn!(
-                                "NVML hooks initialization failed in thread (took {:?}), will retry",
-                                init_duration
-                            );
-                            // Even if initialization failed, we should still notify waiting threads
-                            // to prevent them from hanging forever
-                        } else {
-                            tracing::debug!(
-                                "NVML library not yet loaded, will retry after next notification"
-                            );
-                        }
-                    } else {
-                        tracing::trace!("NVML hooks already initialized, skipping initialization");
-                    }
-
-                    // Always notify waiting dlsym calls regardless of initialization status
-                    let mut guard = match dlsym_mutex.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => {
-                            tracing::warn!("NVML dlsym sync mutex poisoned, recovering");
-                            poisoned.into_inner()
-                        }
-                    };
-                    let old_guard_value = *guard;
-                    *guard = guard.saturating_add(1);
-                    let new_guard_value = *guard;
-                    dlsym_condvar.notify_all();
-                    tracing::debug!("NVML thread notified all waiting dlsym calls: guard {} -> {}", old_guard_value, new_guard_value);
-                }
-            });
-        });
-    }
-
-    // Install dlsym hook AFTER all initialization threads are created
-    // to prevent race conditions
+    // Install dlsym hook to catch dynamic library loading
     static DLSYM_HOOK_ONCE: Once = Once::new();
     DLSYM_HOOK_ONCE.call_once(|| unsafe {
         replace_symbol!(
@@ -539,13 +267,11 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
             FN_DLSYM
         );
     });
-
-    tracing::debug!("All initialization threads created, dlsym hook installed");
+    tracing::debug!("Hook initialization completed");
 }
 
 thread_local! {
     static IN_DLSYM_DETOUR: Cell<bool> = const { Cell::new(false) };
-    static IN_HOOK_INITIALIZATION: Cell<bool> = const { Cell::new(false) };
 }
 
 #[hook_fn]
@@ -553,6 +279,7 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     if symbol.is_null() {
         return FN_DLSYM(handle, symbol);
     }
+    
     let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
     let may_be_cuda = symbol_str.starts_with("cu");
     let may_be_nvml = symbol_str.starts_with("nvml");
@@ -561,23 +288,14 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         return FN_DLSYM(handle, symbol);
     }
 
-    // Check if we're already in dlsym or in hook initialization to prevent recursion
-    let in_dlsym = IN_DLSYM_DETOUR.with(|flag| flag.get());
-    let in_hook_init_local = IN_HOOK_INITIALIZATION.with(|flag| flag.get());
-    let in_hook_init_global = IN_HOOK_INITIALIZATION_GLOBAL.load(Ordering::Acquire);
-    let hook_init_count = HOOK_INITIALIZATION_COUNT.load(Ordering::Acquire);
-    
-    if in_dlsym || in_hook_init_local || in_hook_init_global || hook_init_count > 0 {
-        tracing::debug!(
-            "dlsym recursion or hook initialization detected for symbol '{}' (dlsym={}, local_init={}, global_init={}, count={}), calling original function directly",
-            symbol_str, in_dlsym, in_hook_init_local, in_hook_init_global, hook_init_count
-        );
+    // Prevent recursion
+    if IN_DLSYM_DETOUR.with(|flag| flag.get()) {
         return FN_DLSYM(handle, symbol);
     }
-    // Set the flag to indicate we're in dlsym
+
     IN_DLSYM_DETOUR.with(|flag| flag.set(true));
 
-    // Ensure we reset the flag when exiting, even in case of panic
+    // Ensure we reset the flag when exiting
     struct ResetGuard;
     impl Drop for ResetGuard {
         fn drop(&mut self) {
@@ -586,167 +304,15 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     }
     let _guard = ResetGuard;
 
-    let current_thread = std::thread::current();
-    let thread_name = current_thread.name().unwrap_or("unnamed");
-    let thread_id = current_thread.id();
-    tracing::debug!("dlsym: {} on thread '{}' (id: {:?})", symbol_str, thread_name, thread_id);
+    tracing::debug!("dlsym: {}", symbol_str);
 
-    // check if the corresponding hooks have been initialized successfully
-    let cuda_ready = CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
-    let nvml_ready = NVML_HOOKS_INITIALIZED.load(Ordering::Acquire);
+    // Try to install hooks if not already done
+    if may_be_cuda && !CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+        try_install_cuda_hooks();
+    }
 
-    tracing::debug!(
-        "dlsym for {}: cuda_ready={}, nvml_ready={} (Ordering::Acquire)",
-        symbol_str,
-        cuda_ready,
-        nvml_ready
-    );
-
-    let should_notify = (may_be_cuda && !cuda_ready) || (may_be_nvml && !nvml_ready);
-
-    if should_notify {
-        if may_be_cuda && !cuda_ready {
-            let (mutex, condvar) = &CUDA_SYMBOL_SYNC;
-            let mut guard = match mutex.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    tracing::warn!("CUDA symbol sync mutex poisoned in dlsym, recovering");
-                    poisoned.into_inner()
-                }
-            };
-            *guard = true;
-            condvar.notify_all();
-            tracing::debug!("Notified: detected CUDA symbol, hooks not ready yet");
-        }
-
-        if may_be_nvml && !nvml_ready {
-            let (mutex, condvar) = &NVML_SYMBOL_SYNC;
-            let mut guard = match mutex.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    tracing::warn!("NVML symbol sync mutex poisoned in dlsym, recovering");
-                    poisoned.into_inner()
-                }
-            };
-            *guard = true;
-            condvar.notify_all();
-            tracing::debug!("Notified: detected NVML symbol, hooks not ready yet");
-        }
-
-        // only wait if not in hook initialization
-        if !IN_HOOK_INITIALIZATION.with(|flag| flag.get()) {
-            // Wait for corresponding hook initialization thread based on symbol type
-            if may_be_cuda && !cuda_ready {
-                // Check again after notification to avoid race condition  
-                let hooks_ready_before_wait = CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
-                if !hooks_ready_before_wait {
-                    tracing::debug!("Starting CUDA dlsym wait for symbol: {} (hooks_ready={})", symbol_str, hooks_ready_before_wait);
-                    let (dlsym_mutex, dlsym_condvar) = &CUDA_DLSYM_SYNC;
-                    let mut guard = match dlsym_mutex.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => {
-                            tracing::warn!("CUDA dlsym sync mutex poisoned in dlsym wait, recovering");
-                            poisoned.into_inner()
-                        }
-                    };
-                    loop {
-                        let cuda_hooks_ready = CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
-                        tracing::debug!(
-                            "CUDA dlsym wait loop: symbol={}, guard={}, hooks_ready={}", 
-                            symbol_str, *guard, cuda_hooks_ready
-                        );
-                        
-                        if *guard > 0 || cuda_hooks_ready {
-                            if *guard > 0 {
-                                *guard = guard.saturating_sub(1);
-                                tracing::debug!("CUDA dlsym wait exit via guard count: symbol={}, remaining_guard={}", symbol_str, *guard);
-                            } else {
-                                tracing::debug!("CUDA dlsym wait exit via hooks_ready: symbol={}", symbol_str);
-                            }
-                            break;
-                        }
-
-                        tracing::debug!("CUDA dlsym wait starting timeout: symbol={}", symbol_str);
-                        match dlsym_condvar.wait_timeout(guard, Duration::from_millis(1000)) {
-                            Ok((new_guard, timeout_result)) => {
-                                if timeout_result.timed_out() {
-                                    let final_hooks_ready = CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
-                                    tracing::warn!(
-                                        "CUDA dlsym wait timed out for symbol: {}, final_guard={}, final_hooks_ready={}, continuing",
-                                        symbol_str, *new_guard, final_hooks_ready
-                                    );
-                                    guard = new_guard;
-                                    break;
-                                }
-                                guard = new_guard;
-                                tracing::debug!("CUDA dlsym wait woke up from notification: symbol={}, guard={}", symbol_str, *guard);
-                            }
-                            Err(poisoned) => {
-                                let (new_guard, timeout_result) = poisoned.into_inner();
-                                if timeout_result.timed_out() {
-                                    let final_hooks_ready = CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
-                                    tracing::warn!(
-                                        "CUDA dlsym wait timed out (poisoned) for symbol: {}, final_guard={}, final_hooks_ready={}, continuing",
-                                        symbol_str, *new_guard, final_hooks_ready
-                                    );
-                                    guard = new_guard;
-                                    break;
-                                }
-                                guard = new_guard;
-                                tracing::debug!("CUDA dlsym wait woke up from notification (poisoned): symbol={}, guard={}", symbol_str, *guard);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if may_be_nvml && !nvml_ready {
-                // Check again after notification to avoid race condition
-                if !NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-                    tracing::debug!("Starting NVML dlsym wait for symbol: {}", symbol_str);
-                    let (dlsym_mutex, dlsym_condvar) = &NVML_DLSYM_SYNC;
-                    let mut guard = match dlsym_mutex.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => {
-                            tracing::warn!("NVML dlsym sync mutex poisoned in dlsym wait, recovering");
-                            poisoned.into_inner()
-                        }
-                    };
-                    loop {
-                        if *guard > 0 || NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-                            if *guard > 0 {
-                                *guard = guard.saturating_sub(1);
-                            }
-                            break;
-                        }
-
-                        match dlsym_condvar.wait_timeout(guard, Duration::from_millis(1000)) {
-                            Ok((new_guard, timeout_result)) => {
-                                if timeout_result.timed_out() {
-                                    tracing::warn!(
-                                        "NVML dlsym wait timed out for symbol: {}, continuing",
-                                        symbol_str
-                                    );
-                                    break;
-                                }
-                                guard = new_guard;
-                            }
-                            Err(poisoned) => {
-                                let (new_guard, timeout_result) = poisoned.into_inner();
-                                if timeout_result.timed_out() {
-                                    tracing::warn!(
-                                        "NVML dlsym wait timed out (poisoned) for symbol: {}, continuing",
-                                        symbol_str
-                                    );
-                                    break;
-                                }
-                                guard = new_guard;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    if may_be_nvml && !NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+        try_install_nvml_hooks();
     }
 
     FN_DLSYM(handle, symbol)
