@@ -416,6 +416,15 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
                             guard = new_guard;
                         }
                     }
+
+                    if CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire)
+                        && NVML_HOOKS_INITIALIZED.load(Ordering::Acquire)
+                    {
+                        tracing::debug!("All required hooks initialized successfully, stopping retry loop");
+                        *guard = true;
+                        DLSYM_CONDVAR.notify_all();
+                        break;
+                    }
                 }
             }
         }
