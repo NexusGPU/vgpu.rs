@@ -33,8 +33,8 @@ static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
 // Synchronization pairs for CUDA and NVML symbol detection and hook initialization
 static CUDA_SYMBOL_SYNC: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 static NVML_SYMBOL_SYNC: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
-static CUDA_DLSYM_SYNC: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
-static NVML_DLSYM_SYNC: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+static CUDA_DLSYM_SYNC: (Mutex<u32>, Condvar) = (Mutex::new(0), Condvar::new());
+static NVML_DLSYM_SYNC: (Mutex<u32>, Condvar) = (Mutex::new(0), Condvar::new());
 static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -328,7 +328,7 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                             poisoned.into_inner()
                         }
                     };
-                    *guard = true;
+                    *guard = guard.saturating_add(1);
                     dlsym_condvar.notify_all();
                     tracing::trace!("CUDA thread notified all waiting dlsym calls");
                 }
@@ -398,7 +398,7 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                             poisoned.into_inner()
                         }
                     };
-                    *guard = true;
+                    *guard = guard.saturating_add(1);
                     dlsym_condvar.notify_all();
                     tracing::trace!("NVML thread notified all waiting dlsym calls");
                 }
@@ -520,9 +520,10 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
                         }
                     };
                     loop {
-                        if *guard || CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-                            // Reset the flag for next time and exit
-                            *guard = false;
+                        if *guard > 0 || CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+                            if *guard > 0 {
+                                *guard = guard.saturating_sub(1);
+                            }
                             break;
                         }
 
@@ -566,9 +567,10 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
                         }
                     };
                     loop {
-                        if *guard || NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-                            // Reset the flag for next time and exit
-                            *guard = false;
+                        if *guard > 0 || NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+                            if *guard > 0 {
+                                *guard = guard.saturating_sub(1);
+                            }
                             break;
                         }
 
