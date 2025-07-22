@@ -24,19 +24,31 @@ impl Hooker<'_> {
         symbol: &str,
         detour: *mut c_void,
     ) -> Result<NativePointer, Error> {
+        tracing::debug!("Starting hook_export for symbol: {}", symbol);
         let function = if let Some(module_name) = self.module {
+            tracing::debug!("Loading module {} for symbol {}", module_name, symbol);
             Module::load(&GUM, module_name).find_export_by_name(symbol)
         } else {
+            tracing::debug!("Finding global export for symbol {}", symbol);
             Module::find_global_export_by_name(symbol)
         }
         .ok_or_else(|| Error::NoSymbolName(Cow::Owned(symbol.to_string())))?;
-        self.interceptor
+        
+        tracing::debug!("Found function at {:p} for symbol {}, calling interceptor.replace", function.0, symbol);
+        let result = self.interceptor
             .replace(
                 function,
                 NativePointer(detour),
                 NativePointer(std::ptr::null_mut()),
             )
-            .map_err(Into::into)
+            .map_err(Into::into);
+        
+        match &result {
+            Ok(original) => tracing::debug!("Successfully hooked symbol {}, original at {:p}", symbol, original.0),
+            Err(e) => tracing::error!("Failed to hook symbol {}: {:?}", symbol, e),
+        }
+        
+        result
     }
 }
 
@@ -92,6 +104,7 @@ impl HookManager {
 impl Default for HookManager {
     fn default() -> Self {
         let mut interceptor = Interceptor::obtain(&GUM);
+        tracing::debug!("Starting interceptor transaction");
         interceptor.begin_transaction();
         Self {
             interceptor,
@@ -102,6 +115,7 @@ impl Default for HookManager {
 
 impl Drop for HookManager {
     fn drop(&mut self) {
+        tracing::debug!("Ending interceptor transaction");
         self.interceptor.end_transaction()
     }
 }

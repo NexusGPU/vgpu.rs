@@ -91,7 +91,7 @@ impl Limiter {
         for i in 0..gpu_uuids.len() {
             let ctx = CudaContext::new(i)?;
             let cu_uuid = ctx.uuid()?;
-            let cu_uuid = uuid_to_string_formatted(&cu_uuid.bytes);
+            let cu_uuid = uuid_to_string_formatted(unsafe { std::mem::transmute(&cu_uuid.bytes) });
 
             if gpu_uuids.contains(&cu_uuid) {
                 let device = nvml.device_by_uuid(cu_uuid.as_str())?;

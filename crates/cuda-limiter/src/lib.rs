@@ -38,6 +38,9 @@ static NVML_DLSYM_SYNC: (Mutex<u32>, Condvar) = (Mutex::new(0), Condvar::new());
 static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static IN_HOOK_INITIALIZATION_GLOBAL: AtomicBool = AtomicBool::new(false);
+// Atomic counter to track the total number of ongoing hook initializations
+// This provides cross-thread protection even when Frida operates on different threads
+static HOOK_INITIALIZATION_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 #[ctor]
 unsafe fn entry_point() {
@@ -167,18 +170,32 @@ fn init_ngpu_library() {
 }
 
 fn init_cuda_hooks(enable_cuda_hooks: bool) -> bool {
+    let current_thread = std::thread::current();
+    let thread_name = current_thread.name().unwrap_or("unnamed");
+    let thread_id = current_thread.id();
+    tracing::debug!("init_cuda_hooks called on thread '{}' (id: {:?})", thread_name, thread_id);
+    
     IN_HOOK_INITIALIZATION.with(|flag| flag.set(true));
     IN_HOOK_INITIALIZATION_GLOBAL.store(true, Ordering::Release);
+    let _count = HOOK_INITIALIZATION_COUNT.fetch_add(1, Ordering::SeqCst);
+    
+    tracing::debug!("Set hook initialization flags (local=true, global=true, count={}) on thread '{}'", _count + 1, thread_name);
 
-    // Ensure we reset the flag when exiting, even in case of panic
-    struct ResetGuard;
+    // Ensure we reset all flags when exiting, even in case of panic
+    struct ResetGuard {
+        thread_name: String,
+    }
     impl Drop for ResetGuard {
         fn drop(&mut self) {
             IN_HOOK_INITIALIZATION.with(|flag| flag.set(false));
             IN_HOOK_INITIALIZATION_GLOBAL.store(false, Ordering::Release);
+            let count = HOOK_INITIALIZATION_COUNT.fetch_sub(1, Ordering::SeqCst);
+            tracing::debug!("Reset hook initialization flags (count={}) on thread '{}'", count - 1, self.thread_name);
         }
     }
-    let _guard = ResetGuard;
+    let _guard = ResetGuard {
+        thread_name: thread_name.to_string(),
+    };
 
     init_ngpu_library();
 
@@ -201,10 +218,15 @@ fn init_cuda_hooks(enable_cuda_hooks: bool) -> bool {
         let timeout = std::time::Duration::from_secs(5); // 5 second timeout
         
         let hook_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::debug!("Starting detour::gpu::enable_hooks");
             unsafe {
                 detour::gpu::enable_hooks(&mut hook_manager);
+            }
+            tracing::debug!("Completed detour::gpu::enable_hooks, starting detour::mem::enable_hooks");
+            unsafe {
                 detour::mem::enable_hooks(&mut hook_manager);
             }
+            tracing::debug!("Completed detour::mem::enable_hooks");
         }));
         
         match hook_result {
@@ -531,11 +553,12 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     let in_dlsym = IN_DLSYM_DETOUR.with(|flag| flag.get());
     let in_hook_init_local = IN_HOOK_INITIALIZATION.with(|flag| flag.get());
     let in_hook_init_global = IN_HOOK_INITIALIZATION_GLOBAL.load(Ordering::Acquire);
+    let hook_init_count = HOOK_INITIALIZATION_COUNT.load(Ordering::Acquire);
     
-    if in_dlsym || in_hook_init_local || in_hook_init_global {
-        tracing::trace!(
-            "dlsym recursion or hook initialization detected (dlsym={}, local_init={}, global_init={}), calling original function directly",
-            in_dlsym, in_hook_init_local, in_hook_init_global
+    if in_dlsym || in_hook_init_local || in_hook_init_global || hook_init_count > 0 {
+        tracing::debug!(
+            "dlsym recursion or hook initialization detected for symbol '{}' (dlsym={}, local_init={}, global_init={}, count={}), calling original function directly",
+            symbol_str, in_dlsym, in_hook_init_local, in_hook_init_global, hook_init_count
         );
         return FN_DLSYM(handle, symbol);
     }
@@ -551,7 +574,10 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     }
     let _guard = ResetGuard;
 
-    tracing::trace!("dlsym: {symbol_str}");
+    let current_thread = std::thread::current();
+    let thread_name = current_thread.name().unwrap_or("unnamed");
+    let thread_id = current_thread.id();
+    tracing::debug!("dlsym: {} on thread '{}' (id: {:?})", symbol_str, thread_name, thread_id);
 
     // check if the corresponding hooks have been initialized successfully
     let cuda_ready = CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire);
