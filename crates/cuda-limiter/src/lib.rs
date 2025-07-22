@@ -301,43 +301,20 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
 
                     if has_libcuda && init_cuda_hooks(true) {
                         tracing::debug!("CUDA hooks initialized successfully in thread");
-
-                        // notify waiting dlsym calls
-                        if let Ok(mut guard) = dlsym_mutex.lock() {
-                            *guard = true;
-                            dlsym_condvar.notify_all();
-                        }
-                        break;
                     } else if has_libcuda {
                         tracing::warn!("CUDA hooks initialization failed in thread, will retry");
-
-                        // Always notify waiting dlsym calls even on failure
-                        // so they don't wait indefinitely
-                        if let Ok(mut guard) = dlsym_mutex.lock() {
-                            *guard = true;
-                            dlsym_condvar.notify_all();
-                        }
                     } else {
                         tracing::debug!(
                             "CUDA library not yet loaded, will retry after next notification"
                         );
+                    }
+                }
 
-                        // Notify waiting dlsym calls that library isn't loaded yet
-                        if let Ok(mut guard) = dlsym_mutex.lock() {
-                            *guard = true;
-                            dlsym_condvar.notify_all();
-                        }
-                    }
-                } else {
-                    // hooks are already initialized, notify waiting dlsym calls
-                    // but continue monitoring for potential re-initialization needs
-                    tracing::trace!("CUDA hooks already initialized, notifying waiting dlsym calls");
-                    if let Ok(mut guard) = dlsym_mutex.lock() {
-                        *guard = true;
-                        dlsym_condvar.notify_all();
-                    }
-                    // Exit the loop since CUDA hooks are already initialized
-                    break;
+                // Always notify waiting dlsym calls regardless of initialization status
+                if let Ok(mut guard) = dlsym_mutex.lock() {
+                    *guard = true;
+                    dlsym_condvar.notify_all();
+                    tracing::trace!("CUDA thread notified all waiting dlsym calls");
                 }
             }
             });
@@ -379,43 +356,20 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
 
                     if has_libnvml && init_nvml_hooks(true) {
                         tracing::debug!("NVML hooks initialized successfully in thread");
-
-                        // notify waiting dlsym calls
-                        if let Ok(mut guard) = dlsym_mutex.lock() {
-                            *guard = true;
-                            dlsym_condvar.notify_all();
-                        }
-                        break;
                     } else if has_libnvml {
                         tracing::warn!("NVML hooks initialization failed in thread, will retry");
-
-                        // Always notify waiting dlsym calls even on failure
-                        // so they don't wait indefinitely
-                        if let Ok(mut guard) = dlsym_mutex.lock() {
-                            *guard = true;
-                            dlsym_condvar.notify_all();
-                        }
                     } else {
                         tracing::debug!(
                             "NVML library not yet loaded, will retry after next notification"
                         );
+                    }
+                }
 
-                        // Notify waiting dlsym calls that library isn't loaded yet
-                        if let Ok(mut guard) = dlsym_mutex.lock() {
-                            *guard = true;
-                            dlsym_condvar.notify_all();
-                        }
-                    }
-                } else {
-                    // hooks are already initialized, notify waiting dlsym calls
-                    // but continue monitoring for potential re-initialization needs
-                    tracing::trace!("NVML hooks already initialized, notifying waiting dlsym calls");
-                    if let Ok(mut guard) = dlsym_mutex.lock() {
-                        *guard = true;
-                        dlsym_condvar.notify_all();
-                    }
-                    // Exit the loop since NVML hooks are already initialized
-                    break;
+                // Always notify waiting dlsym calls regardless of initialization status
+                if let Ok(mut guard) = dlsym_mutex.lock() {
+                    *guard = true;
+                    dlsym_condvar.notify_all();
+                    tracing::trace!("NVML thread notified all waiting dlsym calls");
                 }
             }
             });
