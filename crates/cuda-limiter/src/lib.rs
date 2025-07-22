@@ -327,12 +327,16 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                         }
                     }
                 } else {
-                    // notify waiting dlsym calls that hooks are already initialized
+                    // hooks are already initialized, notify waiting dlsym calls
+                    // but continue monitoring for potential re-initialization needs
+                    tracing::trace!("CUDA hooks already initialized, notifying waiting dlsym calls");
                     if let Ok(mut guard) = dlsym_mutex.lock() {
                         *guard = true;
                         dlsym_condvar.notify_all();
                     }
-                    break;
+                    // Add a small delay to prevent busy-waiting when hooks are already initialized
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    // Continue the loop instead of breaking to handle potential re-initialization
                 }
             }
         });
@@ -399,12 +403,16 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                         }
                     }
                 } else {
-                    // notify waiting dlsym calls that hooks are already initialized
+                    // hooks are already initialized, notify waiting dlsym calls
+                    // but continue monitoring for potential re-initialization needs
+                    tracing::trace!("NVML hooks already initialized, notifying waiting dlsym calls");
                     if let Ok(mut guard) = dlsym_mutex.lock() {
                         *guard = true;
                         dlsym_condvar.notify_all();
                     }
-                    break;
+                    // Add a small delay to prevent busy-waiting when hooks are already initialized
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    // Continue the loop instead of breaking to handle potential re-initialization
                 }
             }
         });
