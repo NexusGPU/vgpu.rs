@@ -266,10 +266,12 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
     // Create initialization threads BEFORE installing dlsym hook
     // to avoid race condition where dlsym is called before threads exist
     
-    // CUDA initialization thread
+    // CUDA initialization thread - use static Once to ensure only one thread is created
     if enable_cuda_hooks {
-        tracing::debug!("Creating CUDA initialization thread");
-        std::thread::spawn(move || {
+        static CUDA_THREAD_ONCE: Once = Once::new();
+        CUDA_THREAD_ONCE.call_once(|| {
+            tracing::debug!("Creating CUDA initialization thread");
+            std::thread::spawn(move || {
             let (mutex, condvar) = &CUDA_SYMBOL_SYNC;
             let (dlsym_mutex, dlsym_condvar) = &CUDA_DLSYM_SYNC;
 
@@ -334,18 +336,20 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                         *guard = true;
                         dlsym_condvar.notify_all();
                     }
-                    // Add a small delay to prevent busy-waiting when hooks are already initialized
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    // Continue the loop instead of breaking to handle potential re-initialization
+                    // Exit the loop since CUDA hooks are already initialized
+                    break;
                 }
             }
+            });
         });
     }
 
-    // NVML initialization thread  
+    // NVML initialization thread - use static Once to ensure only one thread is created
     if enable_nvml_hooks {
-        tracing::debug!("Creating NVML initialization thread");
-        std::thread::spawn(move || {
+        static NVML_THREAD_ONCE: Once = Once::new();
+        NVML_THREAD_ONCE.call_once(|| {
+            tracing::debug!("Creating NVML initialization thread");
+            std::thread::spawn(move || {
             let (mutex, condvar) = &NVML_SYMBOL_SYNC;
             let (dlsym_mutex, dlsym_condvar) = &NVML_DLSYM_SYNC;
 
@@ -410,11 +414,11 @@ fn init_hooks(enable_nvml_hooks: bool, enable_cuda_hooks: bool) {
                         *guard = true;
                         dlsym_condvar.notify_all();
                     }
-                    // Add a small delay to prevent busy-waiting when hooks are already initialized
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    // Continue the loop instead of breaking to handle potential re-initialization
+                    // Exit the loop since NVML hooks are already initialized
+                    break;
                 }
             }
+            });
         });
     }
 
