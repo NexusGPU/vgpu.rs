@@ -84,8 +84,12 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
 #[hook_fn]
 pub(crate) unsafe fn nvml_device_get_count_v2_detour(device_count: *mut c_uint) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let device_count_ref = &mut *device_count;
+    let device_count_ref: &mut u32 = &mut *device_count;
     *device_count_ref = limiter.get_device_count();
+    tracing::info!(
+        "nvml_device_get_count_v2_detour: device count: {}",
+        *device_count_ref
+    );
     nvmlReturn_enum_NVML_SUCCESS
 }
 
