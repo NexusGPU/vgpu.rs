@@ -24,6 +24,7 @@ libloading = { workspace = true }
 nvml-wrapper = { workspace = true }
 nvml-wrapper-sys = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde", "std"] }
+once_cell = { workspace = true }
 hex = "0.4"
 
 [dev-dependencies]

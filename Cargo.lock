@@ -695,6 +695,7 @@ dependencies = [
  "libloading",
  "nvml-wrapper",
  "nvml-wrapper-sys",
+ "once_cell",
  "reqwest",
  "serde_json",
  "tempfile",

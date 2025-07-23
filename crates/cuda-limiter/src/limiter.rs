@@ -9,6 +9,7 @@ use cudarc::driver::DriverError;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
+use once_cell::sync::OnceCell;
 use thiserror::Error;
 use trap::TrapError;
 use utils::shared_memory::SharedMemoryHandle;
@@ -56,8 +57,8 @@ pub(crate) struct DeviceDim {
 pub(crate) struct Limiter {
     /// Pod name for shared memory access
     pod_identifier: String,
-    /// Shared memory handle for each device
-    shared_memory_handle: SharedMemoryHandle,
+    /// Shared memory handle for each device (lazy initialized)
+    shared_memory_handle: OnceCell<SharedMemoryHandle>,
     /// NVML instance
     nvml: Nvml,
     /// Device dimensions
@@ -102,13 +103,19 @@ impl Limiter {
             .set(uuid_mapping)
             .expect("set GLOBAL_DEVICE_UUIDS");
 
-        let shared_memory_handle = SharedMemoryHandle::open(&pod_identifier)?;
         Ok(Limiter {
             pod_identifier,
+            shared_memory_handle: OnceCell::new(),
             current_devices_dim: HashMap::new(),
-            shared_memory_handle,
             nvml,
             cu_device_mapping,
+        })
+    }
+
+    /// Get or initialize the shared memory handle (lazy initialization)
+    fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
+        self.shared_memory_handle.get_or_try_init(|| {
+            SharedMemoryHandle::open(&self.pod_identifier).map_err(Error::SharedMemory)
         })
     }
 
@@ -121,8 +128,9 @@ impl Limiter {
     ) -> Result<(), Error> {
         let kernel_size = grids as i32;
 
-        // Get shared memory handle for this device
-        let state = self.shared_memory_handle.get_state();
+        // Get shared memory handle for this device (lazy init)
+        let handle = self.get_or_init_shared_memory()?;
+        let state = handle.get_state();
 
         // Check if device exists, return error instead of panic
         if !state.has_device(device_uuid) {
@@ -163,7 +171,8 @@ impl Limiter {
 
     /// Get pod memory usage from shared memory
     pub(crate) fn get_pod_memory_usage(&self, device_uuid: &str) -> Result<(u64, u64), Error> {
-        let state = self.shared_memory_handle.get_state();
+        let handle = self.get_or_init_shared_memory()?;
+        let state = handle.get_state();
 
         if let Some((used, limit)) = state.with_device_by_uuid(device_uuid, |device| {
             (device.get_pod_memory_used(), device.get_mem_limit())
