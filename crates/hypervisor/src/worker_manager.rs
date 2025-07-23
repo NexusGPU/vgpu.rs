@@ -385,9 +385,9 @@ impl WorkerManager {
 
     /// Start the resource monitoring task
     pub fn start_resource_monitor(
-        &self, 
-        interval: Duration, 
-        cancellation_token: CancellationToken
+        &self,
+        interval: Duration,
+        cancellation_token: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
         let process_resources = self.process_resources.clone();
         let hypervisor = self.hypervisor.clone();
