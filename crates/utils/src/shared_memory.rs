@@ -460,17 +460,6 @@ impl SharedDeviceState {
         self.reference_count.fetch_add(1, Ordering::AcqRel) + 1
     }
 
-    /// Decrements the reference count and returns the new value.
-    /// Returns 0 if the reference count would underflow.
-    pub fn decrement_ref_count(&self) -> u32 {
-        let current = self.reference_count.load(Ordering::Acquire);
-        if current > 0 {
-            self.reference_count.fetch_sub(1, Ordering::AcqRel) - 1
-        } else {
-            0
-        }
-    }
-
     /// Gets the current reference count.
     pub fn get_ref_count(&self) -> u32 {
         self.reference_count.load(Ordering::Acquire)

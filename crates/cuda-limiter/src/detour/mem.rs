@@ -238,7 +238,7 @@ pub(crate) unsafe fn cu_mem_create_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, device: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-   match limiter.get_pod_memory_usage_cu(device) {
+    match limiter.get_pod_memory_usage_cu(device) {
         Ok((_, limit)) => {
             *bytes = limit;
             CUresult::CUDA_SUCCESS

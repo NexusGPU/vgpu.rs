@@ -13,6 +13,7 @@ use nvml_wrapper::Nvml;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
+use utils::shared_memory::SharedMemoryHandle;
 
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
@@ -95,10 +96,36 @@ pub type WorkerRegistry = Arc<RwLock<HashMap<String, WorkerEntry>>>;
 /// PID registry for mapping PIDs to worker entries.
 pub type PidRegistry = Arc<RwLock<HashMap<u32, WorkerEntry>>>;
 
+/// Process resource tracker for managing shared memory handles and cleanup
+pub struct ProcessResourceTracker {
+    /// Pod identifier for shared memory
+    pub pod_identifier: String,
+    /// Container name
+    pub container_name: String,
+    /// Shared memory handle (maintains reference count automatically)
+    pub shared_memory_handle: Arc<SharedMemoryHandle>,
+}
+
+impl ProcessResourceTracker {
+    pub fn new(
+        pod_identifier: String,
+        container_name: String,
+        shared_memory_handle: Arc<SharedMemoryHandle>,
+    ) -> Self {
+        Self {
+            pod_identifier,
+            container_name,
+            shared_memory_handle,
+        }
+    }
+}
+
 /// Worker manager that handles worker lifecycle based on pod events.
 pub struct WorkerManager {
     registry: WorkerRegistry,
     pid_registry: PidRegistry,
+    /// Process resource tracking: PID -> ProcessResourceTracker
+    process_resources: Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
     host_pid_probe: Arc<HostPidProbe>,
     command_dispatcher: Arc<CommandDispatcher>,
     hypervisor: Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
@@ -131,6 +158,7 @@ impl WorkerManager {
         Self {
             registry: Arc::new(RwLock::new(HashMap::new())),
             pid_registry: Arc::new(RwLock::new(HashMap::new())),
+            process_resources: Arc::new(RwLock::new(HashMap::new())),
             host_pid_probe,
             command_dispatcher,
             hypervisor,
@@ -299,6 +327,26 @@ impl WorkerManager {
             }
         };
 
+        // Create or get shared memory handle for this process
+        let shared_memory_handle =
+            Arc::new(SharedMemoryHandle::open(&worker_key).map_err(|e| {
+                anyhow::anyhow!("Failed to open shared memory for {}: {}", worker_key, e)
+            })?);
+
+        // Track process resources
+        {
+            let mut process_resources = self.process_resources.write().await;
+            process_resources.insert(
+                host_pid,
+                ProcessResourceTracker::new(
+                    worker_key.clone(),
+                    container_name.to_string(),
+                    shared_memory_handle,
+                ),
+            );
+            info!("Added process resource tracking for host_pid={}", host_pid);
+        }
+
         // Add worker to hypervisor
         if !self.hypervisor.process_exists(host_pid) {
             tracing::info!("Adding new worker to hypervisor: {}", worker.name());
@@ -330,6 +378,211 @@ impl WorkerManager {
         info!(
             "Associated worker {worker_key} container {container_name} with host PID {host_pid} and container PID {container_pid}"
         );
+
+        Ok(())
+    }
+
+    /// Start the resource monitoring task
+    pub fn start_resource_monitor(&self, interval: Duration) -> tokio::task::JoinHandle<()> {
+        let process_resources = self.process_resources.clone();
+        let hypervisor = self.hypervisor.clone();
+        let limiter_coordinator = self.limiter_coordinator.clone();
+        let registry = self.registry.clone();
+        let pid_registry = self.pid_registry.clone();
+        
+        tokio::spawn(async move {
+            let mut interval_timer = tokio::time::interval(interval);
+            
+            info!("Starting resource monitor with interval: {:?}", interval);
+            
+            loop {
+                interval_timer.tick().await;
+                
+                // Check for dead processes and clean them up
+                if let Err(e) = Self::check_and_cleanup_dead_processes_static(
+                    &process_resources,
+                    &hypervisor,
+                    &limiter_coordinator,
+                    &registry,
+                    &pid_registry,
+                ).await {
+                    tracing::error!("Failed to check and cleanup dead processes: {}", e);
+                }
+                
+                // Verify reference count consistency
+                if let Err(e) = Self::verify_reference_count_consistency_static(&process_resources).await {
+                    tracing::error!("Failed to verify reference count consistency: {}", e);
+                }
+            }
+        })
+    }
+
+    /// Static version of check_and_cleanup_dead_processes for use in monitoring task
+    async fn check_and_cleanup_dead_processes_static(
+        process_resources: &Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
+        hypervisor: &Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
+        limiter_coordinator: &Arc<LimiterCoordinator>,
+        registry: &WorkerRegistry,
+        pid_registry: &PidRegistry,
+    ) -> Result<Vec<u32>> {
+        let mut dead_pids = Vec::new();
+
+        // Get all tracked PIDs
+        let tracked_pids: Vec<u32> = {
+            let process_resources = process_resources.read().await;
+            process_resources.keys().copied().collect()
+        };
+
+        // Check each PID for liveness
+        for pid in tracked_pids {
+            if !std::path::Path::new(&format!("/proc/{}", pid)).exists() {
+                info!("Detected dead process: {}", pid);
+                dead_pids.push(pid);
+                
+                // Clean up the dead process
+                if let Err(e) = Self::handle_process_exited_static(
+                    pid,
+                    process_resources,
+                    hypervisor,
+                    limiter_coordinator,
+                    registry,
+                    pid_registry,
+                ).await {
+                    tracing::error!("Failed to cleanup dead process {}: {}", pid, e);
+                }
+            }
+        }
+
+        if !dead_pids.is_empty() {
+            info!(
+                "Cleaned up {} dead processes: {:?}",
+                dead_pids.len(),
+                dead_pids
+            );
+        }
+
+        Ok(dead_pids)
+    }
+
+    /// Static version of handle_process_exited for use in monitoring task  
+    async fn handle_process_exited_static(
+        host_pid: u32,
+        process_resources: &Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
+        hypervisor: &Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
+        limiter_coordinator: &Arc<LimiterCoordinator>,
+        registry: &WorkerRegistry,
+        pid_registry: &PidRegistry,
+    ) -> Result<()> {
+        info!("Processing process exit: host_pid={}", host_pid);
+
+        // Step 1: Remove from process resources registry and get resource info
+        let process_tracker = {
+            let mut process_resources = process_resources.write().await;
+            process_resources.remove(&host_pid)
+        };
+
+        let Some(process_tracker) = process_tracker else {
+            warn!("Attempted to cleanup non-tracked process: {}", host_pid);
+            return Ok(());
+        };
+
+        info!(
+            "Found tracked process: host_pid={}, pod={}, container={}",
+            host_pid, process_tracker.pod_identifier, process_tracker.container_name
+        );
+
+        // Step 2: Remove from hypervisor
+        if hypervisor.process_exists(host_pid) {
+            info!("Removing process {} from hypervisor", host_pid);
+            hypervisor.remove_process(host_pid);
+        }
+
+        // Step 3: Unregister from limiter coordinator  
+        if let Err(e) = limiter_coordinator.unregister_process(&process_tracker.pod_identifier, host_pid) {
+            tracing::error!(
+                "Failed to unregister process {} from limiter coordinator: {}",
+                host_pid,
+                e
+            );
+        } else {
+            info!("Unregistered process {} from limiter coordinator", host_pid);
+        }
+
+        // Step 4: Remove from worker registry (update container info)
+        {
+            let mut registry = registry.write().await;
+            if let Some(worker_entry) = registry.get_mut(&process_tracker.pod_identifier) {
+                if let Some(container_info) = worker_entry
+                    .containers
+                    .get_mut(&process_tracker.container_name)
+                {
+                    container_info.workers.remove(&host_pid);
+                    // Also remove from container_pid_to_host_pid mapping
+                    container_info
+                        .container_pid_to_host_pid
+                        .retain(|_, &mut v| v != host_pid);
+                    info!(
+                        "Removed process {} from worker entry container {}",
+                        host_pid, process_tracker.container_name
+                    );
+                }
+            }
+        }
+
+        // Step 5: Remove from PID registry
+        {
+            let mut pid_registry = pid_registry.write().await;
+            pid_registry.remove(&host_pid);
+            info!("Removed PID {} from PID registry", host_pid);
+        }
+
+        // Step 6: Drop shared memory handle (reference count will automatically decrease)
+        drop(process_tracker.shared_memory_handle);
+        info!(
+            "Dropped shared memory handle for process {}, reference count automatically decreased",
+            host_pid
+        );
+
+        info!(
+            "Successfully cleaned up process {} from pod {} container {}",
+            host_pid, process_tracker.pod_identifier, process_tracker.container_name
+        );
+
+        Ok(())
+    }
+
+    /// Static version of verify_reference_count_consistency for use in monitoring task
+    async fn verify_reference_count_consistency_static(
+        process_resources: &Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
+    ) -> Result<()> {
+        let process_resources = process_resources.read().await;
+        
+        // Group processes by pod_identifier  
+        let mut pod_process_counts: HashMap<String, u32> = HashMap::new();
+        for tracker in process_resources.values() {
+            *pod_process_counts
+                .entry(tracker.pod_identifier.clone())
+                .or_insert(0) += 1;
+        }
+
+        // Check each pod's shared memory reference count
+        for (pod_identifier, expected_count) in pod_process_counts {
+            // Get one shared memory handle for this pod to check reference count
+            if let Some(tracker) = process_resources
+                .values()
+                .find(|t| t.pod_identifier == pod_identifier)
+            {
+                let actual_count = tracker.shared_memory_handle.get_state().get_ref_count();
+                
+                if actual_count != expected_count {
+                    warn!(
+                        "Reference count mismatch for pod {}: expected={}, actual={}",
+                        pod_identifier, expected_count, actual_count
+                    );
+                    // Could implement corrective action here if needed
+                }
+            }
+        }
 
         Ok(())
     }
@@ -424,6 +677,18 @@ impl WorkerManager {
             for host_pid in &all_host_pids {
                 pid_registry.remove(host_pid);
                 info!("Removed PID {} from PID registry", host_pid);
+            }
+        }
+
+        // Step 5: Clean up process resource tracking (this will automatically decrease reference counts)
+        {
+            let mut process_resources = self.process_resources.write().await;
+            for host_pid in &all_host_pids {
+                if let Some(tracker) = process_resources.remove(host_pid) {
+                    info!("Removed process resource tracking for PID {}, shared memory reference count will decrease", host_pid);
+                    // When tracker is dropped, the SharedMemoryHandle's reference count is automatically decreased
+                    drop(tracker);
+                }
             }
         }
 

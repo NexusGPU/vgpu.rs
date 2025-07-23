@@ -272,7 +272,7 @@ pub(crate) fn get_pod_identifier() -> Result<String, Error> {
     Ok(format!("{namespace}_{name}"))
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
 fn uuid_to_string_formatted(uuid: &[i8; 16]) -> String {
     format!(
         "GPU-{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
@@ -284,7 +284,7 @@ fn uuid_to_string_formatted(uuid: &[i8; 16]) -> String {
     )
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
 fn uuid_to_string_formatted(uuid: &[u8; 16]) -> String {
     format!(
         "GPU-{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",

@@ -294,6 +294,25 @@ impl Tasks {
         };
         self.tasks.push(limiter_coordinator_task);
 
+        // start worker manager resource monitoring task
+        let worker_manager_monitor_task = {
+            let worker_manager = app.worker_manager.clone();
+
+            tokio::spawn(async move {
+                tracing::info!("Starting worker manager resource monitoring task");
+                // Start monitoring with 30 second interval
+                let monitor_handle = worker_manager.start_resource_monitor(Duration::from_secs(30));
+
+                // Wait for the monitoring task to complete (it runs indefinitely)
+                if let Err(e) = monitor_handle.await {
+                    tracing::error!("Worker manager resource monitoring task failed: {}", e);
+                } else {
+                    tracing::info!("Worker manager resource monitoring task completed");
+                }
+            })
+        };
+        self.tasks.push(worker_manager_monitor_task);
+
         Ok(())
     }
 
