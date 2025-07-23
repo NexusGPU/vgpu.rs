@@ -238,17 +238,16 @@ pub(crate) unsafe fn cu_mem_create_detour(
 #[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, device: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let result = match limiter.get_pod_memory_usage_cu(device) {
+   match limiter.get_pod_memory_usage_cu(device) {
         Ok((_, limit)) => {
             *bytes = limit;
             CUresult::CUDA_SUCCESS
         }
-        Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
-    };
-
-    tracing::debug!("cu_device_total_mem_v2_detour result: {:?}", result);
-
-    result
+        Err(e) => {
+            tracing::error!("Failed to get pod memory usage: {e}");
+            CUresult::CUDA_ERROR_UNKNOWN
+        }
+    }
 }
 
 #[hook_fn]

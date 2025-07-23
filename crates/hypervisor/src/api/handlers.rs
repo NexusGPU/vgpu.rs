@@ -103,7 +103,7 @@ pub async fn process_init(
         namespace = namespace,
         container_name = container_name,
         container_pid = container_pid,
-        "Initializing CUDA process"
+        "Initializing worker"
     );
 
     // Validate pod and container exist

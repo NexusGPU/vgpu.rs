@@ -71,18 +71,13 @@ pub struct WorkerEntry {
 }
 
 impl WorkerEntry {
-    fn new(mut info: WorkerInfo) -> Self {
+    fn new(info: WorkerInfo) -> Self {
         let mut containers = HashMap::new();
 
         // Initialize containers from WorkerInfo
         if let Some(container_names) = &info.containers {
             for container_name in container_names {
                 containers.insert(container_name.clone(), ContainerInfo::new());
-            }
-        }
-        if let Some(gpu_uuids) = info.gpu_uuids.as_mut() {
-            for gpu_uuid in gpu_uuids {
-                *gpu_uuid = gpu_uuid.replace("gpu-", "GPU-");
             }
         }
         Self { info, containers }

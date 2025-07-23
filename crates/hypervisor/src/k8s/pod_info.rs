@@ -57,7 +57,12 @@ impl TensorFusionPodInfo {
 
         // Parse GPU UUIDs
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/gpu-ids")) {
-            worker_info.gpu_uuids = Some(value.split(',').map(|s| s.to_string()).collect());
+            worker_info.gpu_uuids = Some(
+                value
+                    .split(',')
+                    .map(|s| s.to_string().replace("gpu-", "GPU-"))
+                    .collect(),
+            );
         }
 
         // Parse QoS level
