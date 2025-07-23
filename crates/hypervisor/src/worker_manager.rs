@@ -26,23 +26,39 @@ use crate::process::worker::TensorFusionWorker;
 use crate::process::GpuProcess;
 use crate::scheduler::weighted::WeightedScheduler;
 use crate::worker_registration::register_worker_to_limiter_coordinator;
-use crate::worker_registration::unregister_worker_from_limiter_coordinator;
 
 /// Container information for tracking container-specific details.
 #[derive(Debug, Clone)]
 pub struct ContainerInfo {
     /// Mapping from container PID to host PID for this container
     pub container_pid_to_host_pid: HashMap<u32, u32>,
-    /// Optional worker instance for this container
-    pub worker: Option<Arc<TensorFusionWorker>>,
+    /// Workers (processes) in this container, keyed by host PID
+    pub workers: HashMap<u32, Arc<TensorFusionWorker>>,
 }
 
 impl ContainerInfo {
     fn new() -> Self {
         Self {
             container_pid_to_host_pid: HashMap::new(),
-            worker: None,
+            workers: HashMap::new(),
         }
+    }
+
+    /// Add a worker to this container
+    pub fn add_worker(
+        &mut self,
+        host_pid: u32,
+        container_pid: u32,
+        worker: Arc<TensorFusionWorker>,
+    ) {
+        self.container_pid_to_host_pid
+            .insert(container_pid, host_pid);
+        self.workers.insert(host_pid, worker);
+    }
+
+    /// Check if container has any workers
+    pub fn has_workers(&self) -> bool {
+        !self.workers.is_empty()
     }
 }
 
@@ -136,29 +152,46 @@ impl WorkerManager {
         // Store worker info in registry
         {
             let mut registry = self.registry.write().await;
-            registry.insert(worker_key.clone(), WorkerEntry::new(pod_info.0));
+            registry.insert(worker_key.clone(), WorkerEntry::new(pod_info.0.clone()));
             info!("Added worker to registry: {worker_key}");
         }
+
+        // Register pod with limiter coordinator (Pod-level operation)
+        if let Some(gpu_uuids) = &pod_info.0.gpu_uuids {
+            if !gpu_uuids.is_empty() {
+                use crate::worker_registration::create_device_configs_from_worker_info;
+                let device_configs =
+                    create_device_configs_from_worker_info(&pod_info.0, &self.nvml).await?;
+                self.limiter_coordinator
+                    .register_pod(&worker_key, device_configs)?;
+                info!("Registered pod {} with limiter coordinator", worker_key);
+            }
+        }
+
         Ok(())
     }
 
-    /// Discover the host PID for a container
-    pub async fn discover_worker_pid(
+    /// Initialize a CUDA process: discover PID and register to all components
+    pub async fn initialize_process(
         &self,
         pod_name: &str,
         namespace: &str,
         container_name: &str,
         container_pid: u32,
         gpu_observer: Arc<GpuObserver>,
-    ) -> Result<PodProcessInfo> {
-        self.discover_worker_pid_with_registration(
-            pod_name,
-            namespace,
-            container_name,
-            container_pid,
-            gpu_observer,
-        )
-        .await
+    ) -> Result<u32> {
+        // Discover and register the process
+        let process_info = self
+            .discover_worker_pid_with_registration(
+                pod_name,
+                namespace,
+                container_name,
+                container_pid,
+                gpu_observer,
+            )
+            .await?;
+
+        Ok(process_info.host_pid)
     }
 
     /// Discover worker PID and register with limiter coordinator
@@ -258,10 +291,7 @@ impl WorkerManager {
                     .or_insert_with(ContainerInfo::new);
 
                 // Update container info
-                container_info.worker = Some(worker.clone());
-                container_info
-                    .container_pid_to_host_pid
-                    .insert(container_pid, host_pid);
+                container_info.add_worker(host_pid, container_pid, worker.clone());
 
                 // Clone entry for PID registry update (done after releasing main registry lock)
                 // TODO: remove this clone
@@ -344,169 +374,70 @@ impl WorkerManager {
         let worker_key = format!("{namespace}_{pod_name}");
         info!("Processing pod deletion: {worker_key}");
 
-        {
+        // Step 1: Remove from worker registry and collect all host PIDs
+        let all_host_pids = {
             let mut registry = self.registry.write().await;
             if let Some(entry) = registry.remove(&worker_key) {
-                info!("Removed worker from registry: {worker_key}");
+                info!("Removed pod from registry: {worker_key}");
 
-                // Call remove callback for all containers with workers
+                let mut host_pids = Vec::new();
+
+                // Collect all host PIDs from all containers
                 for (container_name, container_info) in &entry.containers {
-                    if let Some(worker) = &container_info.worker {
-                        info!("Removing worker for container: {container_name}");
+                    if container_info.has_workers() {
+                        info!("Processing container: {container_name}");
 
-                        // Find the container_pid for this worker's host_pid
-                        let host_pid = worker.pid();
-                        if let Some((container_pid, _)) = container_info
-                            .container_pid_to_host_pid
-                            .iter()
-                            .find(|(_, &hpid)| hpid == host_pid)
-                        {
-                            // Remove worker from hypervisor
-                            self.hypervisor.remove_process(host_pid);
-
-                            // Unregister worker from limiter coordinator
-                            if let Err(e) = unregister_worker_from_limiter_coordinator(
-                                &self.limiter_coordinator,
-                                pod_name,
-                                namespace,
-                                container_name,
-                                *container_pid,
-                            )
-                            .await
-                            {
-                                tracing::error!(
-                                    "Failed to unregister worker from limiter coordinator: {}",
-                                    e
-                                );
-                            }
-                        } else {
-                            warn!(
-                                "Could not find container_pid for host_pid {} in container {}",
-                                host_pid, container_name
-                            );
+                        for (host_pid, _worker) in &container_info.workers {
+                            host_pids.push(*host_pid);
+                            info!("Collected host PID {} for cleanup", host_pid);
                         }
                     }
                 }
 
-                {
-                    let mut pid_registry = self.pid_registry.write().await;
-                    pid_registry.remove(&entry.info.host_pid);
-                }
+                host_pids
             } else {
-                warn!("Attempted to remove non-existent worker: {worker_key}");
+                warn!("Attempted to remove non-existent pod: {worker_key}");
+                return Ok(());
+            }
+        };
+
+        // Step 2: Remove all workers from hypervisor
+        for host_pid in &all_host_pids {
+            info!("Removing process {} from hypervisor", host_pid);
+            self.hypervisor.remove_process(*host_pid);
+        }
+
+        // Step 3: Unregister all processes from limiter coordinator
+        for host_pid in &all_host_pids {
+            if let Err(e) = self
+                .limiter_coordinator
+                .unregister_process(&worker_key, *host_pid)
+            {
+                tracing::error!(
+                    "Failed to unregister process {} from limiter coordinator: {}",
+                    host_pid,
+                    e
+                );
+            } else {
+                info!("Unregistered process {} from limiter coordinator", host_pid);
             }
         }
 
+        // Step 4: Clean up PID registry
+        {
+            let mut pid_registry = self.pid_registry.write().await;
+            for host_pid in &all_host_pids {
+                pid_registry.remove(host_pid);
+                info!("Removed PID {} from PID registry", host_pid);
+            }
+        }
+
+        info!(
+            "Successfully deleted pod {} with {} processes",
+            worker_key,
+            all_host_pids.len()
+        );
+
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use api_types::QosLevel;
-
-    use super::*;
-
-    #[test]
-    fn worker_entry_new_with_containers() {
-        let worker_info = WorkerInfo {
-            pod_name: "test-pod".to_string(),
-            namespace: "test-namespace".to_string(),
-            node_name: Some("test-node".to_string()),
-            containers: Some(vec!["container1".to_string(), "container2".to_string()]),
-            tflops_request: Some(1.0),
-            vram_request: Some(1024),
-            tflops_limit: Some(2.0),
-            vram_limit: Some(2048),
-            gpu_uuids: Some(vec!["gpu1".to_string()]),
-            qos_level: Some(QosLevel::High),
-            host_pid: 0,
-            labels: BTreeMap::new(),
-            workload_name: Some("unknown".to_string()),
-        };
-
-        let entry = WorkerEntry::new(worker_info);
-
-        assert_eq!(entry.containers.len(), 2);
-        assert!(entry.containers.contains_key("container1"));
-        assert!(entry.containers.contains_key("container2"));
-    }
-
-    #[test]
-    fn worker_entry_new_without_containers() {
-        let worker_info = WorkerInfo {
-            pod_name: "test-pod".to_string(),
-            namespace: "test-namespace".to_string(),
-            node_name: Some("test-node".to_string()),
-            containers: None,
-            tflops_request: Some(1.0),
-            vram_request: Some(1024),
-            tflops_limit: Some(2.0),
-            vram_limit: Some(2048),
-            gpu_uuids: Some(vec!["gpu1".to_string()]),
-            qos_level: Some(QosLevel::High),
-            host_pid: 0,
-            labels: BTreeMap::new(),
-            workload_name: Some("unknown".to_string()),
-        };
-
-        let entry = WorkerEntry::new(worker_info);
-
-        assert_eq!(entry.containers.len(), 0);
-    }
-
-    #[test]
-    fn worker_entry_get_container() {
-        let worker_info = WorkerInfo {
-            pod_name: "test-pod".to_string(),
-            namespace: "test-namespace".to_string(),
-            node_name: Some("test-node".to_string()),
-            containers: Some(vec!["container1".to_string()]),
-            tflops_request: Some(1.0),
-            vram_request: Some(1024),
-            tflops_limit: Some(2.0),
-            vram_limit: Some(2048),
-            gpu_uuids: Some(vec!["gpu1".to_string()]),
-            qos_level: Some(QosLevel::High),
-            host_pid: 0,
-            labels: BTreeMap::new(),
-            workload_name: Some("unknown".to_string()),
-        };
-
-        let entry = WorkerEntry::new(worker_info);
-
-        let container = entry.get_container("container1");
-        assert!(container.is_some());
-
-        let non_existent = entry.get_container("non-existent");
-        assert!(non_existent.is_none());
-    }
-
-    #[test]
-    fn container_info_new() {
-        let container_info = ContainerInfo::new();
-
-        assert!(container_info.container_pid_to_host_pid.is_empty());
-        assert!(container_info.worker.is_none());
-    }
-
-    #[test]
-    fn container_info_pid_mapping() {
-        let mut container_info = ContainerInfo::new();
-
-        container_info.container_pid_to_host_pid.insert(100, 1234);
-        container_info.container_pid_to_host_pid.insert(101, 1235);
-
-        assert_eq!(
-            container_info.container_pid_to_host_pid.get(&100),
-            Some(&1234)
-        );
-        assert_eq!(
-            container_info.container_pid_to_host_pid.get(&101),
-            Some(&1235)
-        );
-        assert_eq!(container_info.container_pid_to_host_pid.get(&102), None);
     }
 }

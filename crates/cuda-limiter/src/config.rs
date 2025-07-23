@@ -1,28 +1,17 @@
 use std::env;
 use std::fs;
 
-use api_types::WorkerResponse;
+use anyhow::Result;
+use api_types::PodInfoResponse;
+use api_types::ProcessInitResponse;
 use error_stack::Report;
 use error_stack::ResultExt;
 use reqwest::blocking::Client;
 use reqwest::Method;
 
-/// Configuration for a CUDA device
-#[derive(Debug, Clone, Default)]
-pub(crate) struct DeviceLimit {
-    /// Utilization percentage limit (0-100)
-    #[allow(dead_code)]
-    pub up_limit: u32,
-    /// Memory limit in bytes (0 means no limit)
-    #[allow(dead_code)]
-    pub mem_limit: u64,
-}
-
-/// Configuration result containing device configs and host PID
+/// Result containing device configuration
 #[derive(Debug, Clone)]
 pub struct DeviceConfigResult {
-    #[allow(dead_code)]
-    pub device_limit: DeviceLimit,
     pub gpu_uuids: Vec<String>,
     pub host_pid: u32,
 }
@@ -30,9 +19,9 @@ pub struct DeviceConfigResult {
 /// Worker operation type
 #[derive(Debug, Clone, Copy)]
 pub enum WorkerOperation {
-    /// Get worker information (GET request) - no container_name needed
+    /// Get pod information (GET request) - no container_name needed
     GetInfo,
-    /// Initialize worker (POST request) - requires container_name
+    /// Initialize worker process (POST request) - requires container_name
     Initialize,
 }
 
@@ -46,6 +35,13 @@ impl WorkerOperation {
 
     fn requires_container_name(&self) -> bool {
         matches!(self, WorkerOperation::Initialize)
+    }
+
+    fn endpoint_path(&self) -> &'static str {
+        match self {
+            WorkerOperation::GetInfo => "/api/v1/pod",
+            WorkerOperation::Initialize => "/api/v1/process",
+        }
     }
 }
 
@@ -79,12 +75,16 @@ pub fn init_worker(
     hypervisor_port: &str,
     container_name: &str,
 ) -> Result<DeviceConfigResult, Report<ConfigError>> {
-    request_worker_info(
+    // Initialize the process to get host_pid and GPU UUIDs
+    let process_config = request_worker_info(
         hypervisor_ip,
         hypervisor_port,
         Some(container_name),
         WorkerOperation::Initialize,
-    )
+    )?;
+
+    // Return the process configuration directly
+    Ok(process_config)
 }
 
 /// Request worker information from hypervisor API using Kubernetes service account token
@@ -102,7 +102,10 @@ fn request_worker_info(
 
     // Create HTTP client
     let client = Client::new();
-    let url = format!("http://{hypervisor_ip}:{hypervisor_port}/api/v1/worker");
+    let url = format!(
+        "http://{hypervisor_ip}:{hypervisor_port}{}",
+        operation.endpoint_path()
+    );
 
     tracing::debug!(
         "Requesting worker info from: {} (operation: {:?})",
@@ -147,49 +150,66 @@ fn request_worker_info(
         return Err(Report::new(ConfigError::HttpRequest));
     }
 
-    // Parse response
-    let worker_info_response: WorkerResponse =
-        response.json().change_context(ConfigError::JsonParsing)?;
+    let request_duration = request_start.elapsed();
 
-    if !worker_info_response.success {
-        tracing::error!(
-            "Hypervisor API returned error: {}",
-            worker_info_response.message
-        );
-        return Err(Report::new(ConfigError::HttpRequest));
-    }
+    // Handle different response types based on operation
+    let result = match operation {
+        WorkerOperation::GetInfo => {
+            // Parse PodInfoResponse for GET requests
+            let pod_response: PodInfoResponse =
+                response.json().change_context(ConfigError::JsonParsing)?;
 
-    let worker_info = worker_info_response.data.ok_or_else(|| {
-        tracing::error!("No pod data returned from hypervisor API");
-        Report::new(ConfigError::JsonParsing)
-    })?;
+            if !pod_response.success {
+                tracing::error!("Hypervisor API returned error: {}", pod_response.message);
+                return Err(Report::new(ConfigError::HttpRequest));
+            }
 
-    // Convert PodResourceInfo to DeviceConfig
-    let device_limit = if let (Some(tflops_limit), Some(vram_limit)) =
-        (worker_info.tflops_limit, worker_info.vram_limit)
-    {
-        DeviceLimit {
-            up_limit: tflops_limit as u32,
-            mem_limit: vram_limit,
+            let pod_info = pod_response.data.ok_or_else(|| {
+                tracing::error!("No pod data returned from hypervisor API");
+                Report::new(ConfigError::JsonParsing)
+            })?;
+
+            // For GetInfo, we don't have host_pid, so use container_pid as placeholder
+            DeviceConfigResult {
+                host_pid: container_pid, // Use container_pid as placeholder for GetInfo
+                gpu_uuids: pod_info.gpu_uuids,
+            }
         }
-    } else {
-        tracing::warn!("Pod resource info does not contain required limits");
-        DeviceLimit::default()
+        WorkerOperation::Initialize => {
+            // Parse ProcessInitResponse for POST requests
+            let process_response: ProcessInitResponse =
+                response.json().change_context(ConfigError::JsonParsing)?;
+
+            if !process_response.success {
+                tracing::error!(
+                    "Hypervisor API returned error: {}",
+                    process_response.message
+                );
+                return Err(Report::new(ConfigError::HttpRequest));
+            }
+
+            let process_info = process_response.data.ok_or_else(|| {
+                tracing::error!("No process data returned from hypervisor API");
+                Report::new(ConfigError::JsonParsing)
+            })?;
+
+            // For Initialize, we get the actual host_pid from the response
+            // Device limits are not returned in process response, so use defaults or get from pod
+            DeviceConfigResult {
+                host_pid: process_info.host_pid,
+                gpu_uuids: process_info.gpu_uuids,
+            }
+        }
     };
 
-    let request_duration = request_start.elapsed();
     tracing::info!(
-        "Successfully fetched device limit from hypervisor: {:?}, operation: {:?}, request_time: {:?}",
-        device_limit,
+        "Successfully processed hypervisor response: operation: {:?}, request_time: {:?}, host_pid: {}",
         operation,
-        request_duration
+        request_duration,
+        result.host_pid
     );
 
-    Ok(DeviceConfigResult {
-        device_limit,
-        host_pid: worker_info.host_pid,
-        gpu_uuids: worker_info.gpu_uuids.unwrap_or_default(),
-    })
+    Ok(result)
 }
 
 /// Get Kubernetes service account token from the pod

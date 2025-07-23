@@ -57,11 +57,6 @@ impl TensorFusionWorker {
         format!("limiter_{}", self.id)
     }
 
-    /// Get GPU UUIDs for this worker
-    pub(crate) fn gpu_uuids(&self) -> &[String] {
-        &self.gpu_uuids
-    }
-
     /// Send command to limiter using CommandDispatcher
     fn send_command(&self, command_type: LimiterCommandType) -> Result<()> {
         let limiter_id = self.get_limiter_id();

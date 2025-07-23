@@ -19,25 +19,21 @@ const FACTOR: u32 = 64;
 pub async fn register_worker_to_limiter_coordinator(
     limiter_coordinator: &LimiterCoordinator,
     worker: &Arc<TensorFusionWorker>,
-    worker_entry: &WorkerEntry,
+    _worker_entry: &WorkerEntry,
     container_name: &str,
     container_pid: u32,
     host_pid: u32,
-    nvml: &Nvml,
+    _nvml: &Nvml,
 ) -> Result<()> {
     // Get pod info from the worker.
     let pod_identifier = &format!("{}_{}", worker.namespace, worker.pod_name);
 
-    // Create device config based on the worker's GPU info.
-    let device_configs = create_device_configs_from_worker(worker, worker_entry, nvml).await?;
-
-    // Register with the limiter coordinator.
-    limiter_coordinator.register_device(
+    // Register process with the limiter coordinator.
+    limiter_coordinator.register_process(
         pod_identifier,
         container_name,
         container_pid,
         host_pid,
-        device_configs,
     )?;
 
     tracing::info!(
@@ -51,36 +47,12 @@ pub async fn register_worker_to_limiter_coordinator(
     Ok(())
 }
 
-/// Unregisters a worker from the limiter coordinator.
-pub async fn unregister_worker_from_limiter_coordinator(
-    limiter_coordinator: &LimiterCoordinator,
-    pod_name: &str,
-    pod_namespace: &str,
-    container_name: &str,
-    container_pid: u32,
-) -> Result<()> {
-    let pod_identifier = &format!("{pod_namespace}_{pod_name}");
-    limiter_coordinator.unregister_device(pod_identifier, container_name, container_pid)?;
-
-    tracing::info!(
-        "Unregistered worker (pod_identifier: {}, container_name: {}, container_pid: {}) from limiter coordinator",
-        pod_identifier,
-        container_name,
-        container_pid
-    );
-
-    Ok(())
-}
-
-/// Creates a device config from a worker's GPU info.
-async fn create_device_configs_from_worker(
-    worker: &Arc<TensorFusionWorker>,
-    worker_entry: &WorkerEntry,
+/// Creates device configs from WorkerInfo (for pod-level registration)
+pub async fn create_device_configs_from_worker_info(
+    worker_info: &api_types::WorkerInfo,
     nvml: &Nvml,
 ) -> Result<Vec<DeviceConfig>> {
-    // Get the first GPU UUID from the worker (assuming single GPU for now).
-    let gpu_uuids = worker.gpu_uuids();
-
+    let gpu_uuids = worker_info.gpu_uuids.as_deref().unwrap_or(&[]);
     let mut device_configs = Vec::new();
 
     for gpu_uuid in gpu_uuids {
@@ -96,8 +68,8 @@ async fn create_device_configs_from_worker(
             calculate_device_limits_from_gpu_info(
                 nvml,
                 device_idx,
-                worker_entry.info.tflops_limit,
-                worker_entry.info.vram_limit,
+                worker_info.tflops_limit,
+                worker_info.vram_limit,
                 if tflops_capacity > 0.0 {
                     Some(tflops_capacity)
                 } else {

@@ -23,8 +23,8 @@ use trap::Waker;
 use super::auth::JwtAuthMiddleware;
 use super::errors::ApiError;
 use super::types::JwtAuthConfig;
-use crate::api::handlers::get_worker_info;
-use crate::api::handlers::worker_init;
+use crate::api::handlers::get_pod_info;
+use crate::api::handlers::process_init;
 use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
 use crate::worker_manager::WorkerManager;
@@ -74,10 +74,12 @@ impl ApiServer {
         let app = Route::new()
             // Protected routes with JWT middleware
             .at(
-                "/api/v1/worker",
-                get(get_worker_info)
-                    .post(worker_init)
-                    .with(JwtAuthMiddleware::new(self.jwt_config.clone())),
+                "/api/v1/pod",
+                get(get_pod_info).with(JwtAuthMiddleware::new(self.jwt_config.clone())),
+            )
+            .at(
+                "/api/v1/process",
+                post(process_init).with(JwtAuthMiddleware::new(self.jwt_config.clone())),
             )
             // Unprotected routes without JWT middleware
             .nest("/api/v1/trap", trap_routes)
