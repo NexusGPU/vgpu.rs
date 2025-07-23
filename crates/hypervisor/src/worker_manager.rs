@@ -27,6 +27,7 @@ use crate::process::worker::TensorFusionWorker;
 use crate::process::GpuProcess;
 use crate::scheduler::weighted::WeightedScheduler;
 use crate::worker_registration::register_worker_to_limiter_coordinator;
+use tokio_util::sync::CancellationToken;
 
 /// Container information for tracking container-specific details.
 #[derive(Debug, Clone)]
@@ -383,7 +384,11 @@ impl WorkerManager {
     }
 
     /// Start the resource monitoring task
-    pub fn start_resource_monitor(&self, interval: Duration) -> tokio::task::JoinHandle<()> {
+    pub fn start_resource_monitor(
+        &self, 
+        interval: Duration, 
+        cancellation_token: CancellationToken
+    ) -> tokio::task::JoinHandle<()> {
         let process_resources = self.process_resources.clone();
         let hypervisor = self.hypervisor.clone();
         let limiter_coordinator = self.limiter_coordinator.clone();
@@ -396,7 +401,15 @@ impl WorkerManager {
             info!("Starting resource monitor with interval: {:?}", interval);
 
             loop {
-                interval_timer.tick().await;
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        info!("Resource monitor shutdown requested");
+                        break;
+                    }
+                    _ = interval_timer.tick() => {
+                        // Continue with monitoring logic
+                    }
+                }
 
                 // Check for dead processes and clean them up
                 if let Err(e) = Self::check_and_cleanup_dead_processes_static(
@@ -418,6 +431,8 @@ impl WorkerManager {
                     tracing::error!("Failed to verify reference count consistency: {}", e);
                 }
             }
+
+            info!("Resource monitor stopped");
         })
     }
 

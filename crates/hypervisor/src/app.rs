@@ -297,13 +297,14 @@ impl Tasks {
         // start worker manager resource monitoring task
         let worker_manager_monitor_task = {
             let worker_manager = app.worker_manager.clone();
+            let token = self.cancellation_token.clone();
 
             tokio::spawn(async move {
                 tracing::info!("Starting worker manager resource monitoring task");
-                // Start monitoring with 30 second interval
-                let monitor_handle = worker_manager.start_resource_monitor(Duration::from_secs(30));
+                // Start monitoring with 30 second interval and cancellation token
+                let monitor_handle = worker_manager.start_resource_monitor(Duration::from_secs(30), token);
 
-                // Wait for the monitoring task to complete (it runs indefinitely)
+                // Wait for the monitoring task to complete
                 if let Err(e) = monitor_handle.await {
                     tracing::error!("Worker manager resource monitoring task failed: {}", e);
                 } else {
@@ -318,31 +319,77 @@ impl Tasks {
 
     /// wait for tasks to complete or receive shutdown signal
     pub async fn wait_for_completion(&mut self) -> Result<()> {
+        use std::time::Duration;
+        use tokio::time::{timeout, Instant};
+        
         // take all tasks from Vec to avoid borrow issues
         let tasks = std::mem::take(&mut self.tasks);
+        let task_count = tasks.len();
 
-        // run ctrl-c handler
+        tracing::info!("Starting {} background tasks...", task_count);
+
+        // Phase 1: Race between signal and natural completion
         let cancellation_token = self.cancellation_token.clone();
-        tokio::spawn(async move {
+        let signal_future = async {
             if let Ok(()) = tokio::signal::ctrl_c().await {
-                tracing::info!("Received Ctrl+C, shutting down...");
-                tracing::info!("Cancelling all tasks...");
+                tracing::info!("Received Ctrl+C signal, initiating graceful shutdown...");
                 cancellation_token.cancel();
             }
-        });
+        };
+        
+        let tasks_future = futures::future::join_all(tasks);
 
-        // wait for all tasks to complete
-        tracing::info!("Waiting for all tasks to complete...");
-        let results = futures::future::join_all(tasks).await;
-
-        // check task results
-        for task_result in results {
-            if let Err(e) = task_result {
-                tracing::error!("Task failed: {}", e);
+        // Use futures::select to avoid ownership issues
+        use futures::future::{select, Either};
+        
+        match select(Box::pin(signal_future), Box::pin(tasks_future)).await {
+            // Signal received first - need graceful shutdown
+            Either::Left((_, tasks_future)) => {
+                tracing::info!("Shutdown signal received, waiting for tasks to complete gracefully...");
+                
+                let shutdown_timeout = Duration::from_secs(30);
+                let start_time = Instant::now();
+                
+                match timeout(shutdown_timeout, tasks_future).await {
+                    Ok(results) => {
+                        let elapsed = start_time.elapsed();
+                        tracing::info!(
+                            "All {} tasks completed gracefully in {:.2}s", 
+                            task_count, 
+                            elapsed.as_secs_f64()
+                        );
+                        
+                        // Check task results
+                        for (i, task_result) in results.into_iter().enumerate() {
+                            if let Err(e) = task_result {
+                                tracing::error!("Task {} failed during shutdown: {}", i, e);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "Graceful shutdown timeout reached after {}s. Some tasks may not have completed cleanly.", 
+                            shutdown_timeout.as_secs()
+                        );
+                        // Note: Tasks will be dropped/aborted when this function returns
+                    }
+                }
+            }
+            
+            // Tasks completed naturally (normal case)
+            Either::Right((results, _)) => {
+                tracing::info!("All {} tasks completed normally", task_count);
+                
+                // Check task results
+                for (i, task_result) in results.into_iter().enumerate() {
+                    if let Err(e) = task_result {
+                        tracing::error!("Task {} failed: {}", i, e);
+                    }
+                }
             }
         }
 
-        tracing::info!("All tasks completed");
+        tracing::info!("Application shutdown completed");
         Ok(())
     }
 
