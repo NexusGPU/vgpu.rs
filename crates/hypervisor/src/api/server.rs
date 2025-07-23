@@ -75,11 +75,9 @@ impl ApiServer {
             // Protected routes with JWT middleware
             .at(
                 "/api/v1/worker",
-                get(get_worker_info).with(JwtAuthMiddleware::new(self.jwt_config.clone())),
-            )
-            .at(
-                "/api/v1/worker",
-                post(worker_init).with(JwtAuthMiddleware::new(self.jwt_config.clone())),
+                get(get_worker_info)
+                    .post(worker_init)
+                    .with(JwtAuthMiddleware::new(self.jwt_config.clone())),
             )
             // Unprotected routes without JWT middleware
             .nest("/api/v1/trap", trap_routes)
