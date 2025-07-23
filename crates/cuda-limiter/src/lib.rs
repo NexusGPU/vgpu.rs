@@ -28,9 +28,8 @@ mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
 static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
-static CUDA_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
-static NVML_HOOKS_INITIALIZED: AtomicBool = AtomicBool::new(false);
-static HOOKS_ENABLED: (AtomicBool, AtomicBool) = (AtomicBool::new(false), AtomicBool::new(false));
+static HOOKS_INITIALIZED: (AtomicBool, AtomicBool) =
+    (AtomicBool::new(false), AtomicBool::new(false));
 
 #[ctor]
 unsafe fn entry_point() {
@@ -42,8 +41,12 @@ unsafe fn entry_point() {
     );
 
     // Store the enabled state
-    HOOKS_ENABLED.0.store(enable_nvml_hooks, Ordering::Release);
-    HOOKS_ENABLED.1.store(enable_cuda_hooks, Ordering::Release);
+    HOOKS_INITIALIZED
+        .0
+        .store(!enable_nvml_hooks, Ordering::Release);
+    HOOKS_INITIALIZED
+        .1
+        .store(!enable_cuda_hooks, Ordering::Release);
 
     init_hooks();
 }
@@ -60,6 +63,11 @@ fn are_hooks_enabled() -> (bool, bool) {
         true
     };
     (enable_nvml_hooks, enable_cuda_hooks)
+}
+
+fn is_mapping_device_idx() -> bool {
+    let cmdline = std::fs::read_to_string("/proc/self/cmdline").unwrap();
+    cmdline.starts_with("nvidia-smi")
 }
 
 fn init_ngpu_library() {
@@ -158,13 +166,9 @@ fn init_ngpu_library() {
     });
 }
 
-fn try_install_cuda_hooks() -> bool {
-    if CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-        return true;
-    }
-
-    if !HOOKS_ENABLED.1.load(Ordering::Acquire) {
-        return false;
+fn try_install_cuda_hooks() {
+    if HOOKS_INITIALIZED.1.load(Ordering::Acquire) {
+        return;
     }
 
     let mut hook_manager = HookManager::default();
@@ -175,7 +179,7 @@ fn try_install_cuda_hooks() -> bool {
         .iter()
         .any(|m| m.starts_with("libcuda."))
     {
-        return false;
+        return;
     }
 
     tracing::debug!("Installing CUDA hooks...");
@@ -187,24 +191,18 @@ fn try_install_cuda_hooks() -> bool {
 
     match install_result {
         Ok(_) => {
-            CUDA_HOOKS_INITIALIZED.store(true, Ordering::Release);
+            HOOKS_INITIALIZED.1.store(true, Ordering::Release);
             tracing::debug!("CUDA hooks installed successfully");
-            true
         }
         Err(e) => {
             tracing::error!("CUDA hooks installation panicked: {:?}", e);
-            false
         }
     }
 }
 
-fn try_install_nvml_hooks() -> bool {
-    if NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-        return true;
-    }
-
-    if !HOOKS_ENABLED.0.load(Ordering::Acquire) {
-        return false;
+fn try_install_nvml_hooks(mapping_device_idx: bool) {
+    if HOOKS_INITIALIZED.0.load(Ordering::Acquire) {
+        return;
     }
 
     let mut hook_manager = HookManager::default();
@@ -215,24 +213,22 @@ fn try_install_nvml_hooks() -> bool {
         .iter()
         .any(|m| m.starts_with("libnvidia-ml."))
     {
-        return false;
+        return;
     }
 
     tracing::debug!("Installing NVML hooks...");
 
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        detour::nvml::enable_hooks(&mut hook_manager);
+        detour::nvml::enable_hooks(&mut hook_manager, mapping_device_idx);
     }));
 
     match install_result {
         Ok(_) => {
-            NVML_HOOKS_INITIALIZED.store(true, Ordering::Release);
+            HOOKS_INITIALIZED.0.store(true, Ordering::Release);
             tracing::debug!("NVML hooks installed successfully");
-            true
         }
         Err(e) => {
             tracing::error!("NVML hooks installation panicked: {:?}", e);
-            false
         }
     }
 }
@@ -260,7 +256,7 @@ fn init_hooks() {
     }
 
     if has_libnvml {
-        try_install_nvml_hooks();
+        try_install_nvml_hooks(is_mapping_device_idx());
     }
 
     // Install dlsym hook to catch dynamic library loading
@@ -312,15 +308,13 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     }
     let _guard = ResetGuard;
 
-    tracing::debug!("dlsym: {}", symbol_str);
-
     // Try to install hooks if not already done
-    if may_be_cuda && !CUDA_HOOKS_INITIALIZED.load(Ordering::Acquire) {
+    if may_be_cuda && !HOOKS_INITIALIZED.1.load(Ordering::Acquire) {
         try_install_cuda_hooks();
     }
 
-    if may_be_nvml && !NVML_HOOKS_INITIALIZED.load(Ordering::Acquire) {
-        try_install_nvml_hooks();
+    if may_be_nvml && !HOOKS_INITIALIZED.0.load(Ordering::Acquire) {
+        try_install_nvml_hooks(is_mapping_device_idx());
     }
 
     FN_DLSYM(handle, symbol)
