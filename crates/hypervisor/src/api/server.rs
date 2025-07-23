@@ -27,11 +27,11 @@ use crate::api::handlers::get_pod_info;
 use crate::api::handlers::process_init;
 use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
-use crate::worker_manager::WorkerManager;
+use crate::worker_manager::PodManager;
 
 /// HTTP API server for querying pod resource information
 pub struct ApiServer {
-    worker_manager: Arc<WorkerManager>,
+    pod_manager: Arc<PodManager>,
     listen_addr: String,
     jwt_config: JwtAuthConfig,
     trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
@@ -42,7 +42,7 @@ pub struct ApiServer {
 impl ApiServer {
     /// Create a new API server
     pub fn new(
-        worker_manager: Arc<WorkerManager>,
+        pod_manager: Arc<PodManager>,
         listen_addr: String,
         jwt_config: JwtAuthConfig,
         trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
@@ -50,7 +50,7 @@ impl ApiServer {
         gpu_observer: Arc<GpuObserver>,
     ) -> Self {
         Self {
-            worker_manager,
+            pod_manager,
             listen_addr,
             jwt_config,
             trap_handler,
@@ -84,8 +84,8 @@ impl ApiServer {
             // Unprotected routes without JWT middleware
             .nest("/api/v1/trap", trap_routes)
             .nest("/api/v1/limiter", limiter_routes)
-            .data(self.worker_manager.registry().clone())
-            .data(self.worker_manager.clone())
+            .data(self.pod_manager.registry().clone())
+            .data(self.pod_manager.clone())
             .data(self.command_dispatcher.clone())
             .data(self.gpu_observer.clone())
             .with(Tracing);

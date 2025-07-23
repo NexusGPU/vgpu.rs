@@ -64,15 +64,16 @@ impl ContainerInfo {
     }
 }
 
-/// Worker entry combining worker info with container tracking.
+/// Pod entry combining pod info with container tracking.
+/// Each pod can contain multiple containers, each with multiple worker processes.
 #[derive(Debug, Clone)]
-pub struct WorkerEntry {
+pub struct PodEntry {
     pub info: WorkerInfo,
     /// Container information keyed by container name
     pub containers: HashMap<String, ContainerInfo>,
 }
 
-impl WorkerEntry {
+impl PodEntry {
     fn new(info: WorkerInfo) -> Self {
         let mut containers = HashMap::new();
 
@@ -91,11 +92,11 @@ impl WorkerEntry {
     }
 }
 
-/// Worker registry for storing and managing worker information.
-pub type WorkerRegistry = Arc<RwLock<HashMap<String, WorkerEntry>>>;
+/// Pod registry for storing and managing pod information.
+pub type PodRegistry = Arc<RwLock<HashMap<String, PodEntry>>>;
 
-/// PID registry for mapping PIDs to worker entries.
-pub type PidRegistry = Arc<RwLock<HashMap<u32, WorkerEntry>>>;
+/// PID registry for mapping PIDs to pod entries.
+pub type PidToPodRegistry = Arc<RwLock<HashMap<u32, PodEntry>>>;
 
 /// Process resource tracker for managing shared memory handles and cleanup
 pub struct ProcessResourceTracker {
@@ -121,10 +122,10 @@ impl ProcessResourceTracker {
     }
 }
 
-/// Worker manager that handles worker lifecycle based on pod events.
-pub struct WorkerManager {
-    registry: WorkerRegistry,
-    pid_registry: PidRegistry,
+/// Pod manager that handles pod and worker lifecycle based on pod events.
+pub struct PodManager {
+    registry: PodRegistry,
+    pid_registry: PidToPodRegistry,
     /// Process resource tracking: PID -> ProcessResourceTracker
     process_resources: Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
     host_pid_probe: Arc<HostPidProbe>,
@@ -134,21 +135,21 @@ pub struct WorkerManager {
     nvml: Arc<Nvml>,
 }
 
-impl WorkerManager {
-    /// Find a worker by its PID.
-    pub async fn find_worker_by_pid(&self, pid: u32) -> Option<WorkerEntry> {
+impl PodManager {
+    /// Find a pod by worker PID.
+    pub async fn find_pod_by_worker_pid(&self, pid: u32) -> Option<PodEntry> {
         let pid_registry = self.pid_registry.read().await;
         pid_registry.get(&pid).cloned()
     }
 
-    /// Get the worker registry for API queries.
-    pub fn registry(&self) -> &WorkerRegistry {
+    /// Get the pod registry for API queries.
+    pub fn registry(&self) -> &PodRegistry {
         &self.registry
     }
 }
 
-impl WorkerManager {
-    /// Create a new worker manager with host PID probe.
+impl PodManager {
+    /// Create a new pod manager with host PID probe.
     pub fn new(
         host_pid_probe: Arc<HostPidProbe>,
         command_dispatcher: Arc<CommandDispatcher>,
@@ -173,11 +174,11 @@ impl WorkerManager {
         let worker_key = format!("{}_{}", pod_info.0.namespace, pod_info.0.pod_name);
         info!("Processing pod creation: {worker_key}");
 
-        // Store worker info in registry
+        // Store pod info in registry
         {
             let mut registry = self.registry.write().await;
-            registry.insert(worker_key.clone(), WorkerEntry::new(pod_info.0.clone()));
-            info!("Added worker to registry: {worker_key}");
+            registry.insert(worker_key.clone(), PodEntry::new(pod_info.0.clone()));
+            info!("Added pod to registry: {worker_key}");
         }
 
         // Register pod with limiter coordinator (Pod-level operation)
@@ -283,7 +284,7 @@ impl WorkerManager {
 
         // Create worker and update registry in a limited scope to reduce lock hold time
         info!("About to acquire registry write lock for {worker_key}");
-        let (worker, worker_entry) = {
+        let (worker, pod_entry) = {
             let mut registry = self.registry.write().await;
             info!("Registry write lock acquired for {worker_key}");
             if let Some(entry) = registry.get_mut(&worker_key) {
@@ -328,7 +329,7 @@ impl WorkerManager {
             }
         };
 
-        // Create or get shared memory handle for this process
+        // get shared memory handle for this process
         let shared_memory_handle =
             Arc::new(SharedMemoryHandle::open(&worker_key).map_err(|e| {
                 anyhow::anyhow!("Failed to open shared memory for {}: {}", worker_key, e)
@@ -358,11 +359,9 @@ impl WorkerManager {
         if let Err(e) = register_worker_to_limiter_coordinator(
             &self.limiter_coordinator,
             &worker,
-            &worker_entry,
             container_name,
             container_pid,
             host_pid,
-            &self.nvml,
         )
         .await
         {
@@ -373,7 +372,7 @@ impl WorkerManager {
 
         {
             let mut pid_registry = self.pid_registry.write().await;
-            pid_registry.insert(host_pid, worker_entry);
+            pid_registry.insert(host_pid, pod_entry);
         }
 
         info!(
@@ -441,8 +440,8 @@ impl WorkerManager {
         process_resources: &Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
         hypervisor: &Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
         limiter_coordinator: &Arc<LimiterCoordinator>,
-        registry: &WorkerRegistry,
-        pid_registry: &PidRegistry,
+        registry: &PodRegistry,
+        pid_registry: &PidToPodRegistry,
     ) -> Result<Vec<u32>> {
         let mut dead_pids = Vec::new();
 
@@ -491,8 +490,8 @@ impl WorkerManager {
         process_resources: &Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
         hypervisor: &Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
         limiter_coordinator: &Arc<LimiterCoordinator>,
-        registry: &WorkerRegistry,
-        pid_registry: &PidRegistry,
+        registry: &PodRegistry,
+        pid_registry: &PidToPodRegistry,
     ) -> Result<()> {
         info!("Processing process exit: host_pid={}", host_pid);
 
@@ -534,8 +533,8 @@ impl WorkerManager {
         // Step 4: Remove from worker registry (update container info)
         {
             let mut registry = registry.write().await;
-            if let Some(worker_entry) = registry.get_mut(&process_tracker.pod_identifier) {
-                if let Some(container_info) = worker_entry
+            if let Some(pod_entry) = registry.get_mut(&process_tracker.pod_identifier) {
+                if let Some(container_info) = pod_entry
                     .containers
                     .get_mut(&process_tracker.container_name)
                 {
@@ -642,14 +641,14 @@ impl WorkerManager {
 
     /// Handle a pod deletion event.
     pub async fn handle_pod_deleted(&self, pod_name: &str, namespace: &str) -> Result<()> {
-        let worker_key = format!("{namespace}_{pod_name}");
-        info!("Processing pod deletion: {worker_key}");
+        let pod_identifer = format!("{namespace}_{pod_name}");
+        info!("Processing pod deletion: {pod_identifer}");
 
         // Step 1: Remove from worker registry and collect all host PIDs
         let all_host_pids = {
             let mut registry = self.registry.write().await;
-            if let Some(entry) = registry.remove(&worker_key) {
-                info!("Removed pod from registry: {worker_key}");
+            if let Some(entry) = registry.remove(&pod_identifer) {
+                info!("Removed pod from registry: {pod_identifer}");
 
                 let mut host_pids = Vec::new();
 
@@ -667,7 +666,7 @@ impl WorkerManager {
 
                 host_pids
             } else {
-                warn!("Attempted to remove non-existent pod: {worker_key}");
+                warn!("Attempted to remove non-existent pod: {pod_identifer}");
                 return Ok(());
             }
         };
@@ -682,7 +681,7 @@ impl WorkerManager {
         for host_pid in &all_host_pids {
             if let Err(e) = self
                 .limiter_coordinator
-                .unregister_process(&worker_key, *host_pid)
+                .unregister_process(&pod_identifer, *host_pid)
             {
                 tracing::error!(
                     "Failed to unregister process {} from limiter coordinator: {}",
@@ -694,7 +693,10 @@ impl WorkerManager {
             }
         }
 
-        // Step 4: Clean up PID registry
+        // Step 4: Unregister pod from limiter coordinator
+        self.limiter_coordinator.unregister_pod(&pod_identifer)?;
+
+        // Step 6: Clean up PID registry
         {
             let mut pid_registry = self.pid_registry.write().await;
             for host_pid in &all_host_pids {
@@ -703,7 +705,7 @@ impl WorkerManager {
             }
         }
 
-        // Step 5: Clean up process resource tracking (this will automatically decrease reference counts)
+        // Step 7: Clean up process resource tracking (this will automatically decrease reference counts)
         {
             let mut process_resources = self.process_resources.write().await;
             for host_pid in &all_host_pids {
@@ -717,7 +719,7 @@ impl WorkerManager {
 
         info!(
             "Successfully deleted pod {} with {} processes",
-            worker_key,
+            pod_identifer,
             all_host_pids.len()
         );
 

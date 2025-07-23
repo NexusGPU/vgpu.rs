@@ -20,18 +20,18 @@ use crate::limiter_coordinator::LimiterCoordinator;
 use crate::metrics;
 use crate::process::worker::TensorFusionWorker;
 use crate::scheduler::weighted::WeightedScheduler;
-use crate::worker_manager::WorkerManager;
+use crate::worker_manager::PodManager;
 
 pub type HypervisorType = Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>;
 
-// Simplified WorkerManager type
-pub type WorkerManagerType = WorkerManager;
+// Simplified PodManager type
+pub type PodManagerType = PodManager;
 
 /// Application core structure, managing all components
 pub struct Application {
     pub hypervisor: Arc<HypervisorType>,
     pub gpu_observer: Arc<GpuObserver>,
-    pub worker_manager: Arc<WorkerManagerType>,
+    pub pod_manager: Arc<PodManagerType>,
     pub host_pid_probe: Arc<HostPidProbe>,
     pub command_dispatcher: Arc<CommandDispatcher>,
     pub device_plugin: Arc<GpuDevicePlugin>,
@@ -119,7 +119,7 @@ impl Tasks {
                 let metrics_batch_size = cli.metrics_batch_size;
                 let node_name = cli.node_name.clone();
                 let gpu_pool = cli.gpu_pool.clone();
-                let worker_manager = app.worker_manager.clone();
+                let pod_manager = app.pod_manager.clone();
                 let metrics_format = cli.metrics_format.clone();
                 let metrics_extra_labels = cli.metrics_extra_labels.clone();
                 let token = self.cancellation_token.clone();
@@ -131,7 +131,7 @@ impl Tasks {
                         metrics_batch_size,
                         &node_name,
                         gpu_pool.as_deref(),
-                        worker_manager,
+                        pod_manager,
                         &metrics_format,
                         metrics_extra_labels.as_deref(),
                         token,
@@ -176,7 +176,7 @@ impl Tasks {
 
             // Start Kubernetes update processor task
             let k8s_processor_task =
-                self.spawn_k8s_processor_task(k8s_update_receiver, app.worker_manager.clone());
+                self.spawn_k8s_processor_task(k8s_update_receiver, app.pod_manager.clone());
             self.tasks.push(k8s_processor_task);
 
             if cli.detect_in_used_gpus {
@@ -200,7 +200,7 @@ impl Tasks {
 
             // Start API server task
             let api_server_task = {
-                let worker_manager = app.worker_manager.clone();
+                let pod_manager = app.pod_manager.clone();
                 let listen_addr = cli.api_listen_addr.clone();
                 let gpu_observer = app.gpu_observer.clone();
                 let command_dispatcher = app.command_dispatcher.clone();
@@ -216,7 +216,7 @@ impl Tasks {
                     };
 
                     let api_server = ApiServer::new(
-                        worker_manager,
+                        pod_manager,
                         listen_addr,
                         jwt_config,
                         hypervisor,
@@ -294,16 +294,16 @@ impl Tasks {
         };
         self.tasks.push(limiter_coordinator_task);
 
-        // start worker manager resource monitoring task
-        let worker_manager_monitor_task = {
-            let worker_manager = app.worker_manager.clone();
+        // start pod manager resource monitoring task
+        let pod_manager_monitor_task = {
+            let pod_manager = app.pod_manager.clone();
             let token = self.cancellation_token.clone();
 
             tokio::spawn(async move {
                 tracing::info!("Starting worker manager resource monitoring task");
                 // Start monitoring with 30 second interval and cancellation token
                 let monitor_handle =
-                    worker_manager.start_resource_monitor(Duration::from_secs(30), token);
+                    pod_manager.start_resource_monitor(Duration::from_secs(30), token);
 
                 // Wait for the monitoring task to complete
                 if let Err(e) = monitor_handle.await {
@@ -313,7 +313,7 @@ impl Tasks {
                 }
             })
         };
-        self.tasks.push(worker_manager_monitor_task);
+        self.tasks.push(pod_manager_monitor_task);
 
         Ok(())
     }
@@ -400,7 +400,7 @@ impl Tasks {
     fn spawn_k8s_processor_task(
         &self,
         mut k8s_update_receiver: mpsc::Receiver<WorkerUpdate>,
-        worker_manager: Arc<crate::app::WorkerManagerType>,
+        pod_manager: Arc<crate::app::PodManagerType>,
     ) -> JoinHandle<()> {
         let token = self.cancellation_token.clone();
         tokio::spawn(async move {
@@ -419,7 +419,7 @@ impl Tasks {
                                             pod_info,
                                             pod_info.0.node_name
                                         );
-                                        if let Err(e) = worker_manager.handle_pod_created(pod_info).await {
+                                        if let Err(e) = pod_manager.handle_pod_created(pod_info).await {
                                             tracing::error!("Failed to handle pod creation: {e}");
                                         }
                                     }
@@ -436,7 +436,7 @@ impl Tasks {
                                             pod_info,
                                             node_name
                                         );
-                                        if let Err(e) = worker_manager
+                                        if let Err(e) = pod_manager
                                             .handle_pod_updated(&pod_name, &namespace, pod_info, node_name)
                                             .await
                                         {
@@ -448,7 +448,7 @@ impl Tasks {
                                         namespace,
                                     } => {
                                         tracing::info!("Pod deleted: {}/{}", namespace, pod_name);
-                                        if let Err(e) = worker_manager
+                                        if let Err(e) = pod_manager
                                             .handle_pod_deleted(&pod_name, &namespace)
                                             .await
                                         {

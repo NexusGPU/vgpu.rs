@@ -17,7 +17,7 @@ use crate::k8s::device_plugin::GpuDevicePlugin;
 use crate::limiter_comm::CommandDispatcher;
 use crate::limiter_coordinator::LimiterCoordinator;
 use crate::scheduler::weighted::WeightedScheduler;
-use crate::worker_manager::WorkerManager;
+use crate::worker_manager::PodManager;
 
 /// Application builder
 pub struct ApplicationBuilder {
@@ -40,13 +40,13 @@ impl ApplicationBuilder {
         // Create core components
         let components = self.create_core_components(&gpu_system).await?;
 
-        // Create worker manager (special handling for callback functions)
-        let worker_manager = self.create_worker_manager(&components, &gpu_system).await?;
+        // Create pod manager (special handling for callback functions)
+        let pod_manager = self.create_pod_manager(&components, &gpu_system).await?;
 
         Ok(Application {
             hypervisor: components.hypervisor,
             gpu_observer: components.gpu_observer,
-            worker_manager,
+            pod_manager,
             host_pid_probe: components.host_pid_probe,
             command_dispatcher: components.command_dispatcher,
             daemon_args: self.daemon_args,
@@ -110,13 +110,13 @@ impl ApplicationBuilder {
     }
 
     /// Create worker manager, set callback functions
-    async fn create_worker_manager(
+    async fn create_pod_manager(
         &self,
         components: &CoreComponents,
         gpu_system: &GpuSystem,
-    ) -> Result<Arc<crate::app::WorkerManagerType>> {
+    ) -> Result<Arc<crate::app::PodManagerType>> {
         // Create worker manager with direct component dependencies
-        let worker_manager = Arc::new(WorkerManager::new(
+        let pod_manager = Arc::new(PodManager::new(
             components.host_pid_probe.clone(),
             components.command_dispatcher.clone(),
             components.hypervisor.clone(),
@@ -124,7 +124,7 @@ impl ApplicationBuilder {
             gpu_system.nvml.clone(),
         ));
 
-        Ok(worker_manager)
+        Ok(pod_manager)
     }
 }
 

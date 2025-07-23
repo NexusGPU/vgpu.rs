@@ -10,20 +10,17 @@ use crate::config::GPU_CAPACITY_MAP;
 use crate::limiter_coordinator::LimiterCoordinator;
 use crate::process::worker::TensorFusionWorker;
 use crate::process::GpuProcess;
-use crate::worker_manager::WorkerEntry;
 
 // Configuration constant for CUDA cores calculation
 const FACTOR: u32 = 64;
 
-/// Registers a worker with the limiter coordinator.
+/// Registers a worker process with the limiter coordinator.
 pub async fn register_worker_to_limiter_coordinator(
     limiter_coordinator: &LimiterCoordinator,
     worker: &Arc<TensorFusionWorker>,
-    _worker_entry: &WorkerEntry,
     container_name: &str,
     container_pid: u32,
     host_pid: u32,
-    _nvml: &Nvml,
 ) -> Result<()> {
     // Get pod info from the worker.
     let pod_identifier = &format!("{}_{}", worker.namespace, worker.pod_name);
@@ -47,7 +44,7 @@ pub async fn register_worker_to_limiter_coordinator(
     Ok(())
 }
 
-/// Creates device configs from WorkerInfo (for pod-level registration)
+/// Creates device configs from WorkerInfo (pod metadata) for pod-level registration
 pub async fn create_device_configs_from_worker_info(
     worker_info: &api_types::WorkerInfo,
     nvml: &Nvml,

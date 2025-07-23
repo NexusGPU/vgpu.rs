@@ -385,29 +385,9 @@ impl LimiterCoordinator {
     pub fn unregister_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
         let pod_identifier = pod_identifier.to_string();
 
-        let should_cleanup = {
-            let mut active_pods = self.active_pods.write().unwrap();
-            if let Some(pod_usage) = active_pods.get_mut(&pod_identifier) {
-                let is_empty = pod_usage.remove_process(host_pid);
-                if is_empty {
-                    active_pods.remove(&pod_identifier);
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        };
-
-        if should_cleanup {
-            // Clean up the shared memory.
-            self.shared_memory_manager.cleanup(&pod_identifier)?;
-
-            info!(
-                pod_identifier = %pod_identifier,
-                "Cleaned up pod shared memory"
-            );
+        let mut active_pods = self.active_pods.write().unwrap();
+        if let Some(pod_usage) = active_pods.get_mut(&pod_identifier) {
+            pod_usage.remove_process(host_pid);
         }
 
         info!(
@@ -416,6 +396,12 @@ impl LimiterCoordinator {
             "Unregistered process from coordinator"
         );
 
+        Ok(())
+    }
+
+    /// Unregisters a pod from the coordinator.
+    pub fn unregister_pod(&self, pod_identifier: &str) -> Result<()> {
+        self.shared_memory_manager.cleanup(pod_identifier)?;
         Ok(())
     }
 

@@ -16,8 +16,8 @@ use super::types::PodInfoResponse;
 use super::types::ProcessInfo;
 use super::types::ProcessInitResponse;
 use crate::gpu_observer::GpuObserver;
-use crate::worker_manager::WorkerManager;
-use crate::worker_manager::WorkerRegistry;
+use crate::worker_manager::PodManager;
+use crate::worker_manager::PodRegistry;
 
 /// Query parameters for process initialization
 #[derive(Debug, Deserialize)]
@@ -30,7 +30,7 @@ pub struct ProcessInitQuery {
 #[handler]
 pub async fn get_pod_info(
     req: &Request,
-    worker_registry: Data<&WorkerRegistry>,
+    pod_registry: Data<&PodRegistry>,
 ) -> poem::Result<poem::web::Json<PodInfoResponse>> {
     // Extract JWT payload from request extensions
     let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
@@ -42,10 +42,10 @@ pub async fn get_pod_info(
     let pod_name = &jwt_payload.kubernetes.pod.name;
     let namespace = &jwt_payload.kubernetes.namespace;
 
-    let registry = worker_registry.read().await;
+    let registry = pod_registry.read().await;
     let worker_key = format!("{namespace}_{pod_name}");
 
-    let Some(worker_entry) = registry.get(&worker_key) else {
+    let Some(pod_entry) = registry.get(&worker_key) else {
         warn!(
             pod_name = pod_name,
             namespace = namespace,
@@ -61,12 +61,12 @@ pub async fn get_pod_info(
     info!(pod_name = pod_name, "Pod found in registry");
 
     let pod_info = PodInfo {
-        pod_name: worker_entry.info.pod_name.clone(),
-        namespace: worker_entry.info.namespace.clone(),
-        gpu_uuids: worker_entry.info.gpu_uuids.clone().unwrap_or_default(),
-        tflops_limit: worker_entry.info.tflops_limit,
-        vram_limit: worker_entry.info.vram_limit,
-        qos_level: worker_entry.info.qos_level,
+        pod_name: pod_entry.info.pod_name.clone(),
+        namespace: pod_entry.info.namespace.clone(),
+        gpu_uuids: pod_entry.info.gpu_uuids.clone().unwrap_or_default(),
+        tflops_limit: pod_entry.info.tflops_limit,
+        vram_limit: pod_entry.info.vram_limit,
+        qos_level: pod_entry.info.qos_level,
     };
 
     Ok(poem::web::Json(PodInfoResponse {
@@ -81,8 +81,8 @@ pub async fn get_pod_info(
 pub async fn process_init(
     req: &Request,
     query: Query<ProcessInitQuery>,
-    worker_registry: Data<&WorkerRegistry>,
-    worker_manager: Data<&Arc<WorkerManager>>,
+    pod_registry: Data<&PodRegistry>,
+    pod_manager: Data<&Arc<PodManager>>,
     gpu_observer: Data<&Arc<GpuObserver>>,
 ) -> poem::Result<poem::web::Json<ProcessInitResponse>> {
     // Extract JWT payload from request extensions
@@ -108,10 +108,10 @@ pub async fn process_init(
 
     // Validate pod and container exist
     let gpu_uuids = {
-        let registry = worker_registry.read().await;
+        let registry = pod_registry.read().await;
         let worker_key = format!("{namespace}_{pod_name}");
 
-        let Some(worker_entry) = registry.get(&worker_key) else {
+        let Some(pod_entry) = registry.get(&worker_key) else {
             warn!(pod_name = pod_name, namespace = namespace, "Pod not found");
             return Ok(poem::web::Json(ProcessInitResponse {
                 success: false,
@@ -120,7 +120,7 @@ pub async fn process_init(
             }));
         };
 
-        if worker_entry.get_container(container_name).is_none() {
+        if pod_entry.get_container(container_name).is_none() {
             warn!(
                 pod_name = pod_name,
                 container_name = container_name,
@@ -133,14 +133,14 @@ pub async fn process_init(
             }));
         }
 
-        worker_entry.info.gpu_uuids.clone().unwrap_or_default()
+        pod_entry.info.gpu_uuids.clone().unwrap_or_default()
     };
 
     // Initialize the process (discover PID and register to all components)
     let discovery_timeout = Duration::from_secs(5);
     let process_result = match timeout(
         discovery_timeout,
-        worker_manager.initialize_process(
+        pod_manager.initialize_process(
             pod_name,
             namespace,
             container_name,
