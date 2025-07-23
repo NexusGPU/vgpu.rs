@@ -389,15 +389,15 @@ impl WorkerManager {
         let limiter_coordinator = self.limiter_coordinator.clone();
         let registry = self.registry.clone();
         let pid_registry = self.pid_registry.clone();
-        
+
         tokio::spawn(async move {
             let mut interval_timer = tokio::time::interval(interval);
-            
+
             info!("Starting resource monitor with interval: {:?}", interval);
-            
+
             loop {
                 interval_timer.tick().await;
-                
+
                 // Check for dead processes and clean them up
                 if let Err(e) = Self::check_and_cleanup_dead_processes_static(
                     &process_resources,
@@ -405,12 +405,16 @@ impl WorkerManager {
                     &limiter_coordinator,
                     &registry,
                     &pid_registry,
-                ).await {
+                )
+                .await
+                {
                     tracing::error!("Failed to check and cleanup dead processes: {}", e);
                 }
-                
+
                 // Verify reference count consistency
-                if let Err(e) = Self::verify_reference_count_consistency_static(&process_resources).await {
+                if let Err(e) =
+                    Self::verify_reference_count_consistency_static(&process_resources).await
+                {
                     tracing::error!("Failed to verify reference count consistency: {}", e);
                 }
             }
@@ -435,10 +439,10 @@ impl WorkerManager {
 
         // Check each PID for liveness
         for pid in tracked_pids {
-            if !std::path::Path::new(&format!("/proc/{}", pid)).exists() {
+            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
                 info!("Detected dead process: {}", pid);
                 dead_pids.push(pid);
-                
+
                 // Clean up the dead process
                 if let Err(e) = Self::handle_process_exited_static(
                     pid,
@@ -447,7 +451,9 @@ impl WorkerManager {
                     limiter_coordinator,
                     registry,
                     pid_registry,
-                ).await {
+                )
+                .await
+                {
                     tracing::error!("Failed to cleanup dead process {}: {}", pid, e);
                 }
             }
@@ -497,8 +503,10 @@ impl WorkerManager {
             hypervisor.remove_process(host_pid);
         }
 
-        // Step 3: Unregister from limiter coordinator  
-        if let Err(e) = limiter_coordinator.unregister_process(&process_tracker.pod_identifier, host_pid) {
+        // Step 3: Unregister from limiter coordinator
+        if let Err(e) =
+            limiter_coordinator.unregister_process(&process_tracker.pod_identifier, host_pid)
+        {
             tracing::error!(
                 "Failed to unregister process {} from limiter coordinator: {}",
                 host_pid,
@@ -556,8 +564,8 @@ impl WorkerManager {
         process_resources: &Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
     ) -> Result<()> {
         let process_resources = process_resources.read().await;
-        
-        // Group processes by pod_identifier  
+
+        // Group processes by pod_identifier
         let mut pod_process_counts: HashMap<String, u32> = HashMap::new();
         for tracker in process_resources.values() {
             *pod_process_counts
@@ -573,7 +581,7 @@ impl WorkerManager {
                 .find(|t| t.pod_identifier == pod_identifier)
             {
                 let actual_count = tracker.shared_memory_handle.get_state().get_ref_count();
-                
+
                 if actual_count != expected_count {
                     warn!(
                         "Reference count mismatch for pod {}: expected={}, actual={}",
@@ -635,7 +643,7 @@ impl WorkerManager {
                     if container_info.has_workers() {
                         info!("Processing container: {container_name}");
 
-                        for (host_pid, _worker) in &container_info.workers {
+                        for host_pid in container_info.workers.keys() {
                             host_pids.push(*host_pid);
                             info!("Collected host PID {} for cleanup", host_pid);
                         }
