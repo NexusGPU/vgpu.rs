@@ -8,9 +8,10 @@ use poem::Request;
 use serde::Deserialize;
 use tokio::time::timeout;
 use tracing::info;
+use tracing::warn;
 
 use super::types::JwtPayload;
-use crate::api::types::WorkerQueryResponse;
+use crate::api::types::WorkerResponse;
 use crate::gpu_observer::GpuObserver;
 use crate::worker_manager::WorkerManager;
 use crate::worker_manager::WorkerRegistry;
@@ -26,11 +27,51 @@ pub struct WorkerQuery {
 #[handler]
 pub async fn get_worker_info(
     req: &Request,
+    worker_registry: Data<&WorkerRegistry>,
+) -> poem::Result<poem::web::Json<WorkerResponse>> {
+    // Extract JWT payload from request extensions
+    let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
+        poem::Error::from_string(
+            "JWT payload not found in request",
+            poem::http::StatusCode::UNAUTHORIZED,
+        )
+    })?;
+    let pod_name = &jwt_payload.kubernetes.pod.name;
+    let namespace = &jwt_payload.kubernetes.namespace;
+
+    let registry = worker_registry.read().await;
+    let worker_key = format!("{namespace}_{pod_name}");
+
+    let Some(worker_entry) = registry.get(&worker_key) else {
+        warn!(
+            pod_name = pod_name,
+            namespace = namespace,
+            "Worker not found in registry"
+        );
+        return Ok(poem::web::Json(WorkerResponse {
+            success: false,
+            data: None,
+            message: format!("Worker {pod_name} not found in namespace {namespace}"),
+        }));
+    };
+    warn!(pod_name = pod_name, "Worker found in registry");
+
+    Ok(poem::web::Json(WorkerResponse {
+        success: true,
+        data: Some(worker_entry.info.clone()),
+        message: format!("Worker {pod_name} found in namespace {namespace}"),
+    }))
+}
+
+/// worker init endpoint
+#[handler]
+pub async fn worker_init(
+    req: &Request,
     query: Query<WorkerQuery>,
     worker_registry: Data<&WorkerRegistry>,
     worker_manager: Data<&Arc<WorkerManager>>,
     gpu_observer: Data<&Arc<GpuObserver>>,
-) -> poem::Result<poem::web::Json<WorkerQueryResponse>> {
+) -> poem::Result<poem::web::Json<WorkerResponse>> {
     // Extract JWT payload from request extensions
     let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
         poem::Error::from_string(
@@ -57,28 +98,28 @@ pub async fn get_worker_info(
 
     // First, check if the worker exists for this pod
     let Some(worker_entry) = registry.get(&worker_key) else {
-        info!(
+        warn!(
             pod_name = pod_name,
             namespace = namespace,
             "Worker not found in registry"
         );
-        return Ok(poem::web::Json(WorkerQueryResponse {
+        return Ok(poem::web::Json(WorkerResponse {
             success: false,
             data: None,
             message: format!("Worker {pod_name} not found in namespace {namespace}"),
         }));
     };
-    info!(pod_name = pod_name, "Worker found in registry");
+    warn!(pod_name = pod_name, "Worker found in registry");
 
     // Then check if the container exists
     let Some(container_info) = worker_entry.get_container(container_name) else {
-        info!(
+        warn!(
             pod_name = pod_name,
             namespace = namespace,
             container_name = container_name,
             "Worker found but container not found"
         );
-        return Ok(poem::web::Json(WorkerQueryResponse {
+        return Ok(poem::web::Json(WorkerResponse {
             success: false,
             data: None,
             message: format!(
@@ -134,7 +175,7 @@ pub async fn get_worker_info(
                     "Failed to discover PID: {}",
                     e
                 );
-                return Ok(poem::web::Json(WorkerQueryResponse {
+                return Ok(poem::web::Json(WorkerResponse {
                     success: false,
                     data: None,
                     message: format!(
@@ -150,7 +191,7 @@ pub async fn get_worker_info(
                     "PID discovery timed out after {} seconds",
                     discovery_timeout.as_secs()
                 );
-                return Ok(poem::web::Json(WorkerQueryResponse {
+                return Ok(poem::web::Json(WorkerResponse {
                     success: false,
                     data: None,
                     message: format!(
@@ -179,9 +220,8 @@ pub async fn get_worker_info(
 
     // Update the WorkerInfo with host_pid
     let mut worker_info = worker_entry.info.clone();
-    worker_info.host_pid = host_pid;
 
-    Ok(poem::web::Json(WorkerQueryResponse {
+    Ok(poem::web::Json(WorkerResponse {
         success: true,
         data: Some(worker_info),
         message: format!(

@@ -40,11 +40,11 @@ unsafe fn entry_point() {
     tracing::info!(
         "enable_nvml_hooks: {enable_nvml_hooks}, enable_cuda_hooks: {enable_cuda_hooks}"
     );
-    
+
     // Store the enabled state
     HOOKS_ENABLED.0.store(enable_nvml_hooks, Ordering::Release);
     HOOKS_ENABLED.1.store(enable_cuda_hooks, Ordering::Release);
-    
+
     init_hooks();
 }
 
@@ -86,7 +86,7 @@ fn init_ngpu_library() {
             }
         };
 
-        let (hypervisor_ip, hypervisor_port) = match get_hypervisor_config() {
+        let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
             Some((ip, port)) => (ip, port),
             None => {
                 tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
@@ -95,7 +95,7 @@ fn init_ngpu_library() {
         };
 
         // Get device indices from environment variable
-        let config = match config::get_device_configs(&hypervisor_ip, &hypervisor_port) {
+        let config = match config::get_worker_config(&hypervisor_ip, &hypervisor_port) {
             Ok(config) => config,
             Err(err) => {
                 tracing::error!("failed to get device configs: {err}");
@@ -130,7 +130,7 @@ fn init_ngpu_library() {
             }
         }
 
-        let limiter = match Limiter::new(config.host_pid, nvml, pod_identifier, &config.gpu_uuids) {
+        let limiter = match Limiter::new(nvml, pod_identifier, &config.gpu_uuids) {
             Ok(limiter) => limiter,
             Err(err) => {
                 tracing::error!("failed to init limiter, err: {err}");
@@ -138,12 +138,6 @@ fn init_ngpu_library() {
             }
         };
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
-
-        command_handler::start_background_handler(
-            &hypervisor_ip,
-            &hypervisor_port,
-            config.host_pid,
-        );
 
         // Load tensor-fusion/ngpu.so
         if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
@@ -176,12 +170,16 @@ fn try_install_cuda_hooks() -> bool {
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
 
-    if !hook_manager.module_names.iter().any(|m| m.starts_with("libcuda.")) {
+    if !hook_manager
+        .module_names
+        .iter()
+        .any(|m| m.starts_with("libcuda."))
+    {
         return false;
     }
 
     tracing::debug!("Installing CUDA hooks...");
-    
+
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         detour::gpu::enable_hooks(&mut hook_manager);
         detour::mem::enable_hooks(&mut hook_manager);
@@ -212,12 +210,16 @@ fn try_install_nvml_hooks() -> bool {
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
 
-    if !hook_manager.module_names.iter().any(|m| m.starts_with("libnvidia-ml.")) {
+    if !hook_manager
+        .module_names
+        .iter()
+        .any(|m| m.starts_with("libnvidia-ml."))
+    {
         return false;
     }
 
     tracing::debug!("Installing NVML hooks...");
-    
+
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         detour::nvml::enable_hooks(&mut hook_manager);
     }));
@@ -242,8 +244,14 @@ fn init_hooks() {
     let mut hook_manager = HookManager::default();
     hook_manager.collect_module_names();
 
-    let has_libcuda = hook_manager.module_names.iter().any(|m| m.starts_with("libcuda."));
-    let has_libnvml = hook_manager.module_names.iter().any(|m| m.starts_with("libnvidia-ml."));
+    let has_libcuda = hook_manager
+        .module_names
+        .iter()
+        .any(|m| m.starts_with("libcuda."));
+    let has_libnvml = hook_manager
+        .module_names
+        .iter()
+        .any(|m| m.starts_with("libnvidia-ml."));
 
     tracing::debug!("has_libcuda: {has_libcuda}, has_libnvml: {has_libnvml}");
 
@@ -279,7 +287,7 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     if symbol.is_null() {
         return FN_DLSYM(handle, symbol);
     }
-    
+
     let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
     let may_be_cuda = symbol_str.starts_with("cu");
     let may_be_nvml = symbol_str.starts_with("nvml");
@@ -348,7 +356,7 @@ pub fn global_trap() -> impl trap::Trap {
     static GLOBAL_TRAP: OnceLock<Mutex<TrapImpl>> = OnceLock::new();
 
     let trap = GLOBAL_TRAP.get_or_init(|| {
-        if let Some((hypervisor_ip, hypervisor_port)) = get_hypervisor_config() {
+        if let Some((hypervisor_ip, hypervisor_port)) = config::get_hypervisor_config() {
             let server_url = format!("http://{hypervisor_ip}:{hypervisor_port}");
             let config = HttpTrapConfig {
                 server_url,
@@ -370,10 +378,4 @@ pub fn global_trap() -> impl trap::Trap {
     });
 
     trap.lock().expect("poisoned").clone()
-}
-
-fn get_hypervisor_config() -> Option<(String, String)> {
-    let hypervisor_ip = std::env::var("HYPERVISOR_IP").ok()?;
-    let hypervisor_port = std::env::var("HYPERVISOR_PORT").ok()?;
-    Some((hypervisor_ip, hypervisor_port))
 }

@@ -56,7 +56,7 @@ pub struct WorkerInfo {
 
 /// Response format for Worker query API
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerQueryResponse {
+pub struct WorkerResponse {
     /// Whether the request was successful
     pub success: bool,
     /// Pod resource information data (present when successful)

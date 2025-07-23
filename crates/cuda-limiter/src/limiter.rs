@@ -54,8 +54,6 @@ pub(crate) struct DeviceDim {
 
 /// Main limiter struct that manages CUDA resource limits
 pub(crate) struct Limiter {
-    /// Process ID being monitored
-    pub(crate) pid: u32,
     /// Pod name for shared memory access
     pod_identifier: String,
     /// Shared memory handle for each device
@@ -71,7 +69,6 @@ pub(crate) struct Limiter {
 impl std::fmt::Debug for Limiter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Limiter")
-            .field("pid", &self.pid)
             .field("identifier", &self.pod_identifier)
             .finish()
     }
@@ -80,7 +77,6 @@ impl std::fmt::Debug for Limiter {
 impl Limiter {
     /// Creates a new Limiter instance
     pub(crate) fn new(
-        pid: u32,
         nvml: Nvml,
         pod_identifier: String,
         gpu_uuids: &[String],
@@ -91,7 +87,7 @@ impl Limiter {
         for i in 0..gpu_uuids.len() {
             let ctx = CudaContext::new(i)?;
             let cu_uuid = ctx.uuid()?;
-            let cu_uuid = uuid_to_string_formatted(unsafe { std::mem::transmute(&cu_uuid.bytes) });
+            let cu_uuid = uuid_to_string_formatted(&cu_uuid.bytes);
 
             if gpu_uuids.contains(&cu_uuid) {
                 let device = nvml.device_by_uuid(cu_uuid.as_str())?;
@@ -108,7 +104,6 @@ impl Limiter {
 
         let shared_memory_handle = SharedMemoryHandle::open(&pod_identifier)?;
         Ok(Limiter {
-            pid,
             pod_identifier,
             current_devices_dim: HashMap::new(),
             shared_memory_handle,

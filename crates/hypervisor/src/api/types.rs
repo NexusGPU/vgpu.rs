@@ -5,4 +5,4 @@ pub use api_types::LimiterCommand;
 pub use api_types::LimiterCommandResponse;
 pub use api_types::LimiterCommandType;
 pub use api_types::WorkerInfo;
-pub use api_types::WorkerQueryResponse;
+pub use api_types::WorkerResponse;

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use error_stack::Report;
+use poem::get;
 use poem::listener::TcpListener;
 use poem::middleware::Tracing;
 use poem::post;
@@ -23,6 +24,7 @@ use super::auth::JwtAuthMiddleware;
 use super::errors::ApiError;
 use super::types::JwtAuthConfig;
 use crate::api::handlers::get_worker_info;
+use crate::api::handlers::worker_init;
 use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
 use crate::worker_manager::WorkerManager;
@@ -69,15 +71,24 @@ impl ApiServer {
 
         let limiter_routes = self.command_dispatcher.create_routes();
 
-        let app = Route::new()
-            .at("/api/v1/worker", get_worker_info)
+        // Routes that require JWT authentication
+        let protected_routes = Route::new()
+            .at("/api/v1/worker", get(get_worker_info))
+            .at("/api/v1/worker", post(worker_init))
+            .with(JwtAuthMiddleware::new(self.jwt_config));
+
+        // Routes that don't require JWT authentication
+        let unprotected_routes = Route::new()
             .nest("/api/v1/trap", trap_routes)
-            .nest("/api/v1/limiter", limiter_routes)
+            .nest("/api/v1/limiter", limiter_routes);
+
+        let app = Route::new()
+            .nest("/", protected_routes)
+            .nest("/", unprotected_routes)
             .data(self.worker_manager.registry().clone())
             .data(self.worker_manager.clone())
             .data(self.command_dispatcher.clone())
             .data(self.gpu_observer.clone())
-            .with(JwtAuthMiddleware::new(self.jwt_config))
             .with(Tracing);
 
         let listener = TcpListener::bind(&self.listen_addr);

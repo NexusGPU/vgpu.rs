@@ -33,21 +33,30 @@ impl Hooker<'_> {
             Module::find_global_export_by_name(symbol)
         }
         .ok_or_else(|| Error::NoSymbolName(Cow::Owned(symbol.to_string())))?;
-        
-        tracing::debug!("Found function at {:p} for symbol {}, calling interceptor.replace", function.0, symbol);
-        let result = self.interceptor
+
+        tracing::debug!(
+            "Found function at {:p} for symbol {}, calling interceptor.replace",
+            function.0,
+            symbol
+        );
+        let result = self
+            .interceptor
             .replace(
                 function,
                 NativePointer(detour),
                 NativePointer(std::ptr::null_mut()),
             )
             .map_err(Into::into);
-        
+
         match &result {
-            Ok(original) => tracing::debug!("Successfully hooked symbol {}, original at {:p}", symbol, original.0),
+            Ok(original) => tracing::debug!(
+                "Successfully hooked symbol {}, original at {:p}",
+                symbol,
+                original.0
+            ),
             Err(e) => tracing::error!("Failed to hook symbol {}: {:?}", symbol, e),
         }
-        
+
         result
     }
 }
