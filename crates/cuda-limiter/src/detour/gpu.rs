@@ -339,7 +339,11 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
         );
     });
 
-    FN_CU_INIT(flags)
+    let result = FN_CU_INIT(flags);
+
+    tracing::debug!("cu_init_detour result: {:?}", result);
+
+    result
 }
 
 pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
