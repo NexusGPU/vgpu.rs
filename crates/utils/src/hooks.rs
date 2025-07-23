@@ -24,12 +24,9 @@ impl Hooker<'_> {
         symbol: &str,
         detour: *mut c_void,
     ) -> Result<NativePointer, Error> {
-        tracing::debug!("Starting hook_export for symbol: {}", symbol);
         let function = if let Some(module_name) = self.module {
-            tracing::debug!("Loading module {} for symbol {}", module_name, symbol);
             Module::load(&GUM, module_name).find_export_by_name(symbol)
         } else {
-            tracing::debug!("Finding global export for symbol {}", symbol);
             Module::find_global_export_by_name(symbol)
         }
         .ok_or_else(|| Error::NoSymbolName(Cow::Owned(symbol.to_string())))?;
