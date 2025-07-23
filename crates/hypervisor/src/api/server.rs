@@ -71,20 +71,19 @@ impl ApiServer {
 
         let limiter_routes = self.command_dispatcher.create_routes();
 
-        // Routes that require JWT authentication
-        let protected_routes = Route::new()
-            .at("/api/v1/worker", get(get_worker_info))
-            .at("/api/v1/worker", post(worker_init))
-            .with(JwtAuthMiddleware::new(self.jwt_config));
-
-        // Routes that don't require JWT authentication
-        let unprotected_routes = Route::new()
-            .nest("/api/v1/trap", trap_routes)
-            .nest("/api/v1/limiter", limiter_routes);
-
         let app = Route::new()
-            .nest("/", protected_routes)
-            .nest("/", unprotected_routes)
+            // Protected routes with JWT middleware
+            .at(
+                "/api/v1/worker",
+                get(get_worker_info).with(JwtAuthMiddleware::new(self.jwt_config.clone())),
+            )
+            .at(
+                "/api/v1/worker",
+                post(worker_init).with(JwtAuthMiddleware::new(self.jwt_config.clone())),
+            )
+            // Unprotected routes without JWT middleware
+            .nest("/api/v1/trap", trap_routes)
+            .nest("/api/v1/limiter", limiter_routes)
             .data(self.worker_manager.registry().clone())
             .data(self.worker_manager.clone())
             .data(self.command_dispatcher.clone())
