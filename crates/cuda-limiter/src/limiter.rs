@@ -4,22 +4,19 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
 use cudarc::driver::sys::CUdevice;
-use cudarc::driver::CudaContext;
-use cudarc::driver::DriverError;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
+use once_cell::sync::OnceCell;
 use thiserror::Error;
 use trap::TrapError;
-use utils::shared_memory::SharedMemoryHandle;
+use utils::shared_memory::handle::SharedMemoryHandle;
 
+use crate::culib;
 use crate::detour;
 
 #[derive(Error, Debug)]
 pub(crate) enum Error {
-    #[error("CUDA driver error: `{0}`")]
-    CuDriver(#[from] DriverError),
-
     #[error("Trap error: `{0}`")]
     Trap(#[from] TrapError),
 
@@ -27,11 +24,11 @@ pub(crate) enum Error {
     #[allow(dead_code)]
     InvalidCuDevice(CUdevice),
 
-    #[error("Pod name or namespace not found in environment")]
-    PodNameOrNamespaceNotFound,
-
     #[error("Shared memory access failed: {0}")]
     SharedMemory(#[from] anyhow::Error),
+
+    #[error("Pod name or namespace not found in environment")]
+    PodNameOrNamespaceNotFound,
 
     #[error("Device {0} not configured")]
     DeviceNotConfigured(String),
@@ -54,12 +51,8 @@ pub(crate) struct DeviceDim {
 
 /// Main limiter struct that manages CUDA resource limits
 pub(crate) struct Limiter {
-    /// Process ID being monitored
-    pub(crate) pid: u32,
-    /// Pod name for shared memory access
-    pod_identifier: String,
-    /// Shared memory handle for each device
-    shared_memory_handle: SharedMemoryHandle,
+    /// Shared memory handle for each device (lazy initialized)
+    shared_memory_handle: OnceCell<SharedMemoryHandle>,
     /// NVML instance
     nvml: Nvml,
     /// Device dimensions
@@ -70,35 +63,25 @@ pub(crate) struct Limiter {
 
 impl std::fmt::Debug for Limiter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Limiter")
-            .field("pid", &self.pid)
-            .field("identifier", &self.pod_identifier)
-            .finish()
+        f.debug_struct("Limiter").finish()
     }
 }
 
 impl Limiter {
     /// Creates a new Limiter instance
-    pub(crate) fn new(
-        pid: u32,
-        nvml: Nvml,
-        pod_identifier: String,
-        gpu_uuids: &[String],
-    ) -> Result<Self, Error> {
+    pub(crate) fn new(nvml: Nvml, gpu_uuids: &[String]) -> Result<Self, Error> {
         let mut cu_device_mapping = BTreeMap::new();
         let mut uuid_mapping = HashMap::new();
 
         for i in 0..gpu_uuids.len() {
-            let ctx = CudaContext::new(i)?;
-            let cu_uuid = ctx.uuid()?;
-            let cu_uuid = uuid_to_string_formatted(&cu_uuid.bytes);
+            let (cu_uuid, cu_device) = culib::device_info(i as i32).unwrap();
 
             if gpu_uuids.contains(&cu_uuid) {
                 let device = nvml.device_by_uuid(cu_uuid.as_str())?;
                 let index = device.index()?;
                 uuid_mapping.insert(i as i32, cu_uuid.clone());
                 tracing::info!("Device {i} UUID: {}", cu_uuid);
-                cu_device_mapping.insert(ctx.cu_device(), (index, cu_uuid.clone()));
+                cu_device_mapping.insert(cu_device, (index, cu_uuid.clone()));
             }
         }
 
@@ -106,14 +89,19 @@ impl Limiter {
             .set(uuid_mapping)
             .expect("set GLOBAL_DEVICE_UUIDS");
 
-        let shared_memory_handle = SharedMemoryHandle::open(&pod_identifier)?;
         Ok(Limiter {
-            pid,
-            pod_identifier,
+            shared_memory_handle: OnceCell::new(),
             current_devices_dim: HashMap::new(),
-            shared_memory_handle,
             nvml,
             cu_device_mapping,
+        })
+    }
+
+    /// Get or initialize the shared memory handle (lazy initialization)
+    fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
+        self.shared_memory_handle.get_or_try_init(|| {
+            let pod_identifier = get_pod_identifier()?;
+            SharedMemoryHandle::open(&pod_identifier).map_err(Error::SharedMemory)
         })
     }
 
@@ -126,8 +114,9 @@ impl Limiter {
     ) -> Result<(), Error> {
         let kernel_size = grids as i32;
 
-        // Get shared memory handle for this device
-        let state = self.shared_memory_handle.get_state();
+        // Get shared memory handle for this device (lazy init)
+        let handle = self.get_or_init_shared_memory()?;
+        let state = handle.get_state();
 
         // Check if device exists, return error instead of panic
         if !state.has_device(device_uuid) {
@@ -168,7 +157,8 @@ impl Limiter {
 
     /// Get pod memory usage from shared memory
     pub(crate) fn get_pod_memory_usage(&self, device_uuid: &str) -> Result<(u64, u64), Error> {
-        let state = self.shared_memory_handle.get_state();
+        let handle = self.get_or_init_shared_memory()?;
+        let state = handle.get_state();
 
         if let Some((used, limit)) = state.with_device_by_uuid(device_uuid, |device| {
             (device.get_pod_memory_used(), device.get_mem_limit())
@@ -261,35 +251,11 @@ impl Limiter {
 }
 
 /// Get pod name from environment variable
-pub(crate) fn get_pod_identifier() -> Result<String, Error> {
+fn get_pod_identifier() -> Result<String, Error> {
     let name = std::env::var("POD_NAME").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
     let namespace =
         std::env::var("POD_NAMESPACE").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
-    Ok(format!("{namespace}_{name}"))
-}
-
-#[cfg(target_arch = "x86_64")]
-fn uuid_to_string_formatted(uuid: &[i8; 16]) -> String {
-    format!(
-        "GPU-{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        uuid[0], uuid[1], uuid[2], uuid[3],
-        uuid[4], uuid[5],
-        uuid[6], uuid[7],
-        uuid[8], uuid[9],
-        uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
-    )
-}
-
-#[cfg(target_arch = "aarch64")]
-fn uuid_to_string_formatted(uuid: &[u8; 16]) -> String {
-    format!(
-        "GPU-{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        uuid[0], uuid[1], uuid[2], uuid[3],
-        uuid[4], uuid[5],
-        uuid[6], uuid[7],
-        uuid[8], uuid[9],
-        uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
-    )
+    Ok(format!("tf_shm_{namespace}_{name}"))
 }
 
 #[cfg(test)]

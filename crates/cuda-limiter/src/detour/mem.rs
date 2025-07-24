@@ -243,7 +243,10 @@ pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, device: CUde
             *bytes = limit;
             CUresult::CUDA_SUCCESS
         }
-        Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
+        Err(e) => {
+            tracing::error!("Failed to get pod memory usage: {e}");
+            CUresult::CUDA_ERROR_UNKNOWN
+        }
     }
 }
 

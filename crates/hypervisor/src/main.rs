@@ -10,13 +10,11 @@ mod hypervisor;
 mod k8s;
 mod kube_client;
 mod limiter_comm;
-mod limiter_coordinator;
 mod logging;
 mod metrics;
+mod pod_management;
 mod process;
 mod scheduler;
-mod worker_manager;
-mod worker_registration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -50,7 +48,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
-    use utils::shared_memory::SharedMemoryHandle;
+    use utils::shared_memory::handle::SharedMemoryHandle;
     utils::logging::init();
 
     tracing::info!(
@@ -181,14 +179,21 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
         tracing::info!("mount tmpfs successfully");
     }
 
+    let old_umask = unsafe { libc::umask(0) };
+
     // set directory permissions
     let metadata =
         fs::metadata(&mount_shm_args.mount_point).context("get mount point metadata failed")?;
 
     let mut permissions = metadata.permissions();
-    permissions.set_mode(0o0755);
+    permissions.set_mode(0o0777);
 
     fs::set_permissions(&mount_shm_args.mount_point, permissions)
         .context("set permissions failed")?;
+
+    unsafe {
+        libc::umask(old_umask);
+    }
+
     Ok(())
 }

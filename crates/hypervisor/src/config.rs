@@ -9,28 +9,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use utils::version;
 
-/// global GPU capacity map, map GPU UUID to their fp16TFlops capacity
-pub static GPU_CAPACITY_MAP: Lazy<RwLock<HashMap<String, f64>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-
-/// GPU information structure corresponding to YAML config
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GpuInfo {
-    /// GPU model name (e.g., "T4", "A100_SXM")
-    pub model: String,
-    /// Full model name (e.g., "Tesla T4", "NVIDIA A100-SXM4-80GB")
-    #[serde(rename = "fullModelName")]
-    pub full_model_name: String,
-    /// GPU vendor (e.g., "NVIDIA")
-    pub vendor: String,
-    /// Cost per hour in USD
-    #[serde(rename = "costPerHour")]
-    pub cost_per_hour: f64,
-    /// FP16 TFLOPS capacity
-    #[serde(rename = "fp16TFlops")]
-    pub fp16_tflops: f64,
-}
-
 #[derive(Parser)]
 #[command(about, long_about, version = &**version::VERSION)]
 pub struct Cli {
@@ -150,39 +128,6 @@ pub struct DaemonArgs {
 
     #[arg(
         long,
-        help = "Enable device plugin",
-        default_value_t = true,
-        env = "ENABLE_DEVICE_PLUGIN",
-        action = clap::ArgAction::Set
-    )]
-    pub enable_device_plugin: bool,
-
-    #[arg(
-        long,
-        help = "kubelet socket path",
-        env = "KUBELET_SOCKET_PATH",
-        default_value = "/var/lib/kubelet/device-plugins/kubelet.sock"
-    )]
-    pub kubelet_socket_path: String,
-
-    #[arg(
-        long,
-        help = "device shm host path",
-        env = "DEVICE_SHM_HOST_PATH",
-        default_value = "/run/tensor-fusion/shm"
-    )]
-    pub device_shm_host_path: String,
-
-    #[arg(
-        long,
-        help = "device plugin socket path",
-        env = "DEVICE_PLUGIN_SOCKET_PATH",
-        default_value = "/var/lib/kubelet/device-plugins/tensor-fusion.sock"
-    )]
-    pub device_plugin_socket_path: String,
-
-    #[arg(
-        long,
         help = "Kubelet device state path for fetching GPU allocation state of other device plugins",
         default_value = "/var/lib/kubelet/device-plugins/kubelet_internal_checkpoint",
         value_hint = clap::ValueHint::FilePath,
@@ -200,11 +145,11 @@ pub struct DaemonArgs {
 
     #[arg(
         long,
-        help = "Prefix for shared memory file names used for orphaned file cleanup",
-        default_value = "",
-        env = "SHARED_MEMORY_FILE_PREFIX"
+        help = "Glob pattern for shared memory files, should be without /dev/shm/ prefix",
+        default_value = "tf_shm_*",
+        value_hint = clap::ValueHint::FilePath,
     )]
-    pub shared_memory_file_prefix: String,
+    pub shared_memory_glob_pattern: String,
 }
 
 #[derive(Parser)]
@@ -348,4 +293,26 @@ mod tests {
         let unknown_uuid = "GPU-11111111-1111-1111-1111-111111111111";
         assert_eq!(capacity_map.get(unknown_uuid), Some(&0.0));
     }
+}
+
+/// global GPU capacity map, map GPU UUID to their fp16TFlops capacity
+pub static GPU_CAPACITY_MAP: Lazy<RwLock<HashMap<String, f64>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// GPU information structure corresponding to YAML config
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuInfo {
+    /// GPU model name (e.g., "T4", "A100_SXM")
+    pub model: String,
+    /// Full model name (e.g., "Tesla T4", "NVIDIA A100-SXM4-80GB")
+    #[serde(rename = "fullModelName")]
+    pub full_model_name: String,
+    /// GPU vendor (e.g., "NVIDIA")
+    pub vendor: String,
+    /// Cost per hour in USD
+    #[serde(rename = "costPerHour")]
+    pub cost_per_hour: f64,
+    /// FP16 TFLOPS capacity
+    #[serde(rename = "fp16TFlops")]
+    pub fp16_tflops: f64,
 }

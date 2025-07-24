@@ -8,7 +8,7 @@
 //! - [`TensorFusionAnnotations`]: Represents parsed tensor-fusion annotations
 //! - [`WorkerUpdate`]: Events sent when pod changes affect workers
 
-pub(crate) mod device_plugin;
+// pub(crate) mod device_plugin;
 pub(crate) mod pod_info;
 pub(crate) mod pod_watcher;
 pub(crate) mod types;

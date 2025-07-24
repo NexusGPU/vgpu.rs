@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use error_stack::Report;
+use poem::get;
 use poem::listener::TcpListener;
 use poem::middleware::Tracing;
 use poem::post;
@@ -22,14 +23,15 @@ use trap::Waker;
 use super::auth::JwtAuthMiddleware;
 use super::errors::ApiError;
 use super::types::JwtAuthConfig;
-use crate::api::handlers::get_worker_info;
+use crate::api::handlers::get_pod_info;
+use crate::api::handlers::process_init;
 use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
-use crate::worker_manager::WorkerManager;
+use crate::pod_management::PodManager;
 
 /// HTTP API server for querying pod resource information
 pub struct ApiServer {
-    worker_manager: Arc<WorkerManager>,
+    pod_manager: Arc<PodManager>,
     listen_addr: String,
     jwt_config: JwtAuthConfig,
     trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
@@ -40,7 +42,7 @@ pub struct ApiServer {
 impl ApiServer {
     /// Create a new API server
     pub fn new(
-        worker_manager: Arc<WorkerManager>,
+        pod_manager: Arc<PodManager>,
         listen_addr: String,
         jwt_config: JwtAuthConfig,
         trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
@@ -48,7 +50,7 @@ impl ApiServer {
         gpu_observer: Arc<GpuObserver>,
     ) -> Self {
         Self {
-            worker_manager,
+            pod_manager,
             listen_addr,
             jwt_config,
             trap_handler,
@@ -70,14 +72,21 @@ impl ApiServer {
         let limiter_routes = self.command_dispatcher.create_routes();
 
         let app = Route::new()
-            .at("/api/v1/worker", get_worker_info)
+            // Protected routes with JWT middleware
+            .at(
+                "/api/v1/pod",
+                get(get_pod_info).with(JwtAuthMiddleware::new(self.jwt_config.clone())),
+            )
+            .at(
+                "/api/v1/process",
+                post(process_init).with(JwtAuthMiddleware::new(self.jwt_config.clone())),
+            )
+            // Unprotected routes without JWT middleware
             .nest("/api/v1/trap", trap_routes)
             .nest("/api/v1/limiter", limiter_routes)
-            .data(self.worker_manager.registry().clone())
-            .data(self.worker_manager.clone())
+            .data(self.pod_manager.clone())
             .data(self.command_dispatcher.clone())
             .data(self.gpu_observer.clone())
-            .with(JwtAuthMiddleware::new(self.jwt_config))
             .with(Tracing);
 
         let listener = TcpListener::bind(&self.listen_addr);

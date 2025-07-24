@@ -15,94 +15,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
 use utils::shared_memory::DeviceConfig;
-use utils::shared_memory::ThreadSafeSharedMemoryManager;
 
-/// Tracks device usage at the pod level.
-#[derive(Debug, Clone)]
-pub struct PodDeviceUsage {
-    pub device_configs: Vec<DeviceConfig>,
-    /// Information about containers in this pod that are using the device: container_name -> (container_pid, host_pid)
-    pub active_containers: HashMap<String, (u32, u32)>,
-}
-
-impl PodDeviceUsage {
-    fn new(device_configs: Vec<DeviceConfig>) -> Self {
-        Self {
-            device_configs,
-            active_containers: HashMap::new(),
-        }
-    }
-
-    fn add_container(&mut self, container_name: String, container_pid: u32, host_pid: u32) {
-        self.active_containers
-            .insert(container_name, (container_pid, host_pid));
-    }
-
-    fn remove_container(&mut self, container_name: &str) -> bool {
-        self.active_containers.remove(container_name);
-        self.active_containers.is_empty()
-    }
-
-    /// Gets all host_pids in the pod.
-    pub fn get_host_pids(&self) -> Vec<u32> {
-        self.active_containers
-            .values()
-            .map(|(_, host_pid)| *host_pid)
-            .collect()
-    }
-}
-
-/// Per-process utilization data
-#[derive(Debug, Clone, Copy)]
-pub struct ProcessUtilization {
-    pub sm_util: u32,
-    pub codec_util: u32,
-}
-
-/// Pod-level utilization summary
-#[derive(Debug, Default, Clone, Copy)]
-pub struct PodUtilization {
-    pub total_utilization: u32, // Sum of SM + codec utilization for all processes in pod
-}
-
-/// Complete snapshot of device state including utilization and memory
-#[derive(Debug, Clone)]
-pub struct DeviceSnapshot {
-    // pid -> utilization
-    pub process_utilizations: HashMap<u32, ProcessUtilization>,
-    // pid -> memory used
-    pub process_memories: HashMap<u32, u64>,
-    // timestamp of the snapshot
-    pub timestamp: u64,
-}
-
-impl DeviceSnapshot {
-    /// Calculate pod-level utilization from device snapshot
-    pub fn get_pod_utilization(&self, pids: &[u32]) -> PodUtilization {
-        let mut total_utilization = 0u32;
-
-        for pid in pids {
-            if let Some(process_util) = self.process_utilizations.get(pid) {
-                total_utilization += process_util.sm_util + process_util.codec_util;
-            }
-        }
-
-        PodUtilization { total_utilization }
-    }
-
-    /// Calculate pod-level memory usage from device snapshot
-    pub fn get_pod_memory(&self, pids: &[u32]) -> u64 {
-        pids.iter()
-            .filter_map(|pid| self.process_memories.get(pid))
-            .sum()
-    }
-}
-
-/// Normalization function for codec utilization.
-const fn codec_normalize(x: u32) -> u32 {
-    x * 85 / 100
-}
+use super::registry::PodDeviceUsage;
+use super::utilization::{codec_normalize, DeviceSnapshot, ProcessUtilization};
 
 /// Limiter coordinator.
 pub struct LimiterCoordinator {
@@ -116,15 +33,15 @@ pub struct LimiterCoordinator {
     watch_interval: Duration,
     /// Number of GPU devices.
     device_count: u32,
-    /// Shared memory file prefix for cleanup operations.
-    shared_memory_file_prefix: String,
+    /// glob pattern for shared memory files
+    shared_memory_glob_pattern: String,
 }
 
 impl LimiterCoordinator {
     pub fn new(
         watch_interval: Duration,
         device_count: u32,
-        shared_memory_file_prefix: String,
+        shared_memory_glob_pattern: String,
     ) -> Self {
         Self {
             shared_memory_manager: Arc::new(ThreadSafeSharedMemoryManager::new()),
@@ -132,7 +49,7 @@ impl LimiterCoordinator {
             device_watcher_tasks: RwLock::new(HashMap::new()),
             watch_interval,
             device_count,
-            shared_memory_file_prefix,
+            shared_memory_glob_pattern,
         }
     }
 
@@ -328,49 +245,50 @@ impl LimiterCoordinator {
         );
     }
 
-    /// Registers a device with the coordinator.
-    pub fn register_device(
+    /// Registers a pod with device configurations (Pod-level operation)
+    pub fn register_pod(&self, pod_identifier: &str, configs: Vec<DeviceConfig>) -> Result<()> {
+        let pod_identifier = pod_identifier.to_string();
+
+        // Create the shared memory for this pod
+        self.shared_memory_manager
+            .create_or_get_shared_memory(&pod_identifier, &configs)?;
+
+        // Initialize pod device usage
+        {
+            let mut active_pods = self.active_pods.write().unwrap();
+            if !active_pods.contains_key(&pod_identifier) {
+                active_pods.insert(pod_identifier.clone(), PodDeviceUsage::new(configs.clone()));
+            }
+        }
+
+        info!(
+            pod_identifier = %pod_identifier,
+            device_count = configs.len(),
+            "Registered pod with device configurations"
+        );
+
+        Ok(())
+    }
+
+    /// Registers a process within a pod (Process-level operation)
+    pub fn register_process(
         &self,
         pod_identifier: &str,
         container_name: &str,
         container_pid: u32,
         host_pid: u32,
-        configs: Vec<DeviceConfig>,
     ) -> Result<()> {
-        // Use the pod_identifier as the shared memory identifier.
         let pod_identifier = pod_identifier.to_string();
 
-        // Create the shared memory.
-        self.shared_memory_manager
-            .create_or_get_shared_memory(&pod_identifier, &configs)?;
-
-        let device_count = configs.len();
-        // Update the pod device usage.
         {
             let mut active_pods = self.active_pods.write().unwrap();
-            match active_pods.get_mut(&pod_identifier) {
-                Some(pod_usage) => {
-                    // Pod exists, add container and merge new device configs if needed
-                    pod_usage.add_container(container_name.to_string(), container_pid, host_pid);
+            let Some(pod_usage) = active_pods.get_mut(&pod_identifier) else {
+                return Err(anyhow::anyhow!(
+                    "Pod not found: {pod_identifier}. Must register pod first."
+                ));
+            };
 
-                    // Add any new device configs that don't already exist
-                    for new_config in configs {
-                        if !pod_usage
-                            .device_configs
-                            .iter()
-                            .any(|existing| existing.device_uuid == new_config.device_uuid)
-                        {
-                            pod_usage.device_configs.push(new_config);
-                        }
-                    }
-                }
-                None => {
-                    // New pod, create with provided configs
-                    let mut pod_usage = PodDeviceUsage::new(configs);
-                    pod_usage.add_container(container_name.to_string(), container_pid, host_pid);
-                    active_pods.insert(pod_identifier.clone(), pod_usage);
-                }
-            }
+            pod_usage.add_process(host_pid);
         }
 
         info!(
@@ -378,54 +296,33 @@ impl LimiterCoordinator {
             container_name = %container_name,
             container_pid = container_pid,
             host_pid = host_pid,
-            device_count = device_count,
-            "Registered device to coordinator"
+            "Registered process to coordinator"
         );
 
         Ok(())
     }
 
-    /// Unregisters a device from the coordinator.
-    pub fn unregister_device(
-        &self,
-        pod_identifier: &str,
-        container_name: &str,
-        container_pid: u32,
-    ) -> Result<()> {
+    /// Unregisters a single process from the coordinator.
+    pub fn unregister_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
         let pod_identifier = pod_identifier.to_string();
 
-        let should_cleanup = {
-            let mut active_pods = self.active_pods.write().unwrap();
-            if let Some(pod_usage) = active_pods.get_mut(&pod_identifier) {
-                let is_empty = pod_usage.remove_container(container_name);
-                if is_empty {
-                    active_pods.remove(&pod_identifier);
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        };
-
-        if should_cleanup {
-            // Clean up the shared memory.
-            self.shared_memory_manager.cleanup(&pod_identifier)?;
-
-            info!(
-                pod_identifier = %pod_identifier,
-                "Cleaned up pod shared memory"
-            );
+        let mut active_pods = self.active_pods.write().unwrap();
+        if let Some(pod_usage) = active_pods.get_mut(&pod_identifier) {
+            pod_usage.remove_process(host_pid);
         }
 
         info!(
             pod_identifier = %pod_identifier,
-            container_name = %container_name,
-            container_pid = container_pid,
-            "Unregistered device from coordinator"
+            host_pid = host_pid,
+            "Unregistered process from coordinator"
         );
 
+        Ok(())
+    }
+
+    /// Unregisters a pod from the coordinator.
+    pub fn unregister_pod(&self, pod_identifier: &str) -> Result<()> {
+        self.shared_memory_manager.cleanup(pod_identifier)?;
         Ok(())
     }
 
@@ -437,7 +334,7 @@ impl LimiterCoordinator {
         new_share: Option<i32>,
         timestamp: u64,
     ) -> Result<()> {
-        use utils::shared_memory::SharedMemoryHandle;
+        use utils::shared_memory::handle::SharedMemoryHandle;
 
         // Simple shared memory operations don't need spawn_blocking
         let handle =
@@ -478,7 +375,7 @@ impl LimiterCoordinator {
 
     /// Gets available cores for a device efficiently
     async fn get_available_cores(pod_identifier: &str, device_uuid: &str) -> Result<i32> {
-        use utils::shared_memory::SharedMemoryHandle;
+        use utils::shared_memory::handle::SharedMemoryHandle;
 
         let handle =
             SharedMemoryHandle::open(pod_identifier).context("Failed to open shared memory")?;
@@ -575,21 +472,17 @@ impl LimiterCoordinator {
 
         let cleaned_files = self
             .shared_memory_manager
-            .cleanup_orphaned_files(&self.shared_memory_file_prefix)
+            .cleanup_orphaned_files(&self.shared_memory_glob_pattern)
             .context("Failed to cleanup orphaned shared memory files")?;
 
         if !cleaned_files.is_empty() {
             tracing::info!(
-                "Cleaned up {} orphaned shared memory files with prefix '{}': {:?}",
+                "Cleaned up {} orphaned shared memory files: {:?}",
                 cleaned_files.len(),
-                self.shared_memory_file_prefix,
                 cleaned_files
             );
         } else {
-            tracing::info!(
-                "No orphaned shared memory files found with prefix '{}'",
-                self.shared_memory_file_prefix
-            );
+            tracing::info!("No orphaned shared memory files found");
         }
 
         Ok(())
@@ -697,101 +590,4 @@ fn calculate_increment(device: &DeviceConfig, utilization_diff: i32) -> i32 {
     }
 
     increment
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use utils::shared_memory::DeviceConfig;
-
-    use super::*;
-
-    /// Create test device configuration
-    fn create_test_device_config(device_idx: u32) -> DeviceConfig {
-        DeviceConfig {
-            device_idx,
-            device_uuid: "test-device-uuid".to_string(),
-            up_limit: 80,
-            mem_limit: 8 * 1024 * 1024 * 1024, // 8GB
-            total_cuda_cores: 2048,
-            sm_count: 10,
-            max_thread_per_sm: 1024,
-        }
-    }
-
-    /// Create test coordinator
-    fn create_test_coordinator() -> LimiterCoordinator {
-        LimiterCoordinator::new(Duration::from_millis(100), 1, "test_".to_string())
-        // Assume there is only one GPU device
-    }
-
-    /// Create unique test pod identifier
-    fn create_unique_test_pod_identifier(test_name: &str) -> String {
-        use std::time::SystemTime;
-        use std::time::UNIX_EPOCH;
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        format!("{test_name}-{timestamp}")
-    }
-
-    #[tokio::test]
-    async fn test_single_pod_single_container() {
-        let coordinator = create_test_coordinator();
-        let config = create_test_device_config(0);
-        let pod_identifier = create_unique_test_pod_identifier("single-pod-single-container");
-
-        // Register device
-        coordinator
-            .register_device(
-                &pod_identifier,
-                "container-1",
-                1001,
-                12345,
-                vec![config.clone()],
-            )
-            .unwrap();
-
-        // Unregister device
-        coordinator
-            .unregister_device(&pod_identifier, "container-1", 1001)
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_multiple_containers() {
-        let coordinator = create_test_coordinator();
-        let config = create_test_device_config(0);
-        let pod_identifier = create_unique_test_pod_identifier("multiple-containers");
-
-        // Register multiple containers
-        coordinator
-            .register_device(
-                &pod_identifier,
-                "container-1",
-                1001,
-                12345,
-                vec![config.clone()],
-            )
-            .unwrap();
-        coordinator
-            .register_device(
-                &pod_identifier,
-                "container-2",
-                1002,
-                12346,
-                vec![config.clone()],
-            )
-            .unwrap();
-
-        // Unregister containers
-        coordinator
-            .unregister_device(&pod_identifier, "container-1", 1001)
-            .unwrap();
-        coordinator
-            .unregister_device(&pod_identifier, "container-2", 1002)
-            .unwrap();
-    }
 }

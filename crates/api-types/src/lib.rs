@@ -54,15 +54,71 @@ pub struct WorkerInfo {
     pub labels: BTreeMap<String, String>,
 }
 
-/// Response format for Worker query API
+/// Response format for Worker query API (legacy, use PodInfoResponse for new code)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerQueryResponse {
+pub struct WorkerResponse {
     /// Whether the request was successful
     pub success: bool,
     /// Pod resource information data (present when successful)
     pub data: Option<WorkerInfo>,
     /// Response message
     pub message: String,
+}
+
+/// Response for pod information (GPU and limiter configuration)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PodInfoResponse {
+    /// Whether the request was successful
+    pub success: bool,
+    /// Pod information data (present when successful)
+    pub data: Option<PodInfo>,
+    /// Response message
+    pub message: String,
+}
+
+/// Pod-level information for GPU and limiter setup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PodInfo {
+    /// Pod name
+    pub pod_name: String,
+    /// Pod namespace
+    pub namespace: String,
+    /// List of GPU UUIDs assigned to this pod
+    pub gpu_uuids: Vec<String>,
+    /// TFLOPS limit for the pod
+    pub tflops_limit: Option<f64>,
+    /// VRAM limit for the pod in bytes
+    pub vram_limit: Option<u64>,
+    /// QoS level for the workload
+    pub qos_level: Option<QosLevel>,
+}
+
+/// Response for process initialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessInitResponse {
+    /// Whether the request was successful
+    pub success: bool,
+    /// Process information data (present when successful)
+    pub data: Option<ProcessInfo>,
+    /// Response message
+    pub message: String,
+}
+
+/// Process-level information after successful initialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessInfo {
+    /// Host PID of the process
+    pub host_pid: u32,
+    /// Container PID of the process
+    pub container_pid: u32,
+    /// Container name
+    pub container_name: String,
+    /// Pod name
+    pub pod_name: String,
+    /// Namespace
+    pub namespace: String,
+    /// GPU UUIDs this process can access
+    pub gpu_uuids: Vec<String>,
 }
 
 /// Kubernetes information from JWT token

@@ -1,32 +1,23 @@
-//! Shared Memory Module
-//! This module provides utilities for managing shared memory segments used for
-//! GPU resource coordination between processes.
-/// Error type for reference count operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefCountError {
-    Underflow,
-}
-
-use std::collections::HashMap;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use anyhow::Context;
 use anyhow::Result;
-use shared_memory::Mode;
-use shared_memory::Shmem;
-use shared_memory::ShmemConf;
-use shared_memory::ShmemError;
-use spin::RwLock;
-use tracing::info;
 use tracing::warn;
+
+pub mod handle;
+pub mod manager;
 
 /// Maximum number of devices that can be stored in shared memory
 const MAX_DEVICES: usize = 16;
 /// Maximum length of device UUID string (including null terminator)
 const MAX_UUID_LEN: usize = 64;
+/// Error type for reference count operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefCountError {
+    Underflow,
+}
 
 /// Device state stored in shared memory for a single device.
 #[repr(C)]
@@ -460,17 +451,6 @@ impl SharedDeviceState {
         self.reference_count.fetch_add(1, Ordering::AcqRel) + 1
     }
 
-    /// Decrements the reference count and returns the new value.
-    /// Returns 0 if the reference count would underflow.
-    pub fn decrement_ref_count(&self) -> u32 {
-        let current = self.reference_count.load(Ordering::Acquire);
-        if current > 0 {
-            self.reference_count.fetch_sub(1, Ordering::AcqRel) - 1
-        } else {
-            0
-        }
-    }
-
     /// Gets the current reference count.
     pub fn get_ref_count(&self) -> u32 {
         self.reference_count.load(Ordering::Acquire)
@@ -514,327 +494,14 @@ pub struct DeviceConfig {
     pub total_cuda_cores: u32,
 }
 
-/// A thread-safe shared memory manager.
-pub struct ThreadSafeSharedMemoryManager {
-    /// Active shared memory segments: identifier -> Shmem
-    active_memories: RwLock<HashMap<String, SharedMemoryHandle>>,
-}
-
-impl ThreadSafeSharedMemoryManager {
-    /// Creates a new thread-safe shared memory manager.
-    pub fn new() -> Self {
-        Self {
-            active_memories: RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// Creates or gets a shared memory segment.
-    pub fn create_or_get_shared_memory(
-        &self,
-        identifier: &str,
-        configs: &[DeviceConfig],
-    ) -> Result<()> {
-        let mut memories = self.active_memories.write();
-
-        // Check if the segment already exists.
-        if memories.contains_key(identifier) {
-            return Ok(());
-        }
-        // Create a new shared memory segment.
-        let shmem = SharedMemoryHandle::create(identifier, configs)?;
-
-        // Store the Shmem object and configuration.
-        memories.insert(identifier.to_string(), shmem);
-
-        Ok(())
-    }
-
-    /// Gets a pointer to the shared memory by its identifier.
-    pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut SharedDeviceState> {
-        let memories = self.active_memories.read();
-
-        if let Some(shmem) = memories.get(identifier) {
-            let ptr = shmem.get_ptr();
-            Ok(ptr)
-        } else {
-            Err(anyhow::anyhow!("Shared memory not found: {}", identifier))
-        }
-    }
-
-    /// Cleans up a shared memory segment.
-    pub fn cleanup(&self, identifier: &str) -> Result<()> {
-        let mut memories = self.active_memories.write();
-
-        if let Some(shmem) = memories.remove(identifier) {
-            // Drop the Shmem object to release the shared memory.
-            drop(shmem);
-            info!(identifier = %identifier, "Cleaned up shared memory segment");
-        } else {
-            warn!(identifier = %identifier, "Attempted to cleanup non-existent shared memory");
-        }
-
-        Ok(())
-    }
-
-    /// Force cleanup of a shared memory segment, ignoring reference count.
-    /// This should only be used in emergency situations or during shutdown.
-    pub fn force_cleanup(&self, identifier: &str) -> Result<()> {
-        self.cleanup(identifier)
-    }
-
-    /// Cleanup orphaned shared memory files from /dev/shm that match our naming pattern.
-    /// This should be called at startup to clean up files left by crashed processes.
-    pub fn cleanup_orphaned_files(&self, pattern_prefix: &str) -> Result<Vec<String>> {
-        let mut cleaned_files = Vec::new();
-        let shm_dir = std::path::Path::new("/dev/shm");
-
-        if !shm_dir.exists() {
-            return Ok(cleaned_files);
-        }
-
-        let entries = std::fs::read_dir(shm_dir).context("Failed to read /dev/shm directory")?;
-
-        for entry in entries {
-            let entry = entry.context("Failed to read directory entry")?;
-            let file_name = entry.file_name();
-            let file_name_str = file_name.to_string_lossy();
-
-            // Only process files that match our pattern
-            if file_name_str.starts_with(pattern_prefix) {
-                let file_path = entry.path();
-
-                // Try to determine if this file is actually in use by attempting to open it
-                let identifier = file_name_str.to_string();
-                let is_orphaned = match ShmemConf::new()
-                    .size(std::mem::size_of::<SharedDeviceState>())
-                    .os_id(&identifier)
-                    .open()
-                {
-                    Ok(shmem) => {
-                        // Successfully opened, check if it has an active process
-                        let ptr = shmem.as_ptr() as *const SharedDeviceState;
-                        unsafe {
-                            let state = &*ptr;
-                            // If reference count is 0, it's likely orphaned
-                            state.get_ref_count() == 0
-                        }
-                    }
-                    Err(_) => {
-                        // Failed to open as shared memory, but file exists - likely corrupted
-                        true
-                    }
-                };
-
-                if is_orphaned {
-                    match std::fs::remove_file(&file_path) {
-                        Ok(_) => {
-                            cleaned_files.push(identifier);
-                            info!("Cleaned up orphaned shared memory file: {}", file_name_str);
-                        }
-                        Err(e) => {
-                            warn!("Failed to remove orphaned file {}: {}", file_name_str, e);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(cleaned_files)
-    }
-
-    /// Checks if a shared memory segment should be cleaned up based on reference count.
-    /// Returns true if the segment exists and has zero references.
-    pub fn should_cleanup(&self, identifier: &str) -> bool {
-        let memories = self.active_memories.read();
-        if let Some(shmem) = memories.get(identifier) {
-            let state = shmem.get_state();
-            state.get_ref_count() == 0
-        } else {
-            false
-        }
-    }
-
-    /// Attempt to cleanup shared memory segments with zero reference count.
-    pub fn cleanup_unused(&self) -> Result<Vec<String>> {
-        let mut cleaned_up = Vec::new();
-        let identifiers: Vec<String> = {
-            let memories = self.active_memories.read();
-            memories.keys().cloned().collect()
-        };
-
-        for identifier in identifiers {
-            if self.should_cleanup(&identifier) {
-                match self.cleanup(&identifier) {
-                    Ok(_) => {
-                        cleaned_up.push(identifier.clone());
-                        info!(identifier = %identifier, "Cleaned up unused shared memory segment");
-                    }
-                    Err(e) => {
-                        warn!(identifier = %identifier, error = %e, "Failed to cleanup unused shared memory segment");
-                    }
-                }
-            }
-        }
-
-        Ok(cleaned_up)
-    }
-
-    /// Checks if a shared memory segment exists.
-    pub fn contains(&self, identifier: &str) -> bool {
-        let memories = self.active_memories.read();
-        memories.contains_key(identifier)
-    }
-}
-
-impl Default for ThreadSafeSharedMemoryManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// Ensure that ThreadSafeSharedMemoryManager is thread-safe.
-unsafe impl Send for ThreadSafeSharedMemoryManager {}
-unsafe impl Sync for ThreadSafeSharedMemoryManager {}
-
-/// Safely access shared memory, automatically handling the segment's lifecycle.
-pub struct SharedMemoryHandle {
-    _shmem: Shmem,
-    ptr: *mut SharedDeviceState,
-    identifier: String,
-}
-
-impl SharedMemoryHandle {
-    /// Opens an existing shared memory segment.
-    pub fn open(identifier: &str) -> Result<Self> {
-        let shmem = ShmemConf::new()
-            .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
-            .open()
-            .context("Failed to open shared memory")?;
-
-        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
-
-        // Increment reference count when opening existing shared memory
-        unsafe {
-            (*ptr).increment_ref_count();
-        }
-
-        Ok(Self {
-            _shmem: shmem,
-            ptr,
-            identifier: identifier.to_string(),
-        })
-    }
-
-    /// Creates a new shared memory segment.
-    pub fn create(identifier: &str, configs: &[DeviceConfig]) -> Result<Self> {
-        let old_umask = unsafe { libc::umask(0) };
-
-        let shmem = match ShmemConf::new()
-            .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
-            .mode(
-                Mode::S_IRUSR
-                    | Mode::S_IWUSR
-                    | Mode::S_IRGRP
-                    | Mode::S_IWGRP
-                    | Mode::S_IROTH
-                    | Mode::S_IWOTH,
-            )
-            .create()
-        {
-            Ok(shmem) => shmem,
-            Err(ShmemError::LinkExists) => {
-                // If it already exists, try to open it.
-                ShmemConf::new()
-                    .size(std::mem::size_of::<SharedDeviceState>())
-                    .os_id(identifier)
-                    .open()
-                    .context("Failed to open existing shared memory")?
-            }
-            Err(e) => return Err(anyhow::anyhow!("Failed to create shared memory: {}", e)),
-        };
-
-        unsafe {
-            libc::umask(old_umask);
-        }
-
-        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
-
-        // Initialize the shared memory data.
-        unsafe {
-            ptr.write(SharedDeviceState::new(configs));
-        }
-
-        info!(
-            identifier = %identifier,
-            "Created shared memory segment"
-        );
-
-        Ok(Self {
-            _shmem: shmem,
-            ptr,
-            identifier: identifier.to_string(),
-        })
-    }
-
-    /// Gets a pointer to the shared device state.
-    pub fn get_ptr(&self) -> *mut SharedDeviceState {
-        self.ptr
-    }
-
-    /// Gets a reference to the shared device state.
-    pub fn get_state(&self) -> &SharedDeviceState {
-        unsafe { &*self.ptr }
-    }
-
-    /// Gets the shared memory identifier.
-    pub fn get_identifier(&self) -> &str {
-        &self.identifier
-    }
-}
-
-// Implement Drop to handle reference counting cleanup
-impl Drop for SharedMemoryHandle {
-    fn drop(&mut self) {
-        unsafe {
-            match (*self.ptr).try_decrement_ref_count() {
-                Ok(ref_count) => {
-                    info!(
-                        identifier = %self.identifier,
-                        "Dropped shared memory reference, remaining count: {}",
-                        ref_count
-                    );
-                    if ref_count == 0 {
-                        info!(
-                            identifier = %self.identifier,
-                            "Last reference to shared memory dropped, reference count: {}",
-                            ref_count
-                        );
-                        // Note: We don't manually delete the file here. The shared_memory crate
-                        // and OS will handle cleanup when the underlying Shmem is dropped.
-                    }
-                }
-                Err(RefCountError::Underflow) => {
-                    warn!(
-                        identifier = %self.identifier,
-                        "Attempted to decrement reference count below zero"
-                    );
-                }
-            }
-        }
-    }
-}
-
-// Implement Send and Sync because SharedDeviceState uses atomic operations.
-unsafe impl Send for SharedMemoryHandle {}
-unsafe impl Sync for SharedMemoryHandle {}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
+
+    use crate::shared_memory::handle::SharedMemoryHandle;
+    use crate::shared_memory::manager::ThreadSafeSharedMemoryManager;
 
     use super::*;
 

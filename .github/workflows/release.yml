@@ -1,3 +1,5 @@
+permissions:
+  contents: read
 name: Release
 
 on:
@@ -138,29 +140,11 @@ jobs:
             echo "cross is already installed, skipping installation."
           fi
 
-      - name: Setup Cross.toml for CI
-        run: |
-          cat > Cross.toml << 'EOF'
-          [build.env]
-          passthrough = [
-              "VERSION",
-          ]
-
-          [target.x86_64-unknown-linux-gnu]
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
-
-          [target.aarch64-unknown-linux-gnu] 
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
-          EOF
-
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "build-${{ matrix.target }}"
+          prefix-key: v1
 
       - name: Build cuda-limiter
         run: VERSION=${{ needs.release.outputs.version }} cross build -p cuda-limiter --release --target ${{ matrix.target }}
@@ -264,11 +248,10 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
 
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1
 
       - name: Build for amd64
         run: VERSION=${{ needs.release.outputs.version }} cargo build -p hypervisor --release --target x86_64-unknown-linux-gnu
@@ -327,27 +310,10 @@ jobs:
             echo "cross is already installed, skipping installation."
           fi
 
-      - name: Setup Cross.toml for CI
-        run: |
-          cat > Cross.toml << 'EOF'
-          [build.env]
-          passthrough = [
-              "VERSION",
-          ]
-
-          [target.x86_64-unknown-linux-gnu]
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
-
-          [target.aarch64-unknown-linux-gnu] 
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
-          EOF
-
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1
 
       - name: Build for arm64
         run: VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target aarch64-unknown-linux-gnu
@@ -418,3 +384,21 @@ jobs:
             -t tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }} \
             tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64 \
             tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
+
+  trigger_ngpu_release:
+    needs:
+      - publish_libraries
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ngpu release workflow_dispatch
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'NexusGPU',
+              repo: 'ngpu',
+              workflow_id: 'release.yml',
+              ref: 'main'
+            });

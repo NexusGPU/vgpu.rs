@@ -1,6 +1,7 @@
 use std::ffi::c_int;
 use std::ffi::c_uint;
 use std::ffi::c_void;
+use std::sync::Once;
 
 use cudarc::driver::sys::CUfunction;
 use cudarc::driver::sys::CUresult;
@@ -9,8 +10,11 @@ use tf_macro::hook_fn;
 use utils::hooks::HookManager;
 use utils::replace_symbol;
 
+use crate::command_handler;
+use crate::config;
 use crate::with_device;
 use crate::GLOBAL_LIMITER;
+use crate::GLOBAL_NGPU_LIBRARY;
 
 #[hook_fn]
 pub(crate) unsafe extern "C" fn cu_launch_kernel_ptsz_detour(
@@ -297,6 +301,68 @@ pub(crate) unsafe extern "C" fn cu_func_set_block_shape_detour(
     FN_CU_FUNC_SET_BLOCK_SHAPE(hfunc, x, y, z)
 }
 
+#[hook_fn]
+pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
+    // Ensure worker initialization happens only once
+    static WORKER_INIT: Once = Once::new();
+
+    WORKER_INIT.call_once(|| {
+        // Try to initialize worker with hypervisor - using guard clauses for cleaner code
+        let Some((hypervisor_ip, hypervisor_port)) = config::get_hypervisor_config() else {
+            tracing::debug!("Hypervisor config not available, skipping worker initialization");
+            return;
+        };
+
+        let Some(container_name) = config::get_container_name() else {
+            tracing::warn!("Container name not available, skipping worker initialization");
+            return;
+        };
+
+        let result = match config::init_worker(&hypervisor_ip, &hypervisor_port, &container_name) {
+            Ok(result) => {
+                tracing::info!(
+                    "Worker initialized successfully via cu_init_detour: host_pid={}, gpu_uuids={:?}",
+                    result.host_pid,
+                    result.gpu_uuids
+                );
+                result
+            }
+            Err(e) => {
+                tracing::error!("Failed to initialize worker via cu_init_detour: {}", e);
+                return;
+            }
+        };
+
+        // Load tensor-fusion/ngpu.so
+        if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
+            tracing::debug!("loading ngpu.so from: {ngpu_path}");
+
+            match unsafe { libloading::Library::new(ngpu_path.as_str()) } {
+                Ok(lib) => {
+                    GLOBAL_NGPU_LIBRARY
+                        .set(lib)
+                        .expect("set GLOBAL_NGPU_LIBRARY");
+                    tracing::debug!("loaded ngpu.so");
+                }
+                Err(e) => {
+                    tracing::error!("failed to load ngpu.so: {e}, path: {ngpu_path}");
+                }
+            }
+            command_handler::start_background_handler(
+                &hypervisor_ip,
+                &hypervisor_port,
+                result.host_pid,
+            );
+        }
+    });
+
+    let result = FN_CU_INIT(flags);
+
+    tracing::debug!("cu_init_detour flags: {:?}, result: {:?}", flags, result);
+
+    result
+}
+
 pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
     replace_symbol!(
         hook_manager,
@@ -368,5 +434,14 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_func_set_block_shape_detour,
         FnCu_func_set_block_shape,
         FN_CU_FUNC_SET_BLOCK_SHAPE
+    );
+
+    replace_symbol!(
+        hook_manager,
+        Some("libcuda."),
+        "cuInit",
+        cu_init_detour,
+        FnCu_init,
+        FN_CU_INIT
     );
 }

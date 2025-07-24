@@ -9,7 +9,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::GPU_CAPACITY_MAP;
 use crate::gpu_observer::GpuObserver;
 use crate::process::GpuResources;
-use crate::worker_manager::WorkerManager;
+
+use crate::pod_management::PodManager;
 
 pub mod encoders;
 use encoders::create_encoder;
@@ -69,7 +70,7 @@ pub(crate) async fn run_metrics(
     metrics_batch_size: usize,
     node_name: &str,
     gpu_pool: Option<&str>,
-    worker_mgr: Arc<WorkerManager>,
+    pod_mgr: Arc<PodManager>,
     metrics_format: &str,
     metrics_extra_labels: Option<&str>,
     cancellation_token: CancellationToken,
@@ -152,16 +153,16 @@ pub(crate) async fn run_metrics(
                         for (gpu_uuid, process_metrics) in process_metrics_snapshot {
                             let worker_acc = worker_acc.entry(gpu_uuid.clone()).or_default();
                             for (pid, resources) in process_metrics.iter() {
-                                let worker_entry = worker_mgr.find_worker_by_pid(*pid).await;
-                                if worker_entry.is_none() {
+                                let pod_entry = pod_mgr.find_pod_by_worker_pid(*pid).await;
+                                if pod_entry.is_none() {
                                     tracing::debug!(
                                         msg = "Failed to find worker, GPU may used by unknown process not managed by TensorFusion",
                                         pid = *pid,
                                     );
                                     continue;
                                 }
-                                let worker_info = worker_entry.unwrap().info;
-                                let pod_identifier = format!("{}_{}", worker_info.namespace, worker_info.pod_name);
+                                let pod_entry = pod_entry.unwrap();
+                                let pod_identifier = pod_mgr.generate_pod_identifier_for_info(&pod_entry.info);
                                 let acc = worker_acc.entry(pod_identifier).or_default();
                                 acc.memory_bytes += resources.memory_bytes;
                                 acc.compute_percentage += resources.compute_percentage as f64;
@@ -200,11 +201,11 @@ pub(crate) async fn run_metrics(
                             }
 
                             // Output averaged worker metrics
-                            let worker_registry = worker_mgr.registry().read().await;
+                            let pod_registry = pod_mgr.registry().read().await;
                             for (gpu_uuid, pod_metrics) in &worker_acc {
                                 for (pod_identifier, acc) in pod_metrics {
-                                    let worker_entry = worker_registry.get(pod_identifier).unwrap();
-                                    let labels = &worker_entry.info.labels;
+                                    let pod_entry = pod_registry.get(pod_identifier).unwrap();
+                                    let labels = &pod_entry.info.labels;
 
                                     if acc.count > 0 {
                                         let mut extra_labels = HashMap::new();
@@ -225,8 +226,8 @@ pub(crate) async fn run_metrics(
                                             node_name,
                                             gpu_pool,
                                             pod_identifier,
-                                            &worker_entry.info.namespace,
-                                            worker_entry
+                                                                                    &pod_entry.info.namespace,
+                                        pod_entry
                                                 .info
                                                 .workload_name
                                                 .as_deref()
@@ -235,7 +236,7 @@ pub(crate) async fn run_metrics(
                                             acc.compute_percentage / acc.count as f64,
                                             acc.compute_tflops / acc.count as f64,
                                             (acc.memory_bytes as f64 / acc.count as f64)
-                                                / worker_entry.info.vram_limit.unwrap_or(0) as f64,
+                                                / pod_entry.info.vram_limit.unwrap_or(0) as f64,
                                             timestamp,
                                             &extra_labels,
                                         );
