@@ -168,7 +168,7 @@ impl WorkerMonitor {
                 match SystemTime::now().duration_since(UNIX_EPOCH) {
                     Ok(now) => {
                         let elapsed = now.as_secs().saturating_sub(worker.last_heartbeat);
-                        format!("{}s ago", elapsed)
+                        format!("{elapsed}s ago")
                     }
                     Err(_) => "Unknown".to_string(),
                 }
@@ -266,7 +266,7 @@ async fn setup_file_watcher(pattern: &str, tx: mpsc::Sender<RefreshEvent>) -> Re
     let mut watcher = RecommendedWatcher::new(
         move |res| {
             if let Ok(event) = res {
-                if let Err(_) = watch_tx.blocking_send(event) {}
+                if watch_tx.blocking_send(event).is_err() {}
             }
         },
         notify::Config::default(),
