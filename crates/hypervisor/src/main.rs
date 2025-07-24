@@ -15,6 +15,7 @@ mod metrics;
 mod pod_management;
 mod process;
 mod scheduler;
+mod tui_workers;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -44,6 +45,9 @@ async fn main() -> Result<()> {
         Commands::Daemon(daemon_args) => run_daemon(*daemon_args).await,
         Commands::MountShm(mount_shm_args) => run_mount_shm(mount_shm_args).await,
         Commands::ShowShm(show_shm_args) => run_show_shm(show_shm_args).await,
+        Commands::ShowTuiWorkers(show_tui_workers_args) => {
+            run_show_tui_workers(show_tui_workers_args).await
+        }
     }
 }
 
@@ -196,4 +200,12 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
     }
 
     Ok(())
+}
+
+async fn run_show_tui_workers(args: crate::config::ShowTuiWorkersArgs) -> Result<()> {
+    utils::logging::init();
+
+    tracing::info!("Starting TUI worker monitor with pattern: {}", args.glob);
+
+    tui_workers::run_tui_monitor(format!("/dev/shm/{}", args.glob)).await
 }

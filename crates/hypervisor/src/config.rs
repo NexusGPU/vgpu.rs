@@ -26,12 +26,25 @@ pub enum Commands {
     /// Show shared memory state
     #[command(name = "show-shm")]
     ShowShm(ShowShmArgs),
+    /// Show TUI for monitoring workers
+    #[command(name = "show-tui-workers")]
+    ShowTuiWorkers(ShowTuiWorkersArgs),
 }
 
 #[derive(Parser)]
 pub struct ShowShmArgs {
     #[arg(long, help = "Shared memory identifier")]
     pub shm_identifier: String,
+}
+
+#[derive(Parser)]
+pub struct ShowTuiWorkersArgs {
+    #[arg(
+        long,
+        help = "Glob pattern for worker shared memory files",
+        default_value = "/tf_shm_*"
+    )]
+    pub glob: String,
 }
 
 #[derive(Parser)]
