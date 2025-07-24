@@ -14,7 +14,7 @@ macro_rules! with_device {
         let mut device: i32 = 0;
         unsafe {
             // Call the CUDA API to get the current device
-            let result = ::cudarc::driver::sys::cuCtxGetDevice(&mut device as *mut i32);
+            let result = ($crate::culib::culib().cuCtxGetDevice)(&mut device as *mut i32);
             if result != ::cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
                 panic!("Failed to get current CUDA device: error code {:?}", result);
             }

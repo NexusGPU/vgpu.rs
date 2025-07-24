@@ -4,8 +4,6 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
 use cudarc::driver::sys::CUdevice;
-use cudarc::driver::CudaContext;
-use cudarc::driver::DriverError;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
@@ -14,13 +12,11 @@ use thiserror::Error;
 use trap::TrapError;
 use utils::shared_memory::handle::SharedMemoryHandle;
 
+use crate::culib;
 use crate::detour;
 
 #[derive(Error, Debug)]
 pub(crate) enum Error {
-    #[error("CUDA driver error: `{0}`")]
-    CuDriver(#[from] DriverError),
-
     #[error("Trap error: `{0}`")]
     Trap(#[from] TrapError),
 
@@ -78,16 +74,14 @@ impl Limiter {
         let mut uuid_mapping = HashMap::new();
 
         for i in 0..gpu_uuids.len() {
-            let ctx = CudaContext::new(i)?;
-            let cu_uuid = ctx.uuid()?;
-            let cu_uuid = uuid_to_string_formatted(&cu_uuid.bytes);
+            let (cu_uuid, cu_device) = culib::device_info(i as i32).unwrap();
 
             if gpu_uuids.contains(&cu_uuid) {
                 let device = nvml.device_by_uuid(cu_uuid.as_str())?;
                 let index = device.index()?;
                 uuid_mapping.insert(i as i32, cu_uuid.clone());
                 tracing::info!("Device {i} UUID: {}", cu_uuid);
-                cu_device_mapping.insert(ctx.cu_device(), (index, cu_uuid.clone()));
+                cu_device_mapping.insert(cu_device, (index, cu_uuid.clone()));
             }
         }
 
@@ -256,29 +250,6 @@ impl Limiter {
     }
 }
 
-#[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
-fn uuid_to_string_formatted(uuid: &[i8; 16]) -> String {
-    format!(
-        "GPU-{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        uuid[0], uuid[1], uuid[2], uuid[3],
-        uuid[4], uuid[5],
-        uuid[6], uuid[7],
-        uuid[8], uuid[9],
-        uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
-    )
-}
-
-#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
-fn uuid_to_string_formatted(uuid: &[u8; 16]) -> String {
-    format!(
-        "GPU-{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        uuid[0], uuid[1], uuid[2], uuid[3],
-        uuid[4], uuid[5],
-        uuid[6], uuid[7],
-        uuid[8], uuid[9],
-        uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
-    )
-}
 /// Get pod name from environment variable
 fn get_pod_identifier() -> Result<String, Error> {
     let name = std::env::var("POD_NAME").map_err(|_| Error::PodNameOrNamespaceNotFound)?;

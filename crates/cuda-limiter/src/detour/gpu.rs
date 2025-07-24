@@ -338,7 +338,6 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
             }
         };
 
-        
         // Load tensor-fusion/ngpu.so
         if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
             tracing::debug!("loading ngpu.so from: {ngpu_path}");
