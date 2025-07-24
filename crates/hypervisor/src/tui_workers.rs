@@ -194,16 +194,9 @@ impl WorkerMonitor {
                 );
                 let up_limit_str = format!("{}%", device.up_limit);
 
-                // Truncate UUID for display
-                let display_uuid = if device.uuid.len() > 12 {
-                    format!("{}...", &device.uuid[..9])
-                } else {
-                    device.uuid.clone()
-                };
-
                 device_rows.push(Row::new(vec![
                     Cell::from(worker.identifier.as_str()),
-                    Cell::from(display_uuid),
+                    Cell::from(device.uuid.as_str()),
                     Cell::from(cores_ratio),
                     Cell::from(memory_ratio),
                     Cell::from(up_limit_str),
@@ -215,12 +208,12 @@ impl WorkerMonitor {
         let total_devices: usize = self.workers.values().map(|w| w.devices.len()).sum();
 
         let widths = [
-            Constraint::Length(15), // Worker
-            Constraint::Length(15), // Device UUID
+            Constraint::Min(15),    // Worker
+            Constraint::Min(15),    // Device UUID
             Constraint::Length(18), // Available/Total Cores
             Constraint::Length(18), // Memory Used/Limit
             Constraint::Length(10), // Up Limit
-            Constraint::Fill(1),    // Health
+            Constraint::Length(10), // Health
         ];
 
         let table = Table::new(device_rows, widths)
