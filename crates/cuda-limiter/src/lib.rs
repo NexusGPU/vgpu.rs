@@ -130,11 +130,6 @@ fn init_ngpu_library() {
             }
         }
 
-        if std::env::var("SKIP_LIMITER_INIT").is_ok() {
-            tracing::debug!("SKIP_LIMITER_INIT is set, skipping limiter initialization");
-            return;
-        }
-
         let limiter = match Limiter::new(nvml, &config.gpu_uuids) {
             Ok(limiter) => limiter,
             Err(err) => {
