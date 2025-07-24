@@ -203,7 +203,7 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
 }
 
 async fn run_show_tui_workers(args: crate::config::ShowTuiWorkersArgs) -> Result<()> {
-    utils::logging::init();
+    utils::logging::init_with_log_path(args.log_path);
 
     tracing::info!("Starting TUI worker monitor with pattern: {}", args.glob);
 

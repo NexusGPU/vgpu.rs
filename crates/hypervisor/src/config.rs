@@ -45,6 +45,13 @@ pub struct ShowTuiWorkersArgs {
         default_value = "/tf_shm_*"
     )]
     pub glob: String,
+
+    #[arg(
+        long,
+        help = "Log path for TUI worker monitor",
+        default_value = "/tmp/hypervisor_tui_workers.log"
+    )]
+    pub log_path: String,
 }
 
 #[derive(Parser)]

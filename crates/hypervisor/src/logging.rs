@@ -1,5 +1,6 @@
 //! provides logging helpers
 
+use std::env;
 use std::fmt::{self};
 use std::path::Path;
 
@@ -15,6 +16,7 @@ use tracing_subscriber::fmt::layer;
 use tracing_subscriber::fmt::FormatEvent;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry;
+use utils::logging::LOG_PATH_ENV_VAR;
 
 struct InfluxDBFormatter;
 
@@ -54,7 +56,8 @@ where
 pub(crate) fn init<P: AsRef<Path>>(
     gpu_metrics_file: Option<P>,
 ) -> tracing_appender::non_blocking::WorkerGuard {
-    let fmt_layer = utils::logging::get_fmt_layer();
+    let log_path = env::var(LOG_PATH_ENV_VAR).ok();
+    let fmt_layer = utils::logging::get_fmt_layer(log_path);
 
     let gpu_metrics_file = gpu_metrics_file
         .as_ref()
