@@ -27,7 +27,7 @@ use crate::api::handlers::get_pod_info;
 use crate::api::handlers::process_init;
 use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
-use crate::worker_manager::PodManager;
+use crate::pod_management::PodManager;
 
 /// HTTP API server for querying pod resource information
 pub struct ApiServer {
@@ -84,7 +84,6 @@ impl ApiServer {
             // Unprotected routes without JWT middleware
             .nest("/api/v1/trap", trap_routes)
             .nest("/api/v1/limiter", limiter_routes)
-            .data(self.pod_manager.registry().clone())
             .data(self.pod_manager.clone())
             .data(self.command_dispatcher.clone())
             .data(self.gpu_observer.clone())

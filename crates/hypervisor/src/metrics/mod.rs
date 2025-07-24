@@ -9,7 +9,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::GPU_CAPACITY_MAP;
 use crate::gpu_observer::GpuObserver;
 use crate::process::GpuResources;
-use crate::worker_manager::PodManager;
+
+use crate::pod_management::PodManager;
 
 pub mod encoders;
 use encoders::create_encoder;
@@ -160,8 +161,8 @@ pub(crate) async fn run_metrics(
                                     );
                                     continue;
                                 }
-                                let worker_info = pod_entry.unwrap().info;
-                                let pod_identifier = format!("{}_{}", worker_info.namespace, worker_info.pod_name);
+                                let pod_entry = pod_entry.unwrap();
+                                let pod_identifier = pod_mgr.generate_pod_identifier_for_info(&pod_entry.info);
                                 let acc = worker_acc.entry(pod_identifier).or_default();
                                 acc.memory_bytes += resources.memory_bytes;
                                 acc.compute_percentage += resources.compute_percentage as f64;

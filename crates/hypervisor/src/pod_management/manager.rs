@@ -1,6 +1,4 @@
-//! This module provides functionality for managing workers based on Kubernetes pod events.
-//! It replaces the old socket-based worker watcher with a pod-centric approach where
-//! pods are treated as workers.
+//! Pod manager that handles pod and worker lifecycle based on pod events.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +11,7 @@ use nvml_wrapper::Nvml;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
-use utils::shared_memory::SharedMemoryHandle;
+use utils::shared_memory::handle::SharedMemoryHandle;
 
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
@@ -22,105 +20,17 @@ use crate::host_pid_probe::SubscriptionRequest;
 use crate::hypervisor::Hypervisor;
 use crate::k8s::TensorFusionPodInfo;
 use crate::limiter_comm::CommandDispatcher;
-use crate::limiter_coordinator::LimiterCoordinator;
 use crate::process::worker::TensorFusionWorker;
 use crate::process::GpuProcess;
 use crate::scheduler::weighted::WeightedScheduler;
-use crate::worker_registration::register_worker_to_limiter_coordinator;
 use tokio_util::sync::CancellationToken;
 
-/// Container information for tracking container-specific details.
-#[derive(Debug, Clone)]
-pub struct ContainerInfo {
-    /// Mapping from container PID to host PID for this container
-    pub container_pid_to_host_pid: HashMap<u32, u32>,
-    /// Workers (processes) in this container, keyed by host PID
-    pub workers: HashMap<u32, Arc<TensorFusionWorker>>,
-}
-
-impl ContainerInfo {
-    fn new() -> Self {
-        Self {
-            container_pid_to_host_pid: HashMap::new(),
-            workers: HashMap::new(),
-        }
-    }
-
-    /// Add a worker to this container
-    pub fn add_worker(
-        &mut self,
-        host_pid: u32,
-        container_pid: u32,
-        worker: Arc<TensorFusionWorker>,
-    ) {
-        self.container_pid_to_host_pid
-            .insert(container_pid, host_pid);
-        self.workers.insert(host_pid, worker);
-    }
-
-    /// Check if container has any workers
-    pub fn has_workers(&self) -> bool {
-        !self.workers.is_empty()
-    }
-}
-
-/// Pod entry combining pod info with container tracking.
-/// Each pod can contain multiple containers, each with multiple worker processes.
-#[derive(Debug, Clone)]
-pub struct PodEntry {
-    pub info: WorkerInfo,
-    /// Container information keyed by container name
-    pub containers: HashMap<String, ContainerInfo>,
-}
-
-impl PodEntry {
-    fn new(info: WorkerInfo) -> Self {
-        let mut containers = HashMap::new();
-
-        // Initialize containers from WorkerInfo
-        if let Some(container_names) = &info.containers {
-            for container_name in container_names {
-                containers.insert(container_name.clone(), ContainerInfo::new());
-            }
-        }
-        Self { info, containers }
-    }
-
-    /// Get container info by container name
-    pub fn get_container(&self, container_name: &str) -> Option<&ContainerInfo> {
-        self.containers.get(container_name)
-    }
-}
-
-/// Pod registry for storing and managing pod information.
-pub type PodRegistry = Arc<RwLock<HashMap<String, PodEntry>>>;
-
-/// PID registry for mapping PIDs to pod entries.
-pub type PidToPodRegistry = Arc<RwLock<HashMap<u32, PodEntry>>>;
-
-/// Process resource tracker for managing shared memory handles and cleanup
-pub struct ProcessResourceTracker {
-    /// Pod identifier for shared memory
-    pub pod_identifier: String,
-    /// Container name
-    pub container_name: String,
-    /// Shared memory handle (maintains reference count automatically)
-    pub shared_memory_handle: Arc<SharedMemoryHandle>,
-}
-
-impl ProcessResourceTracker {
-    pub fn new(
-        pod_identifier: String,
-        container_name: String,
-        shared_memory_handle: Arc<SharedMemoryHandle>,
-    ) -> Self {
-        Self {
-            pod_identifier,
-            container_name,
-            shared_memory_handle,
-        }
-    }
-}
+use super::coordinator::LimiterCoordinator;
+use super::registration::{
+    create_device_configs_from_worker_info, register_worker_to_limiter_coordinator,
+};
+use super::registry::{ContainerInfo, PidToPodRegistry, PodEntry, PodRegistry};
+use super::resource_tracker::ProcessResourceTracker;
 
 /// Pod manager that handles pod and worker lifecycle based on pod events.
 pub struct PodManager {
@@ -136,6 +46,24 @@ pub struct PodManager {
 }
 
 impl PodManager {
+    fn pod_identifier(&self, namespace: &str, pod_name: &str) -> String {
+        format!("{namespace}/{pod_name}/data")
+    }
+
+    /// Generate pod identifier for the given pod info.
+    /// This method encapsulates the pod identifier generation logic.
+    pub fn generate_pod_identifier_for_info(&self, pod_info: &WorkerInfo) -> String {
+        self.pod_identifier(&pod_info.namespace, &pod_info.pod_name)
+    }
+
+    /// Find a pod entry by namespace and pod name.
+    /// This allows other modules to access pod information without needing to call pod_identifier directly.
+    pub async fn find_pod_by_name(&self, namespace: &str, pod_name: &str) -> Option<PodEntry> {
+        let pod_identifier = self.pod_identifier(namespace, pod_name);
+        let registry = self.registry.read().await;
+        registry.get(&pod_identifier).cloned()
+    }
+
     /// Find a pod by worker PID.
     pub async fn find_pod_by_worker_pid(&self, pid: u32) -> Option<PodEntry> {
         let pid_registry = self.pid_registry.read().await;
@@ -171,25 +99,24 @@ impl PodManager {
 
     /// Handle a pod creation event.
     pub async fn handle_pod_created(&self, pod_info: TensorFusionPodInfo) -> Result<()> {
-        let worker_key = format!("{}_{}", pod_info.0.namespace, pod_info.0.pod_name);
-        info!("Processing pod creation: {worker_key}");
+        let pod_identifier = self.pod_identifier(&pod_info.0.namespace, &pod_info.0.pod_name);
+        info!("Processing pod creation: {pod_identifier}");
 
         // Store pod info in registry
         {
             let mut registry = self.registry.write().await;
-            registry.insert(worker_key.clone(), PodEntry::new(pod_info.0.clone()));
-            info!("Added pod to registry: {worker_key}");
+            registry.insert(pod_identifier.clone(), PodEntry::new(pod_info.0.clone()));
+            info!("Added pod to registry: {pod_identifier}");
         }
 
         // Register pod with limiter coordinator (Pod-level operation)
         if let Some(gpu_uuids) = &pod_info.0.gpu_uuids {
             if !gpu_uuids.is_empty() {
-                use crate::worker_registration::create_device_configs_from_worker_info;
                 let device_configs =
                     create_device_configs_from_worker_info(&pod_info.0, &self.nvml).await?;
                 self.limiter_coordinator
-                    .register_pod(&worker_key, device_configs)?;
-                info!("Registered pod {} with limiter coordinator", worker_key);
+                    .register_pod(&pod_identifier, device_configs)?;
+                info!("Registered pod {} with limiter coordinator", pod_identifier);
             }
         }
 
@@ -278,16 +205,16 @@ impl PodManager {
         container_pid: u32,
         gpu_observer: Arc<GpuObserver>,
     ) -> Result<()> {
-        let worker_key = format!("{namespace}_{pod_name}");
+        let pod_identifier = self.pod_identifier(namespace, pod_name);
 
-        info!("associate_discovered_worker started for {worker_key} host_pid={host_pid}");
+        info!("associate_discovered_worker started for {pod_identifier} host_pid={host_pid}");
 
         // Create worker and update registry in a limited scope to reduce lock hold time
-        info!("About to acquire registry write lock for {worker_key}");
+        info!("About to acquire registry write lock for {pod_identifier}");
         let (worker, pod_entry) = {
             let mut registry = self.registry.write().await;
-            info!("Registry write lock acquired for {worker_key}");
-            if let Some(entry) = registry.get_mut(&worker_key) {
+            info!("Registry write lock acquired for {pod_identifier}");
+            if let Some(entry) = registry.get_mut(&pod_identifier) {
                 let WorkerInfo {
                     namespace: info_namespace,
                     pod_name: info_pod_name,
@@ -324,15 +251,15 @@ impl PodManager {
 
                 (worker, entry_clone)
             } else {
-                warn!("Attempted to associate PID with non-existent worker: {worker_key}");
+                warn!("Attempted to associate PID with non-existent worker: {pod_identifier}");
                 return Err(anyhow::anyhow!("Worker not found in registry"));
             }
         };
 
         // get shared memory handle for this process
         let shared_memory_handle =
-            Arc::new(SharedMemoryHandle::open(&worker_key).map_err(|e| {
-                anyhow::anyhow!("Failed to open shared memory for {}: {}", worker_key, e)
+            Arc::new(SharedMemoryHandle::open(&pod_identifier).map_err(|e| {
+                anyhow::anyhow!("Failed to open shared memory for {}: {}", pod_identifier, e)
             })?);
 
         // Track process resources
@@ -341,7 +268,7 @@ impl PodManager {
             process_resources.insert(
                 host_pid,
                 ProcessResourceTracker::new(
-                    worker_key.clone(),
+                    pod_identifier.clone(),
                     container_name.to_string(),
                     shared_memory_handle,
                 ),
@@ -357,6 +284,7 @@ impl PodManager {
 
         // Register worker to limiter coordinator
         if let Err(e) = register_worker_to_limiter_coordinator(
+            &pod_identifier,
             &self.limiter_coordinator,
             &worker,
             container_name,
@@ -376,7 +304,7 @@ impl PodManager {
         }
 
         info!(
-            "Associated worker {worker_key} container {container_name} with host PID {host_pid} and container PID {container_pid}"
+            "Associated worker {pod_identifier} container {container_name} with host PID {host_pid} and container PID {container_pid}"
         );
 
         Ok(())
@@ -617,22 +545,22 @@ impl PodManager {
         pod_info: TensorFusionPodInfo,
         node_name: Option<String>,
     ) -> Result<()> {
-        let worker_key = format!("{namespace}_{pod_name}");
-        info!("Processing pod update: {worker_key}");
+        let pod_identifier = self.pod_identifier(namespace, pod_name);
+        info!("Processing pod update: {pod_identifier}");
 
         // For now, treat update the same as creation
         // In the future, we might want to handle updates differently
         {
             let mut registry = self.registry.write().await;
-            if let Some(entry) = registry.get_mut(&worker_key) {
+            if let Some(entry) = registry.get_mut(&pod_identifier) {
                 entry.info.tflops_request = pod_info.0.tflops_request;
                 entry.info.tflops_limit = pod_info.0.tflops_limit;
                 entry.info.vram_request = pod_info.0.vram_request;
                 entry.info.vram_limit = pod_info.0.vram_limit;
                 entry.info.node_name = node_name;
-                info!("Updated worker in registry: {worker_key}");
+                info!("Updated worker in registry: {pod_identifier}");
             } else {
-                warn!("Attempted to update non-existent worker: {worker_key}");
+                warn!("Attempted to update non-existent worker: {pod_identifier}");
             }
         }
 
@@ -641,14 +569,14 @@ impl PodManager {
 
     /// Handle a pod deletion event.
     pub async fn handle_pod_deleted(&self, pod_name: &str, namespace: &str) -> Result<()> {
-        let pod_identifer = format!("{namespace}_{pod_name}");
-        info!("Processing pod deletion: {pod_identifer}");
+        let pod_identifier = self.pod_identifier(namespace, pod_name);
+        info!("Processing pod deletion: {pod_identifier}");
 
         // Step 1: Remove from worker registry and collect all host PIDs
         let all_host_pids = {
             let mut registry = self.registry.write().await;
-            if let Some(entry) = registry.remove(&pod_identifer) {
-                info!("Removed pod from registry: {pod_identifer}");
+            if let Some(entry) = registry.remove(&pod_identifier) {
+                info!("Removed pod from registry: {pod_identifier}");
 
                 let mut host_pids = Vec::new();
 
@@ -666,7 +594,7 @@ impl PodManager {
 
                 host_pids
             } else {
-                warn!("Attempted to remove non-existent pod: {pod_identifer}");
+                warn!("Attempted to remove non-existent pod: {pod_identifier}");
                 return Ok(());
             }
         };
@@ -681,7 +609,7 @@ impl PodManager {
         for host_pid in &all_host_pids {
             if let Err(e) = self
                 .limiter_coordinator
-                .unregister_process(&pod_identifer, *host_pid)
+                .unregister_process(&pod_identifier, *host_pid)
             {
                 tracing::error!(
                     "Failed to unregister process {} from limiter coordinator: {}",
@@ -694,7 +622,7 @@ impl PodManager {
         }
 
         // Step 4: Unregister pod from limiter coordinator
-        self.limiter_coordinator.unregister_pod(&pod_identifer)?;
+        self.limiter_coordinator.unregister_pod(&pod_identifier)?;
 
         // Step 6: Clean up PID registry
         {
@@ -719,7 +647,7 @@ impl PodManager {
 
         info!(
             "Successfully deleted pod {} with {} processes",
-            pod_identifer,
+            pod_identifier,
             all_host_pids.len()
         );
 

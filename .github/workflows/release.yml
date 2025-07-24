@@ -149,14 +149,10 @@ jobs:
           ]
 
           [target.x86_64-unknown-linux-gnu]
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
+          pre-build = []
 
           [target.aarch64-unknown-linux-gnu] 
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
+          pre-build = []
           EOF
 
       - name: Cache Rust dependencies
@@ -266,9 +262,6 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
 
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
 
@@ -338,14 +331,10 @@ jobs:
           ]
 
           [target.x86_64-unknown-linux-gnu]
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
+          pre-build = []
 
           [target.aarch64-unknown-linux-gnu] 
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
+          pre-build = []
           EOF
 
       - name: Configure cache

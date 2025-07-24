@@ -12,15 +12,13 @@ use crate::gpu_allocation_watcher::GpuDeviceStateWatcher;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::hypervisor::Hypervisor;
-use crate::k8s::device_plugin::GpuDevicePlugin;
 use crate::k8s::PodWatcher;
 use crate::k8s::WorkerUpdate;
 use crate::limiter_comm::CommandDispatcher;
-use crate::limiter_coordinator::LimiterCoordinator;
 use crate::metrics;
+use crate::pod_management::{LimiterCoordinator, PodManager};
 use crate::process::worker::TensorFusionWorker;
 use crate::scheduler::weighted::WeightedScheduler;
-use crate::worker_manager::PodManager;
 
 pub type HypervisorType = Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>;
 
@@ -34,7 +32,6 @@ pub struct Application {
     pub pod_manager: Arc<PodManagerType>,
     pub host_pid_probe: Arc<HostPidProbe>,
     pub command_dispatcher: Arc<CommandDispatcher>,
-    pub device_plugin: Arc<GpuDevicePlugin>,
     pub limiter_coordinator: Arc<LimiterCoordinator>,
     pub gpu_device_state_watcher: Arc<GpuDeviceStateWatcher>,
     pub daemon_args: DaemonArgs,
@@ -245,41 +242,6 @@ impl Tasks {
             })
         };
         self.tasks.push(hypervisor_task);
-
-        // start device plugin task
-        if cli.enable_device_plugin {
-            let device_plugin_task = {
-                let device_plugin = app.device_plugin.clone();
-                let kubelet_socket_path = cli.kubelet_socket_path.clone();
-                let device_plugin_socket_path = cli.device_plugin_socket_path.clone();
-                let token = self.cancellation_token.clone();
-
-                tokio::spawn(async move {
-                    tracing::info!("Starting device plugin task");
-
-                    // Start device plugin server
-                    if let Err(e) = device_plugin
-                        .start(&device_plugin_socket_path, token.clone())
-                        .await
-                    {
-                        tracing::error!("Failed to start device plugin: {e}");
-                        return;
-                    }
-
-                    // Register with kubelet
-                    if let Err(e) = device_plugin
-                        .register_with_kubelet(&kubelet_socket_path)
-                        .await
-                    {
-                        tracing::error!("Failed to register device plugin with kubelet: {e}");
-                        return;
-                    }
-
-                    tracing::info!("Device plugin task completed");
-                })
-            };
-            self.tasks.push(device_plugin_task);
-        }
 
         // start limiter coordinator task
         let limiter_coordinator_task = {

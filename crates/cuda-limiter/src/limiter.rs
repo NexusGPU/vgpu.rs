@@ -12,7 +12,7 @@ use nvml_wrapper_sys::bindings::nvmlDevice_t;
 use once_cell::sync::OnceCell;
 use thiserror::Error;
 use trap::TrapError;
-use utils::shared_memory::SharedMemoryHandle;
+use utils::shared_memory::handle::SharedMemoryHandle;
 
 use crate::detour;
 
@@ -27,9 +27,6 @@ pub(crate) enum Error {
     #[error("Invalid CUDA device: {0}")]
     #[allow(dead_code)]
     InvalidCuDevice(CUdevice),
-
-    #[error("Pod name or namespace not found in environment")]
-    PodNameOrNamespaceNotFound,
 
     #[error("Shared memory access failed: {0}")]
     SharedMemory(#[from] anyhow::Error),
@@ -55,8 +52,6 @@ pub(crate) struct DeviceDim {
 
 /// Main limiter struct that manages CUDA resource limits
 pub(crate) struct Limiter {
-    /// Pod name for shared memory access
-    pod_identifier: String,
     /// Shared memory handle for each device (lazy initialized)
     shared_memory_handle: OnceCell<SharedMemoryHandle>,
     /// NVML instance
@@ -69,19 +64,13 @@ pub(crate) struct Limiter {
 
 impl std::fmt::Debug for Limiter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Limiter")
-            .field("identifier", &self.pod_identifier)
-            .finish()
+        f.debug_struct("Limiter").finish()
     }
 }
 
 impl Limiter {
     /// Creates a new Limiter instance
-    pub(crate) fn new(
-        nvml: Nvml,
-        pod_identifier: String,
-        gpu_uuids: &[String],
-    ) -> Result<Self, Error> {
+    pub(crate) fn new(nvml: Nvml, gpu_uuids: &[String]) -> Result<Self, Error> {
         let mut cu_device_mapping = BTreeMap::new();
         let mut uuid_mapping = HashMap::new();
 
@@ -104,7 +93,6 @@ impl Limiter {
             .expect("set GLOBAL_DEVICE_UUIDS");
 
         Ok(Limiter {
-            pod_identifier,
             shared_memory_handle: OnceCell::new(),
             current_devices_dim: HashMap::new(),
             nvml,
@@ -114,9 +102,8 @@ impl Limiter {
 
     /// Get or initialize the shared memory handle (lazy initialization)
     fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
-        self.shared_memory_handle.get_or_try_init(|| {
-            SharedMemoryHandle::open(&self.pod_identifier).map_err(Error::SharedMemory)
-        })
+        self.shared_memory_handle
+            .get_or_try_init(|| SharedMemoryHandle::open("data").map_err(Error::SharedMemory))
     }
 
     /// Rate limiter that waits for available CUDA cores with exponential backoff
@@ -262,14 +249,6 @@ impl Limiter {
 
         Ok(())
     }
-}
-
-/// Get pod name from environment variable
-pub(crate) fn get_pod_identifier() -> Result<String, Error> {
-    let name = std::env::var("POD_NAME").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
-    let namespace =
-        std::env::var("POD_NAMESPACE").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
-    Ok(format!("{namespace}_{name}"))
 }
 
 #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]

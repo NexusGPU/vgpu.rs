@@ -28,6 +28,7 @@ impl ClientConfig {
     pub fn new(server_url: impl Into<String>) -> Self {
         Self {
             server_url: server_url.into(),
+            // TODO: FIX THIS ID
             client_id: format!("client_{}", std::process::id()),
             request_timeout: Duration::from_secs(30),
             poll_interval: Duration::from_secs(1),

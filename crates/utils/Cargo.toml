@@ -14,6 +14,7 @@ shared_memory = { workspace = true }
 cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
 spin = { version = "0.10", features = ["rwlock"], default-features = false }
 libc = "0.2.174"
+glob = { workspace = true }
 
 [dev-dependencies]
 similar-asserts = { workspace = true }

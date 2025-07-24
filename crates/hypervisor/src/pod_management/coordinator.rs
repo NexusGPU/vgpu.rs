@@ -1,6 +1,6 @@
 //! Limiter Coordinator Module
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -15,90 +15,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
 use utils::shared_memory::DeviceConfig;
-use utils::shared_memory::ThreadSafeSharedMemoryManager;
 
-/// Tracks device usage at the pod level.
-#[derive(Debug, Clone)]
-pub struct PodDeviceUsage {
-    pub device_configs: Vec<DeviceConfig>,
-    /// Set of active host PIDs in this pod
-    pub active_processes: HashSet<u32>,
-}
-
-impl PodDeviceUsage {
-    fn new(device_configs: Vec<DeviceConfig>) -> Self {
-        Self {
-            device_configs,
-            active_processes: HashSet::new(),
-        }
-    }
-
-    fn add_process(&mut self, host_pid: u32) {
-        self.active_processes.insert(host_pid);
-    }
-
-    fn remove_process(&mut self, host_pid: u32) -> bool {
-        self.active_processes.remove(&host_pid);
-        self.active_processes.is_empty()
-    }
-
-    /// Gets all host_pids in the pod.
-    pub fn get_host_pids(&self) -> Vec<u32> {
-        self.active_processes.iter().copied().collect()
-    }
-}
-
-/// Per-process utilization data
-#[derive(Debug, Clone, Copy)]
-pub struct ProcessUtilization {
-    pub sm_util: u32,
-    pub codec_util: u32,
-}
-
-/// Pod-level utilization summary
-#[derive(Debug, Default, Clone, Copy)]
-pub struct PodUtilization {
-    pub total_utilization: u32, // Sum of SM + codec utilization for all processes in pod
-}
-
-/// Complete snapshot of device state including utilization and memory
-#[derive(Debug, Clone)]
-pub struct DeviceSnapshot {
-    // pid -> utilization
-    pub process_utilizations: HashMap<u32, ProcessUtilization>,
-    // pid -> memory used
-    pub process_memories: HashMap<u32, u64>,
-    // timestamp of the snapshot
-    pub timestamp: u64,
-}
-
-impl DeviceSnapshot {
-    /// Calculate pod-level utilization from device snapshot
-    pub fn get_pod_utilization(&self, pids: &[u32]) -> PodUtilization {
-        let mut total_utilization = 0u32;
-
-        for pid in pids {
-            if let Some(process_util) = self.process_utilizations.get(pid) {
-                total_utilization += process_util.sm_util + process_util.codec_util;
-            }
-        }
-
-        PodUtilization { total_utilization }
-    }
-
-    /// Calculate pod-level memory usage from device snapshot
-    pub fn get_pod_memory(&self, pids: &[u32]) -> u64 {
-        pids.iter()
-            .filter_map(|pid| self.process_memories.get(pid))
-            .sum()
-    }
-}
-
-/// Normalization function for codec utilization.
-const fn codec_normalize(x: u32) -> u32 {
-    x * 85 / 100
-}
+use super::registry::PodDeviceUsage;
+use super::utilization::{codec_normalize, DeviceSnapshot, ProcessUtilization};
 
 /// Limiter coordinator.
 pub struct LimiterCoordinator {
@@ -112,15 +33,15 @@ pub struct LimiterCoordinator {
     watch_interval: Duration,
     /// Number of GPU devices.
     device_count: u32,
-    /// Shared memory file prefix for cleanup operations.
-    shared_memory_file_prefix: String,
+    /// glob pattern for shared memory files
+    shared_memory_glob_pattern: String,
 }
 
 impl LimiterCoordinator {
     pub fn new(
         watch_interval: Duration,
         device_count: u32,
-        shared_memory_file_prefix: String,
+        shared_memory_glob_pattern: String,
     ) -> Self {
         Self {
             shared_memory_manager: Arc::new(ThreadSafeSharedMemoryManager::new()),
@@ -128,7 +49,7 @@ impl LimiterCoordinator {
             device_watcher_tasks: RwLock::new(HashMap::new()),
             watch_interval,
             device_count,
-            shared_memory_file_prefix,
+            shared_memory_glob_pattern,
         }
     }
 
@@ -413,7 +334,7 @@ impl LimiterCoordinator {
         new_share: Option<i32>,
         timestamp: u64,
     ) -> Result<()> {
-        use utils::shared_memory::SharedMemoryHandle;
+        use utils::shared_memory::handle::SharedMemoryHandle;
 
         // Simple shared memory operations don't need spawn_blocking
         let handle =
@@ -454,7 +375,7 @@ impl LimiterCoordinator {
 
     /// Gets available cores for a device efficiently
     async fn get_available_cores(pod_identifier: &str, device_uuid: &str) -> Result<i32> {
-        use utils::shared_memory::SharedMemoryHandle;
+        use utils::shared_memory::handle::SharedMemoryHandle;
 
         let handle =
             SharedMemoryHandle::open(pod_identifier).context("Failed to open shared memory")?;
@@ -551,21 +472,17 @@ impl LimiterCoordinator {
 
         let cleaned_files = self
             .shared_memory_manager
-            .cleanup_orphaned_files(&self.shared_memory_file_prefix)
+            .cleanup_orphaned_files(&self.shared_memory_glob_pattern)
             .context("Failed to cleanup orphaned shared memory files")?;
 
         if !cleaned_files.is_empty() {
             tracing::info!(
-                "Cleaned up {} orphaned shared memory files with prefix '{}': {:?}",
+                "Cleaned up {} orphaned shared memory files: {:?}",
                 cleaned_files.len(),
-                self.shared_memory_file_prefix,
                 cleaned_files
             );
         } else {
-            tracing::info!(
-                "No orphaned shared memory files found with prefix '{}'",
-                self.shared_memory_file_prefix
-            );
+            tracing::info!("No orphaned shared memory files found");
         }
 
         Ok(())

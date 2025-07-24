@@ -73,15 +73,6 @@ fn is_mapping_device_idx() -> bool {
 fn init_ngpu_library() {
     static NGPU_INITIALIZED: Once = Once::new();
     NGPU_INITIALIZED.call_once(|| {
-        // Get pod name from environment variable
-        let pod_identifier = match limiter::get_pod_identifier() {
-            Ok(name) => name,
-            Err(_) => {
-                tracing::error!("Failed to get pod name from environment, cuda-limiter disabled");
-                return;
-            }
-        };
-
         let nvml = match Nvml::init().and(
             Nvml::builder()
                 .lib_path(OsStr::new("libnvidia-ml.so.1"))
@@ -138,7 +129,7 @@ fn init_ngpu_library() {
             }
         }
 
-        let limiter = match Limiter::new(nvml, pod_identifier, &config.gpu_uuids) {
+        let limiter = match Limiter::new(nvml, &config.gpu_uuids) {
             Ok(limiter) => limiter,
             Err(err) => {
                 tracing::error!("failed to init limiter, err: {err}");

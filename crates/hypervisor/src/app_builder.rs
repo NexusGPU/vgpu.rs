@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,11 +12,9 @@ use crate::gpu_init::GpuSystem;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::hypervisor::Hypervisor;
-use crate::k8s::device_plugin::GpuDevicePlugin;
 use crate::limiter_comm::CommandDispatcher;
-use crate::limiter_coordinator::LimiterCoordinator;
+use crate::pod_management::{LimiterCoordinator, PodManager};
 use crate::scheduler::weighted::WeightedScheduler;
-use crate::worker_manager::PodManager;
 
 /// Application builder
 pub struct ApplicationBuilder {
@@ -50,7 +47,6 @@ impl ApplicationBuilder {
             host_pid_probe: components.host_pid_probe,
             command_dispatcher: components.command_dispatcher,
             daemon_args: self.daemon_args,
-            device_plugin: components.device_plugin,
             limiter_coordinator: components.limiter_coordinator,
             gpu_device_state_watcher: components.gpu_device_state_watcher,
         })
@@ -77,22 +73,9 @@ impl ApplicationBuilder {
         let limiter_coordinator = Arc::new(LimiterCoordinator::new(
             Duration::from_millis(100),
             gpu_system.device_count,
-            self.daemon_args.shared_memory_file_prefix.clone(),
+            self.daemon_args.shared_memory_glob_pattern.clone(),
         ));
 
-        let device_plugin_socket_path = Path::new(&self.daemon_args.device_plugin_socket_path);
-        let endpoint = device_plugin_socket_path
-            .file_name()
-            .expect("device plugin socket path should have a file name")
-            .to_string_lossy()
-            .to_string();
-        let device_plugin = GpuDevicePlugin::new(
-            endpoint,
-            "tensor-fusion.ai/shm".to_string(),
-            self.daemon_args.device_shm_host_path.clone(),
-            false,
-            false,
-        );
         // create a GPU device state watcher
         let gpu_device_state_watcher = Arc::new(GpuDeviceStateWatcher::new(
             self.daemon_args.kubelet_device_state_path.clone(),
@@ -104,7 +87,6 @@ impl ApplicationBuilder {
             host_pid_probe,
             command_dispatcher,
             limiter_coordinator,
-            device_plugin,
             gpu_device_state_watcher,
         })
     }
@@ -135,6 +117,5 @@ struct CoreComponents {
     host_pid_probe: Arc<HostPidProbe>,
     command_dispatcher: Arc<CommandDispatcher>,
     limiter_coordinator: Arc<LimiterCoordinator>,
-    device_plugin: Arc<GpuDevicePlugin>,
     gpu_device_state_watcher: Arc<GpuDeviceStateWatcher>,
 }

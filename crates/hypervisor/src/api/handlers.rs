@@ -16,8 +16,8 @@ use super::types::PodInfoResponse;
 use super::types::ProcessInfo;
 use super::types::ProcessInitResponse;
 use crate::gpu_observer::GpuObserver;
-use crate::worker_manager::PodManager;
-use crate::worker_manager::PodRegistry;
+
+use crate::pod_management::PodManager;
 
 /// Query parameters for process initialization
 #[derive(Debug, Deserialize)]
@@ -30,7 +30,7 @@ pub struct ProcessInitQuery {
 #[handler]
 pub async fn get_pod_info(
     req: &Request,
-    pod_registry: Data<&PodRegistry>,
+    pod_manager: Data<&Arc<PodManager>>,
 ) -> poem::Result<poem::web::Json<PodInfoResponse>> {
     // Extract JWT payload from request extensions
     let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
@@ -42,10 +42,7 @@ pub async fn get_pod_info(
     let pod_name = &jwt_payload.kubernetes.pod.name;
     let namespace = &jwt_payload.kubernetes.namespace;
 
-    let registry = pod_registry.read().await;
-    let worker_key = format!("{namespace}_{pod_name}");
-
-    let Some(pod_entry) = registry.get(&worker_key) else {
+    let Some(pod_entry) = pod_manager.find_pod_by_name(namespace, pod_name).await else {
         warn!(
             pod_name = pod_name,
             namespace = namespace,
@@ -81,7 +78,6 @@ pub async fn get_pod_info(
 pub async fn process_init(
     req: &Request,
     query: Query<ProcessInitQuery>,
-    pod_registry: Data<&PodRegistry>,
     pod_manager: Data<&Arc<PodManager>>,
     gpu_observer: Data<&Arc<GpuObserver>>,
 ) -> poem::Result<poem::web::Json<ProcessInitResponse>> {
@@ -108,10 +104,7 @@ pub async fn process_init(
 
     // Validate pod and container exist
     let gpu_uuids = {
-        let registry = pod_registry.read().await;
-        let worker_key = format!("{namespace}_{pod_name}");
-
-        let Some(pod_entry) = registry.get(&worker_key) else {
+        let Some(pod_entry) = pod_manager.find_pod_by_name(namespace, pod_name).await else {
             warn!(pod_name = pod_name, namespace = namespace, "Pod not found");
             return Ok(poem::web::Json(ProcessInitResponse {
                 success: false,

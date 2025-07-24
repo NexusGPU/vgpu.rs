@@ -10,13 +10,11 @@ mod hypervisor;
 mod k8s;
 mod kube_client;
 mod limiter_comm;
-mod limiter_coordinator;
 mod logging;
 mod metrics;
+mod pod_management;
 mod process;
 mod scheduler;
-mod worker_manager;
-mod worker_registration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -50,7 +48,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
-    use utils::shared_memory::SharedMemoryHandle;
+    use utils::shared_memory::handle::SharedMemoryHandle;
     utils::logging::init();
 
     tracing::info!(

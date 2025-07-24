@@ -38,14 +38,13 @@ impl TensorFusionWorker {
         pod_name: String,
         command_dispatcher: Arc<CommandDispatcher>,
     ) -> TensorFusionWorker {
-        let name = format!("{namespace}_{pod_name}");
         Self {
             id,
             qos_level,
             state: RwLock::new(ProcessState::Running),
             gpu_uuids,
             gpu_observer,
-            name,
+            name: format!("{namespace}-{pod_name}"),
             pod_name,
             namespace,
             command_dispatcher,
