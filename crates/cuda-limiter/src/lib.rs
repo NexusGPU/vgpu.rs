@@ -132,28 +132,13 @@ fn init_ngpu_library() {
         let limiter = match Limiter::new(nvml, &config.gpu_uuids) {
             Ok(limiter) => limiter,
             Err(err) => {
-                tracing::error!("failed to init limiter, err: {err}");
+                tracing::error!("failed to init limiter, err: {err}, skip hooks");
+                HOOKS_INITIALIZED.0.store(true, Ordering::Release);
+                HOOKS_INITIALIZED.1.store(true, Ordering::Release);
                 return;
             }
         };
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
-
-        // Load tensor-fusion/ngpu.so
-        if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
-            tracing::debug!("loading ngpu.so from: {ngpu_path}");
-
-            match unsafe { libloading::Library::new(ngpu_path.as_str()) } {
-                Ok(lib) => {
-                    GLOBAL_NGPU_LIBRARY
-                        .set(lib)
-                        .expect("set GLOBAL_NGPU_LIBRARY");
-                    tracing::debug!("loaded ngpu.so");
-                }
-                Err(e) => {
-                    tracing::error!("failed to load ngpu.so: {e}, path: {ngpu_path}");
-                }
-            }
-        }
     });
 }
 

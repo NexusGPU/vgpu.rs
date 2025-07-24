@@ -14,6 +14,7 @@ use crate::command_handler;
 use crate::config;
 use crate::with_device;
 use crate::GLOBAL_LIMITER;
+use crate::GLOBAL_NGPU_LIBRARY;
 
 #[hook_fn]
 pub(crate) unsafe extern "C" fn cu_launch_kernel_ptsz_detour(
@@ -332,11 +333,28 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
             }
         };
 
-        command_handler::start_background_handler(
-            &hypervisor_ip,
-            &hypervisor_port,
-            result.host_pid,
-        );
+        
+        // Load tensor-fusion/ngpu.so
+        if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
+            tracing::debug!("loading ngpu.so from: {ngpu_path}");
+
+            match unsafe { libloading::Library::new(ngpu_path.as_str()) } {
+                Ok(lib) => {
+                    GLOBAL_NGPU_LIBRARY
+                        .set(lib)
+                        .expect("set GLOBAL_NGPU_LIBRARY");
+                    tracing::debug!("loaded ngpu.so");
+                }
+                Err(e) => {
+                    tracing::error!("failed to load ngpu.so: {e}, path: {ngpu_path}");
+                }
+            }
+            command_handler::start_background_handler(
+                &hypervisor_ip,
+                &hypervisor_port,
+                result.host_pid,
+            );
+        }
     });
 
     let result = FN_CU_INIT(flags);
