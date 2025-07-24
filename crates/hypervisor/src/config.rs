@@ -146,7 +146,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "Glob pattern for shared memory files, should be without /dev/shm/ prefix",
-        default_value = "*/*/data",
+        default_value = "tf_shm_*",
         value_hint = clap::ValueHint::FilePath,
     )]
     pub shared_memory_glob_pattern: String,

@@ -31,6 +31,9 @@ pub(crate) enum Error {
     #[error("Shared memory access failed: {0}")]
     SharedMemory(#[from] anyhow::Error),
 
+    #[error("Pod name or namespace not found in environment")]
+    PodNameOrNamespaceNotFound,
+
     #[error("Device {0} not configured")]
     DeviceNotConfigured(String),
 
@@ -103,7 +106,10 @@ impl Limiter {
     /// Get or initialize the shared memory handle (lazy initialization)
     fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
         self.shared_memory_handle
-            .get_or_try_init(|| SharedMemoryHandle::open("data").map_err(Error::SharedMemory))
+            .get_or_try_init(|| {
+                let pod_identifier = get_pod_identifier()?;
+                SharedMemoryHandle::open(&pod_identifier).map_err(Error::SharedMemory)
+            })
     }
 
     /// Rate limiter that waits for available CUDA cores with exponential backoff
@@ -273,6 +279,13 @@ fn uuid_to_string_formatted(uuid: &[u8; 16]) -> String {
         uuid[8], uuid[9],
         uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
     )
+}
+/// Get pod name from environment variable
+fn get_pod_identifier() -> Result<String, Error> {
+    let name = std::env::var("POD_NAME").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
+    let namespace =
+        std::env::var("POD_NAMESPACE").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
+    Ok(format!("tf_shm_{namespace}_{name}"))
 }
 
 #[cfg(test)]

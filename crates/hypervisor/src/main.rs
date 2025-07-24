@@ -179,14 +179,22 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
         tracing::info!("mount tmpfs successfully");
     }
 
+
+    let old_umask = unsafe { libc::umask(0) };
+
     // set directory permissions
     let metadata =
         fs::metadata(&mount_shm_args.mount_point).context("get mount point metadata failed")?;
 
     let mut permissions = metadata.permissions();
-    permissions.set_mode(0o0755);
+    permissions.set_mode(0o0777);
 
     fs::set_permissions(&mount_shm_args.mount_point, permissions)
         .context("set permissions failed")?;
+
+    unsafe {
+        libc::umask(old_umask);
+    }
+
     Ok(())
 }

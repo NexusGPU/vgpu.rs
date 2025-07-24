@@ -37,6 +37,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 schemars = { workspace = true }
 notify = "8.1"
 cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
+libc = { workspace = true }
 
 [[bin]]
 name = "hypervisor"

@@ -47,7 +47,7 @@ pub struct PodManager {
 
 impl PodManager {
     fn pod_identifier(&self, namespace: &str, pod_name: &str) -> String {
-        format!("{namespace}/{pod_name}/data")
+        format!("tf_shm_{namespace}_{pod_name}")
     }
 
     /// Generate pod identifier for the given pod info.

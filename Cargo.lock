@@ -1482,6 +1482,7 @@ dependencies = [
  "influxdb-line-protocol",
  "k8s-openapi",
  "kube",
+ "libc",
  "notify",
  "nvml-wrapper",
  "once_cell",
