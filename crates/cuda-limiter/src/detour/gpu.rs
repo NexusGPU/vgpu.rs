@@ -307,6 +307,11 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
     static WORKER_INIT: Once = Once::new();
 
     WORKER_INIT.call_once(|| {
+        if std::env::var("SKIP_WORKER_INIT").is_ok() {
+            tracing::debug!("SKIP_WORKER_INIT is set, skipping worker initialization");
+            return;
+        }
+
         // Try to initialize worker with hypervisor - using guard clauses for cleaner code
         let Some((hypervisor_ip, hypervisor_port)) = config::get_hypervisor_config() else {
             tracing::debug!("Hypervisor config not available, skipping worker initialization");
@@ -359,7 +364,7 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
 
     let result = FN_CU_INIT(flags);
 
-    tracing::debug!("cu_init_detour result: {:?}", result);
+    tracing::debug!("cu_init_detour flags: {:?}, result: {:?}", flags, result);
 
     result
 }
