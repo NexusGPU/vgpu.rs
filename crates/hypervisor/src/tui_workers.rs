@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -16,13 +16,20 @@ use tokio::sync::mpsc;
 use utils::shared_memory::handle::SharedMemoryHandle;
 
 #[derive(Debug, Clone)]
+pub struct DeviceInfo {
+    pub uuid: String,
+    pub available_cuda_cores: i32,
+    pub total_cuda_cores: u32,
+    pub mem_limit: u64,
+    pub pod_memory_used: u64,
+    pub up_limit: u32,
+}
+
+#[derive(Debug, Clone)]
 pub struct WorkerInfo {
     pub identifier: String,
-    pub ref_count: u32,
-    pub last_heartbeat: u64,
-    pub device_count: usize,
+    pub devices: Vec<DeviceInfo>,
     pub is_healthy: bool,
-    pub file_path: String,
 }
 
 pub struct WorkerMonitor {
@@ -76,25 +83,36 @@ impl WorkerMonitor {
         Ok(())
     }
 
-    fn read_worker_info(&self, identifier: &str, path: &Path) -> Result<WorkerInfo> {
+    fn read_worker_info(&self, identifier: &str, _path: &Path) -> Result<WorkerInfo> {
         let handle =
             SharedMemoryHandle::open(identifier).context("Failed to open shared memory")?;
 
         let state = handle.get_state();
-        let (ref_count, last_heartbeat, device_count, is_healthy) = (
-            state.get_ref_count(),
-            state.get_last_heartbeat(),
-            state.device_count(),
-            state.is_healthy(60), // 60 seconds timeout
-        );
+        let is_healthy = state.is_healthy(60); // 60 seconds timeout
+
+        // Read all active devices
+        let mut devices = Vec::new();
+        let device_count = state.device_count();
+
+        for i in 0..device_count {
+            let device = &state.devices[i];
+            if device.is_active() {
+                let device_info = &device.device_info;
+                devices.push(DeviceInfo {
+                    uuid: device.get_uuid_owned(),
+                    available_cuda_cores: device_info.get_available_cores(),
+                    total_cuda_cores: device_info.get_total_cores(),
+                    mem_limit: device_info.get_mem_limit(),
+                    pod_memory_used: device_info.get_pod_memory_used(),
+                    up_limit: device_info.get_up_limit(),
+                });
+            }
+        }
 
         Ok(WorkerInfo {
             identifier: identifier.to_string(),
-            ref_count,
-            last_heartbeat,
-            device_count,
+            devices,
             is_healthy,
-            file_path: path.display().to_string(),
         })
     }
 
@@ -135,71 +153,83 @@ impl WorkerMonitor {
         let area = frame.area();
 
         let header_cells = [
-            "Identifier",
-            "Ref Count",
-            "Devices",
+            "Worker",
+            "Device UUID",
+            "Available/Total Cores",
+            "Memory Used/Limit",
+            "Up Limit",
             "Health",
-            "Last Heartbeat",
-            "File Path",
         ]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow)));
 
         let header = Row::new(header_cells).height(1).bottom_margin(1);
 
-        let mut rows: Vec<_> = self.workers.values().collect();
-        rows.sort_by(|a, b| a.identifier.cmp(&b.identifier));
+        // Collect all devices from all workers
+        let mut device_rows = Vec::new();
+        let mut workers: Vec<_> = self.workers.values().collect();
+        workers.sort_by(|a, b| a.identifier.cmp(&b.identifier));
 
-        let data_rows = rows.iter().map(|worker| {
-            let health_status = if worker.is_healthy {
-                "Healthy"
-            } else {
-                "Unhealthy"
-            };
-            let health_color = if worker.is_healthy {
-                Color::Green
-            } else {
-                Color::Red
-            };
+        for worker in workers {
+            for device in &worker.devices {
+                let health_status = if worker.is_healthy {
+                    "Healthy"
+                } else {
+                    "Unhealthy"
+                };
+                let health_color = if worker.is_healthy {
+                    Color::Green
+                } else {
+                    Color::Red
+                };
 
-            let heartbeat_time = if worker.last_heartbeat == 0 {
-                "Never".to_string()
-            } else {
-                match SystemTime::now().duration_since(UNIX_EPOCH) {
-                    Ok(now) => {
-                        let elapsed = now.as_secs().saturating_sub(worker.last_heartbeat);
-                        format!("{elapsed}s ago")
-                    }
-                    Err(_) => "Unknown".to_string(),
-                }
-            };
+                let cores_ratio = format!(
+                    "{}/{}",
+                    device.available_cuda_cores, device.total_cuda_cores
+                );
+                let memory_ratio = format!(
+                    "{:.0}MB/{:.0}MB",
+                    device.pod_memory_used as f64 / 1024.0 / 1024.0,
+                    device.mem_limit as f64 / 1024.0 / 1024.0
+                );
+                let up_limit_str = format!("{}%", device.up_limit);
 
-            Row::new(vec![
-                Cell::from(worker.identifier.as_str()),
-                Cell::from(worker.ref_count.to_string()),
-                Cell::from(worker.device_count.to_string()),
-                Cell::from(health_status).style(Style::default().fg(health_color)),
-                Cell::from(heartbeat_time),
-                Cell::from(worker.file_path.as_str()),
-            ])
-        });
+                // Truncate UUID for display
+                let display_uuid = if device.uuid.len() > 12 {
+                    format!("{}...", &device.uuid[..9])
+                } else {
+                    device.uuid.clone()
+                };
+
+                device_rows.push(Row::new(vec![
+                    Cell::from(worker.identifier.as_str()),
+                    Cell::from(display_uuid),
+                    Cell::from(cores_ratio),
+                    Cell::from(memory_ratio),
+                    Cell::from(up_limit_str),
+                    Cell::from(health_status).style(Style::default().fg(health_color)),
+                ]));
+            }
+        }
+
+        let total_devices: usize = self.workers.values().map(|w| w.devices.len()).sum();
 
         let widths = [
-            Constraint::Length(20),
-            Constraint::Length(10),
-            Constraint::Length(8),
-            Constraint::Length(10),
-            Constraint::Length(15),
-            Constraint::Fill(1),
+            Constraint::Length(15), // Worker
+            Constraint::Length(15), // Device UUID
+            Constraint::Length(18), // Available/Total Cores
+            Constraint::Length(18), // Memory Used/Limit
+            Constraint::Length(10), // Up Limit
+            Constraint::Fill(1),    // Health
         ];
 
-        let table = Table::new(data_rows, widths)
+        let table = Table::new(device_rows, widths)
             .header(header)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" Worker Monitor ({} workers) ", self.workers.len())),
-            )
+            .block(Block::default().borders(Borders::ALL).title(format!(
+                " Device Monitor ({} workers, {} devices) ",
+                self.workers.len(),
+                total_devices
+            )))
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .highlight_symbol(">> ");
 
