@@ -144,6 +144,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "build-${{ matrix.target }}"
+          prefix-key: v1
 
       - name: Build cuda-limiter
         run: VERSION=${{ needs.release.outputs.version }} cross build -p cuda-limiter --release --target ${{ matrix.target }}
@@ -249,6 +250,8 @@ jobs:
 
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1
 
       - name: Build for amd64
         run: VERSION=${{ needs.release.outputs.version }} cargo build -p hypervisor --release --target x86_64-unknown-linux-gnu
@@ -309,6 +312,8 @@ jobs:
 
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1
 
       - name: Build for arm64
         run: VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target aarch64-unknown-linux-gnu
