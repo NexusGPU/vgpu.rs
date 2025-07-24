@@ -179,7 +179,6 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
         tracing::info!("mount tmpfs successfully");
     }
 
-
     let old_umask = unsafe { libc::umask(0) };
 
     // set directory permissions

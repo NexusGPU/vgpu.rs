@@ -105,11 +105,10 @@ impl Limiter {
 
     /// Get or initialize the shared memory handle (lazy initialization)
     fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
-        self.shared_memory_handle
-            .get_or_try_init(|| {
-                let pod_identifier = get_pod_identifier()?;
-                SharedMemoryHandle::open(&pod_identifier).map_err(Error::SharedMemory)
-            })
+        self.shared_memory_handle.get_or_try_init(|| {
+            let pod_identifier = get_pod_identifier()?;
+            SharedMemoryHandle::open(&pod_identifier).map_err(Error::SharedMemory)
+        })
     }
 
     /// Rate limiter that waits for available CUDA cores with exponential backoff
