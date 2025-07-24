@@ -140,6 +140,11 @@ jobs:
             echo "cross is already installed, skipping installation."
           fi
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "build-${{ matrix.target }}"
+
       - name: Build cuda-limiter
         run: VERSION=${{ needs.release.outputs.version }} cross build -p cuda-limiter --release --target ${{ matrix.target }}
 
@@ -242,6 +247,9 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
 
+      - name: Configure cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Build for amd64
         run: VERSION=${{ needs.release.outputs.version }} cargo build -p hypervisor --release --target x86_64-unknown-linux-gnu
       
@@ -298,6 +306,9 @@ jobs:
           else
             echo "cross is already installed, skipping installation."
           fi
+
+      - name: Configure cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Build for arm64
         run: VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target aarch64-unknown-linux-gnu
