@@ -512,6 +512,7 @@ impl PodManager {
         for tracker in process_resources.values() {
             *pod_process_counts
                 .entry(tracker.pod_identifier.clone())
+                // hypervisor self is also a process, so we need to count it
                 .or_insert(0) += 1;
         }
 
@@ -527,7 +528,9 @@ impl PodManager {
                 if actual_count != expected_count {
                     warn!(
                         "Reference count mismatch for pod {}: expected={}, actual={}",
-                        pod_identifier, expected_count, actual_count
+                        pod_identifier,
+                        expected_count - 1,
+                        actual_count - 1
                     );
                     // Could implement corrective action here if needed
                 }
