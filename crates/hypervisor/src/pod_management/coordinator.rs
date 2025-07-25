@@ -289,6 +289,8 @@ impl LimiterCoordinator {
             };
 
             pod_usage.add_process(host_pid);
+            self.shared_memory_manager
+                .add_pid(&pod_identifier, host_pid as usize);
         }
 
         info!(
@@ -310,6 +312,8 @@ impl LimiterCoordinator {
         if let Some(pod_usage) = active_pods.get_mut(&pod_identifier) {
             pod_usage.remove_process(host_pid);
         }
+        self.shared_memory_manager
+            .remove_pid(&pod_identifier, host_pid as usize);
 
         info!(
             pod_identifier = %pod_identifier,
