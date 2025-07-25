@@ -14,12 +14,14 @@ use tracing_subscriber::Registry;
 
 const DEFAULT_LOG_PREFIX: &str = "tf.log";
 const ENABLE_LOG_ENV_VAR: &str = "TF_ENABLE_LOG";
-const LOG_PATH_ENV_VAR: &str = "TF_LOG_PATH";
+pub const LOG_PATH_ENV_VAR: &str = "TF_LOG_PATH";
 const LOG_LEVEL_ENV_VAR: &str = "TF_LOG_LEVEL";
 const LOG_OFF: &str = "off";
 
 /// initiate the global tracing subscriber
-pub fn get_fmt_layer() -> Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync> {
+pub fn get_fmt_layer(
+    log_path: Option<String>,
+) -> Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync> {
     let filter = match env::var(ENABLE_LOG_ENV_VAR).as_deref() {
         Ok(LOG_OFF) | Ok("0") | Ok("false") => EnvFilter::new(LOG_OFF),
         _ => EnvFilter::builder()
@@ -28,8 +30,8 @@ pub fn get_fmt_layer() -> Box<dyn tracing_subscriber::Layer<Registry> + Send + S
             .from_env_lossy(),
     };
 
-    let fmt_layer = match env::var(LOG_PATH_ENV_VAR) {
-        Ok(path) => {
+    let fmt_layer = match log_path {
+        Some(path) => {
             // path could be a specific a/b/c.log file name, split it to get base dir and prefix
             let path = Path::new(&path);
             let base_dir = path.parent().unwrap();
@@ -64,6 +66,12 @@ pub fn get_fmt_layer() -> Box<dyn tracing_subscriber::Layer<Registry> + Send + S
 }
 
 pub fn init() {
-    let fmt_layer = get_fmt_layer();
+    let log_path = env::var(LOG_PATH_ENV_VAR).ok();
+    let fmt_layer = get_fmt_layer(log_path);
+    registry().with(fmt_layer).init();
+}
+
+pub fn init_with_log_path(log_path: String) {
+    let fmt_layer = get_fmt_layer(Some(log_path));
     registry().with(fmt_layer).init();
 }
