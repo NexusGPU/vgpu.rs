@@ -47,5 +47,5 @@ path = "src/main.rs"
 async-trait = "0.1.77"
 similar-asserts = { workspace = true }
 test-log = { workspace = true }
-criterion = { version = "0.6", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports"] }
 tempfile = { workspace = true }
