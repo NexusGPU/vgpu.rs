@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use anyhow::Result;
 use tracing::warn;
 
+use crate::shared_memory::mutex::ShmMutex;
 use crate::shared_memory::set::Set;
 
 pub mod bitmap;
@@ -216,7 +217,7 @@ pub struct SharedDeviceState {
     /// Reference count for tracking how many processes are using this shared memory
     pub reference_count: AtomicU32,
     /// Set of pids
-    pub pids: Set<usize, MAX_PROCESSES>,
+    pub pids: ShmMutex<Set<usize, MAX_PROCESSES>>,
 }
 
 impl SharedDeviceState {
@@ -227,7 +228,7 @@ impl SharedDeviceState {
             device_count: AtomicU32::new(0),
             last_heartbeat: AtomicU64::new(0),
             reference_count: AtomicU32::new(1),
-            pids: Set::new(),
+            pids: ShmMutex::new(Set::new()),
         };
 
         // Add devices from configs
@@ -364,13 +365,12 @@ impl SharedDeviceState {
         }
     }
 
-
     pub fn add_pid(&self, pid: usize) {
-        self.pids.insert(pid);
+        self.pids.lock().insert(pid);
     }
 
     pub fn remove_pid(&self, pid: usize) {
-        self.pids.remove(pid);
+        self.pids.lock().remove(pid);
     }
 }
 

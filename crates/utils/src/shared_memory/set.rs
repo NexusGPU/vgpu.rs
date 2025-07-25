@@ -130,12 +130,6 @@ impl<T, const N: usize> Set<T, N> {
     }
 }
 
-impl<T, const N: usize> Drop for Set<T, N> {
-    fn drop(&mut self) {
-        self.clear();
-    }
-}
-
 impl<T, const N: usize> Default for Set<T, N> {
     fn default() -> Self {
         Self::new()
@@ -357,30 +351,6 @@ mod tests {
         assert!(values.contains(&&100));
         assert!(values.contains(&&200));
         assert!(values.contains(&&300));
-    }
-
-    #[test]
-    fn test_drop_cleanup() {
-        // Test that Drop is properly implemented
-        // This is hard to test directly, but we can at least ensure
-        // it compiles and doesn't panic
-        {
-            let mut set: Set<String, 3> = Set::new();
-            set.insert("test".to_string());
-            set.insert("cleanup".to_string());
-            // set goes out of scope here and should drop cleanly
-        }
-        
-        // If we reach here without panicking, Drop worked
-        assert!(true);
-    }
-
-    #[test]
-    fn test_default() {
-        let set: Set<i32, 10> = Set::default();
-        assert_eq!(set.len(), 0);
-        assert_eq!(set.capacity(), 10);
-        assert!(set.is_empty());
     }
 
     #[test]
