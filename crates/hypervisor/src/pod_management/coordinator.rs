@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use utils::shared_memory::handle::SharedMemoryHandle;
 use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
 use utils::shared_memory::DeviceConfig;
 
@@ -29,6 +30,8 @@ pub struct LimiterCoordinator {
     active_pods: Arc<RwLock<HashMap<String, PodDeviceUsage>>>,
     /// Monitoring task handles for each device: device_idx -> JoinHandle
     device_watcher_tasks: RwLock<HashMap<u32, JoinHandle<()>>>,
+    /// Heartbeat task handle
+    heartbeat_task: RwLock<Option<JoinHandle<()>>>,
     /// Monitoring interval.
     watch_interval: Duration,
     /// Number of GPU devices.
@@ -47,6 +50,7 @@ impl LimiterCoordinator {
             shared_memory_manager: Arc::new(ThreadSafeSharedMemoryManager::new()),
             active_pods: Arc::new(RwLock::new(HashMap::new())),
             device_watcher_tasks: RwLock::new(HashMap::new()),
+            heartbeat_task: RwLock::new(None),
             watch_interval,
             device_count,
             shared_memory_glob_pattern,
@@ -72,6 +76,9 @@ impl LimiterCoordinator {
         // Start periodic cleanup task
         let cleanup_task = self.start_periodic_cleanup_task(cancellation_token.clone());
 
+        // Start the heartbeat task
+        self.start_heartbeat_task(cancellation_token.clone());
+
         // Wait for cancellation
         cancellation_token.cancelled().await;
 
@@ -91,6 +98,13 @@ impl LimiterCoordinator {
         let mut watcher_tasks = self.device_watcher_tasks.write().unwrap();
         for (device_idx, task) in watcher_tasks.drain() {
             tracing::debug!("Stopping watcher task for device {}", device_idx);
+            task.abort();
+        }
+
+        // Stop heartbeat task
+        let mut heartbeat_task = self.heartbeat_task.write().unwrap();
+        if let Some(task) = heartbeat_task.take() {
+            tracing::debug!("Stopping heartbeat task");
             task.abort();
         }
     }
@@ -249,21 +263,73 @@ impl LimiterCoordinator {
     pub fn register_pod(&self, pod_identifier: &str, configs: Vec<DeviceConfig>) -> Result<()> {
         let pod_identifier = pod_identifier.to_string();
 
-        // Create the shared memory for this pod
-        self.shared_memory_manager
-            .create_or_get_shared_memory(&pod_identifier, &configs)?;
+        // First, try to detect if shared memory already exists and restore state if needed
+        let mut restored_pids = Vec::new();
+
+        // Try to open existing shared memory first to check if it already exists
+        match SharedMemoryHandle::open(&pod_identifier) {
+            Ok(handle) => {
+                // Shared memory already exists - this is a restart scenario
+                info!(
+                    pod_identifier = %pod_identifier,
+                    "Found existing shared memory for pod, restoring state"
+                );
+
+                // Get all existing PIDs from shared memory
+                restored_pids = handle.get_state().get_all_pids();
+
+                info!(
+                    pod_identifier = %pod_identifier,
+                    pids = ?restored_pids,
+                    "Found {} existing PIDs in shared memory",
+                    restored_pids.len()
+                );
+
+                // Create entry in manager's active_memories to track this handle
+                self.shared_memory_manager
+                    .create_or_get_shared_memory(&pod_identifier, &configs)?;
+            }
+            Err(_) => {
+                // Shared memory doesn't exist, create new one
+                info!(
+                    pod_identifier = %pod_identifier,
+                    "No existing shared memory found, creating new one"
+                );
+
+                self.shared_memory_manager
+                    .create_or_get_shared_memory(&pod_identifier, &configs)?;
+            }
+        }
 
         // Initialize pod device usage
         {
             let mut active_pods = self.active_pods.write().unwrap();
             if !active_pods.contains_key(&pod_identifier) {
-                active_pods.insert(pod_identifier.clone(), PodDeviceUsage::new(configs.clone()));
+                let mut pod_usage = PodDeviceUsage::new(configs.clone());
+
+                // Restore PIDs if we found any in existing shared memory
+                for pid in &restored_pids {
+                    pod_usage.add_process(*pid as u32);
+                }
+
+                active_pods.insert(pod_identifier.clone(), pod_usage);
             }
+        }
+
+        // If we restored PIDs from shared memory, log them as registered processes
+        if !restored_pids.is_empty() {
+            info!(
+                pod_identifier = %pod_identifier,
+                restored_pid_count = restored_pids.len(),
+                "Restored {} processes from existing shared memory during pod registration",
+                restored_pids.len()
+            );
         }
 
         info!(
             pod_identifier = %pod_identifier,
             device_count = configs.len(),
+            restored_processes = restored_pids.len(),
             "Registered pod with device configurations"
         );
 
@@ -289,6 +355,8 @@ impl LimiterCoordinator {
             };
 
             pod_usage.add_process(host_pid);
+            self.shared_memory_manager
+                .add_pid(&pod_identifier, host_pid as usize);
         }
 
         info!(
@@ -310,6 +378,8 @@ impl LimiterCoordinator {
         if let Some(pod_usage) = active_pods.get_mut(&pod_identifier) {
             pod_usage.remove_process(host_pid);
         }
+        self.shared_memory_manager
+            .remove_pid(&pod_identifier, host_pid as usize);
 
         info!(
             pod_identifier = %pod_identifier,
@@ -529,6 +599,65 @@ impl LimiterCoordinator {
             }
         })
     }
+
+    /// Starts the heartbeat task that updates heartbeat every 3 seconds
+    pub fn start_heartbeat_task(&self, cancellation_token: CancellationToken) {
+        let active_pods = self.active_pods.clone();
+        let heartbeat_interval = Duration::from_secs(3);
+
+        let task = tokio::spawn(async move {
+            let mut interval = interval(heartbeat_interval);
+            info!("Starting heartbeat task with 3-second interval");
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let timestamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
+
+                        // Get all active pods
+                        let pods = {
+                            let active_pods_guard = active_pods.read().unwrap();
+                            active_pods_guard.keys().cloned().collect::<Vec<_>>()
+                        };
+
+                        // Update heartbeat for each pod
+                        for pod_identifier in pods {
+                            if let Err(e) = Self::update_heartbeat_only(&pod_identifier, timestamp).await {
+                                debug!("Failed to update heartbeat for pod {}: {}", pod_identifier, e);
+                            }
+                        }
+                    }
+                    _ = cancellation_token.cancelled() => {
+                        info!("Heartbeat task cancelled");
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Store the task handle
+        {
+            let mut heartbeat_task = self.heartbeat_task.write().unwrap();
+            *heartbeat_task = Some(task);
+        }
+
+        info!("Started heartbeat task");
+    }
+
+    /// Updates only the heartbeat timestamp for a pod without modifying other state
+    async fn update_heartbeat_only(pod_identifier: &str, timestamp: u64) -> Result<()> {
+        use utils::shared_memory::handle::SharedMemoryHandle;
+
+        let handle = SharedMemoryHandle::open(pod_identifier)
+            .context("Failed to open shared memory for heartbeat update")?;
+        let state = handle.get_state();
+
+        state.update_heartbeat(timestamp);
+        Ok(())
+    }
 }
 
 impl Drop for LimiterCoordinator {
@@ -539,7 +668,13 @@ impl Drop for LimiterCoordinator {
             task.abort();
         }
 
-        info!("LimiterCoordinator dropped, all watcher tasks stopped");
+        // Stop heartbeat task
+        let mut heartbeat_task = self.heartbeat_task.write().unwrap();
+        if let Some(task) = heartbeat_task.take() {
+            task.abort();
+        }
+
+        info!("LimiterCoordinator dropped, all tasks stopped");
     }
 }
 

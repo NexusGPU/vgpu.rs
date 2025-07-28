@@ -61,6 +61,20 @@ impl ThreadSafeSharedMemoryManager {
         }
     }
 
+    pub fn add_pid(&self, identifier: &str, pid: usize) {
+        let memories = self.active_memories.read();
+        if let Some(shmem) = memories.get(identifier) {
+            shmem.get_state().add_pid(pid);
+        }
+    }
+
+    pub fn remove_pid(&self, identifier: &str, pid: usize) {
+        let memories = self.active_memories.read();
+        if let Some(shmem) = memories.get(identifier) {
+            shmem.get_state().remove_pid(pid);
+        }
+    }
+
     /// Cleans up a shared memory segment.
     pub fn cleanup(&self, identifier: &str) -> Result<()> {
         let mut memories = self.active_memories.write();

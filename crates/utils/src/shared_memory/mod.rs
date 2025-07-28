@@ -6,9 +6,16 @@ use std::sync::atomic::Ordering;
 use anyhow::Result;
 use tracing::warn;
 
+use crate::shared_memory::mutex::ShmMutex;
+use crate::shared_memory::set::Set;
+
+pub mod bitmap;
 pub mod handle;
 pub mod manager;
+pub mod mutex;
+pub mod set;
 
+const MAX_PROCESSES: usize = 2048;
 /// Maximum number of devices that can be stored in shared memory
 const MAX_DEVICES: usize = 16;
 /// Maximum length of device UUID string (including null terminator)
@@ -200,7 +207,6 @@ impl Default for DeviceEntry {
 
 /// Shared device state using only simple data types safe for inter-process sharing
 #[repr(C)]
-#[derive(Debug)]
 pub struct SharedDeviceState {
     /// Fixed-size array of device entries
     pub devices: [DeviceEntry; MAX_DEVICES],
@@ -210,6 +216,8 @@ pub struct SharedDeviceState {
     pub last_heartbeat: AtomicU64,
     /// Reference count for tracking how many processes are using this shared memory
     pub reference_count: AtomicU32,
+    /// Set of pids
+    pub pids: ShmMutex<Set<usize, MAX_PROCESSES>>,
 }
 
 impl SharedDeviceState {
@@ -220,6 +228,7 @@ impl SharedDeviceState {
             device_count: AtomicU32::new(0),
             last_heartbeat: AtomicU64::new(0),
             reference_count: AtomicU32::new(1),
+            pids: ShmMutex::new(Set::new()),
         };
 
         // Add devices from configs
@@ -259,124 +268,6 @@ impl SharedDeviceState {
         let current_count = self.device_count.load(Ordering::Acquire) as usize;
 
         (0..current_count).find(|&i| self.devices[i].uuid_matches(device_uuid))
-    }
-
-    /// Adds or updates a device in the state.
-    pub fn add_device(&self, device_uuid: String, device_info: SharedDeviceInfo) -> bool {
-        // First check if device already exists
-        if let Some(i) = self.find_device_index(&device_uuid) {
-            // Update existing device atomically
-            let existing = &self.devices[i].device_info;
-            existing
-                .total_cuda_cores
-                .store(device_info.get_total_cores(), Ordering::Relaxed);
-            existing
-                .up_limit
-                .store(device_info.get_up_limit(), Ordering::Relaxed);
-            existing
-                .mem_limit
-                .store(device_info.get_mem_limit(), Ordering::Relaxed);
-            existing
-                .available_cuda_cores
-                .store(device_info.get_available_cores(), Ordering::Relaxed);
-            existing
-                .pod_memory_used
-                .store(device_info.get_pod_memory_used(), Ordering::Relaxed);
-            return true;
-        }
-
-        // Add new device if there's space
-        let current_count = self.device_count.load(Ordering::Acquire) as usize;
-        if current_count < MAX_DEVICES {
-            // Try to atomically increment the count
-            let new_count = current_count + 1;
-            if self
-                .device_count
-                .compare_exchange_weak(
-                    current_count as u32,
-                    new_count as u32,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                // Successfully reserved the slot
-                let entry = &self.devices[current_count];
-                entry.set_uuid(&device_uuid);
-
-                // Set device info atomically
-                let info = &entry.device_info;
-                info.total_cuda_cores
-                    .store(device_info.get_total_cores(), Ordering::Relaxed);
-                info.up_limit
-                    .store(device_info.get_up_limit(), Ordering::Relaxed);
-                info.mem_limit
-                    .store(device_info.get_mem_limit(), Ordering::Relaxed);
-                info.available_cuda_cores
-                    .store(device_info.get_available_cores(), Ordering::Relaxed);
-                info.pod_memory_used
-                    .store(device_info.get_pod_memory_used(), Ordering::Relaxed);
-
-                entry.set_active(true);
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Removes a device from the state.
-    pub fn remove_device(&self, device_uuid: &str) -> Option<SharedDeviceInfo> {
-        if let Some(i) = self.find_device_index(device_uuid) {
-            let entry = &self.devices[i];
-
-            // Create a copy of the device info before removing
-            let device_info = SharedDeviceInfo::new(
-                entry.device_info.get_total_cores(),
-                entry.device_info.get_up_limit(),
-                entry.device_info.get_mem_limit(),
-            );
-
-            // Mark as inactive first
-            entry.set_active(false);
-
-            // Compact the array by moving last active device to this position
-            let current_count = self.device_count.load(Ordering::Acquire) as usize;
-            if i != current_count - 1 {
-                // Move last device to removed position
-                let last_entry = &self.devices[current_count - 1];
-                if last_entry.is_active() {
-                    // Copy last entry to current position
-                    entry.set_uuid(last_entry.get_uuid());
-                    let src_info = &last_entry.device_info;
-                    let dst_info = &entry.device_info;
-                    dst_info
-                        .total_cuda_cores
-                        .store(src_info.get_total_cores(), Ordering::Relaxed);
-                    dst_info
-                        .up_limit
-                        .store(src_info.get_up_limit(), Ordering::Relaxed);
-                    dst_info
-                        .mem_limit
-                        .store(src_info.get_mem_limit(), Ordering::Relaxed);
-                    dst_info
-                        .available_cuda_cores
-                        .store(src_info.get_available_cores(), Ordering::Relaxed);
-                    dst_info
-                        .pod_memory_used
-                        .store(src_info.get_pod_memory_used(), Ordering::Relaxed);
-                    entry.set_active(true);
-
-                    // Deactivate the last entry
-                    last_entry.set_active(false);
-                }
-            }
-
-            // Decrement count
-            self.device_count
-                .store((current_count - 1) as u32, Ordering::Release);
-            return Some(device_info);
-        }
-        None
     }
 
     /// Checks if a device exists by UUID.
@@ -472,6 +363,19 @@ impl SharedDeviceState {
                 return Ok(new_value);
             }
         }
+    }
+
+    pub fn add_pid(&self, pid: usize) {
+        self.pids.lock().insert(pid);
+    }
+
+    pub fn remove_pid(&self, pid: usize) {
+        self.pids.lock().remove(pid);
+    }
+
+    /// Gets all PIDs currently stored in shared memory
+    pub fn get_all_pids(&self) -> Vec<usize> {
+        self.pids.lock().values().copied().collect()
     }
 }
 
@@ -596,57 +500,6 @@ mod tests {
         // Test old heartbeat
         state.update_heartbeat(now - 60);
         assert!(!state.is_healthy(30));
-    }
-
-    #[test]
-    fn shared_device_state_device_operations() {
-        let state = SharedDeviceState::new(&[]);
-
-        // Add a device
-        let device_info = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
-        state.add_device("test-device".to_string(), device_info);
-
-        assert_eq!(state.device_count(), 1);
-        assert!(state.has_device("test-device"));
-
-        // Test device access
-        let cores = state.with_device_by_uuid("test-device", |device| device.get_total_cores());
-        assert_eq!(cores, Some(TEST_TOTAL_CORES));
-
-        // Test device modification
-        state.with_device_by_uuid_mut("test-device", |device| {
-            device.set_available_cores(512);
-        });
-
-        let available_cores =
-            state.with_device_by_uuid("test-device", |device| device.get_available_cores());
-        assert_eq!(available_cores, Some(512));
-
-        // Test device removal
-        let removed = state.remove_device("test-device");
-        assert!(removed.is_some());
-        assert_eq!(state.device_count(), 0);
-        assert!(!state.has_device("test-device"));
-    }
-
-    #[test]
-    fn shared_device_state_max_devices() {
-        let state = SharedDeviceState::new(&[]);
-
-        // Add MAX_DEVICES devices
-        for i in 0..MAX_DEVICES {
-            let device_info = SharedDeviceInfo::new(1024, 80, 1024 * 1024 * 1024);
-            state.add_device(format!("device-{i}"), device_info);
-        }
-
-        assert_eq!(state.device_count(), MAX_DEVICES);
-
-        // Try to add one more device (should be ignored)
-        let device_info = SharedDeviceInfo::new(1024, 80, 1024 * 1024 * 1024);
-        state.add_device("overflow-device".to_string(), device_info);
-
-        assert_eq!(state.device_count(), MAX_DEVICES);
-        assert!(!state.has_device("overflow-device"));
     }
 
     #[test]
@@ -831,41 +684,6 @@ mod tests {
         // Should have exactly one shared memory
         assert!(manager.contains(&identifier));
         manager.cleanup(&identifier).unwrap();
-    }
-
-    #[test]
-    fn stress_test_device_operations() {
-        let state = SharedDeviceState::new(&[]);
-
-        // Add multiple devices
-        for i in 0..10 {
-            let device_info = SharedDeviceInfo::new(
-                1024 + (i as u32) * 100,
-                80 + (i as u32),
-                (1 + (i as u64)) * 1024 * 1024 * 1024,
-            );
-            state.add_device(format!("device-{i}"), device_info);
-        }
-
-        assert_eq!(state.device_count(), 10);
-
-        // Remove every other device
-        for i in (0..10).step_by(2) {
-            let removed = state.remove_device(&format!("device-{i}"));
-            assert!(removed.is_some());
-        }
-
-        assert_eq!(state.device_count(), 5);
-
-        // Verify remaining devices
-        for i in (1..10).step_by(2) {
-            assert!(state.has_device(&format!("device-{i}")));
-        }
-
-        // Verify removed devices are gone
-        for i in (0..10).step_by(2) {
-            assert!(!state.has_device(&format!("device-{i}")));
-        }
     }
 
     #[test]
