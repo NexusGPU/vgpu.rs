@@ -7,7 +7,8 @@ use std::ffi::c_int;
 use std::ffi::c_uint;
 
 pub unsafe fn culib() -> &'static Lib {
-    let lib_path = std::env::var("TF_CUDA_LIB_PATH").unwrap_or_else(|_| "/lib/x86_64-linux-gnu/libcuda.so".to_string());
+    let lib_path = std::env::var("TF_CUDA_LIB_PATH")
+        .unwrap_or_else(|_| "/lib/x86_64-linux-gnu/libcuda.so".to_string());
 
     static LIB: std::sync::OnceLock<Lib> = std::sync::OnceLock::new();
     LIB.get_or_init(|| {

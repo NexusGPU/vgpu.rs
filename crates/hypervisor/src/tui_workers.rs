@@ -347,7 +347,12 @@ impl WorkerMonitor {
         frame.render_stateful_widget(table, area, &mut self.table_state);
     }
 
-    fn render_detail_dialog(&self, frame: &mut Frame, area: Rect, detailed_info: &WorkerDetailedInfo) {
+    fn render_detail_dialog(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        detailed_info: &WorkerDetailedInfo,
+    ) {
         use ratatui::widgets::{Clear, Paragraph, Wrap};
         use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -362,7 +367,7 @@ impl WorkerMonitor {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         let heartbeat_age = if detailed_info.last_heartbeat > 0 {
             current_time.saturating_sub(detailed_info.last_heartbeat)
         } else {
@@ -379,7 +384,11 @@ impl WorkerMonitor {
             === ACTIVE PIDs ===\n",
             detailed_info.identifier,
             detailed_info.version,
-            if detailed_info.is_healthy { "Healthy" } else { "Unhealthy" },
+            if detailed_info.is_healthy {
+                "Healthy"
+            } else {
+                "Unhealthy"
+            },
             if detailed_info.last_heartbeat > 0 {
                 format!("{}", detailed_info.last_heartbeat)
             } else {
@@ -436,7 +445,7 @@ impl WorkerMonitor {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(format!(" Worker Details: {} ", detailed_info.identifier))
-                    .title_style(Style::default().fg(Color::Yellow))
+                    .title_style(Style::default().fg(Color::Yellow)),
             )
             .wrap(Wrap { trim: true })
             .style(Style::default().fg(Color::White));
@@ -469,93 +478,99 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 /// Mock data generator for TUI development
 fn generate_mock_workers() -> HashMap<String, WorkerInfo> {
     use std::collections::HashMap;
-    
+
     let mut workers = HashMap::new();
-    
+
     // Mock worker 1 - Healthy with multiple devices
-    workers.insert("pod_example_123".to_string(), WorkerInfo {
-        identifier: "pod_example_123".to_string(),
-        devices: vec![
-            DeviceInfo {
-                uuid: "GPU-12345678-1234-1234-1234-123456789012".to_string(),
-                available_cuda_cores: 1024,
-                total_cuda_cores: 2048,
-                mem_limit: 1024 * 1024 * 1024, // 1GB
-                pod_memory_used: 512 * 1024 * 1024, // 512MB
-                up_limit: 80,
-            },
-            DeviceInfo {
-                uuid: "GPU-87654321-4321-4321-4321-210987654321".to_string(),
-                available_cuda_cores: 512,
-                total_cuda_cores: 1024,
-                mem_limit: 512 * 1024 * 1024, // 512MB
-                pod_memory_used: 256 * 1024 * 1024, // 256MB
-                up_limit: 90,
-            },
-        ],
-        is_healthy: true,
-    });
-    
+    workers.insert(
+        "pod_example_123".to_string(),
+        WorkerInfo {
+            identifier: "pod_example_123".to_string(),
+            devices: vec![
+                DeviceInfo {
+                    uuid: "GPU-12345678-1234-1234-1234-123456789012".to_string(),
+                    available_cuda_cores: 1024,
+                    total_cuda_cores: 2048,
+                    mem_limit: 1024 * 1024 * 1024,      // 1GB
+                    pod_memory_used: 512 * 1024 * 1024, // 512MB
+                    up_limit: 80,
+                },
+                DeviceInfo {
+                    uuid: "GPU-87654321-4321-4321-4321-210987654321".to_string(),
+                    available_cuda_cores: 512,
+                    total_cuda_cores: 1024,
+                    mem_limit: 512 * 1024 * 1024,       // 512MB
+                    pod_memory_used: 256 * 1024 * 1024, // 256MB
+                    up_limit: 90,
+                },
+            ],
+            is_healthy: true,
+        },
+    );
+
     // Mock worker 2 - Unhealthy with high utilization
-    workers.insert("pod_stressed_456".to_string(), WorkerInfo {
-        identifier: "pod_stressed_456".to_string(),
-        devices: vec![
-            DeviceInfo {
+    workers.insert(
+        "pod_stressed_456".to_string(),
+        WorkerInfo {
+            identifier: "pod_stressed_456".to_string(),
+            devices: vec![DeviceInfo {
                 uuid: "GPU-11111111-2222-3333-4444-555555555555".to_string(),
                 available_cuda_cores: 64,
                 total_cuda_cores: 2048,
-                mem_limit: 2048 * 1024 * 1024, // 2GB
+                mem_limit: 2048 * 1024 * 1024,       // 2GB
                 pod_memory_used: 1900 * 1024 * 1024, // 1.9GB (high usage)
                 up_limit: 70,
-            },
-        ],
-        is_healthy: false,
-    });
-    
+            }],
+            is_healthy: false,
+        },
+    );
+
     // Mock worker 3 - Normal with single device
-    workers.insert("pod_normal_789".to_string(), WorkerInfo {
-        identifier: "pod_normal_789".to_string(),
-        devices: vec![
-            DeviceInfo {
+    workers.insert(
+        "pod_normal_789".to_string(),
+        WorkerInfo {
+            identifier: "pod_normal_789".to_string(),
+            devices: vec![DeviceInfo {
                 uuid: "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
                 available_cuda_cores: 1500,
                 total_cuda_cores: 2048,
-                mem_limit: 4096 * 1024 * 1024, // 4GB
+                mem_limit: 4096 * 1024 * 1024,       // 4GB
                 pod_memory_used: 1024 * 1024 * 1024, // 1GB
                 up_limit: 85,
-            },
-        ],
-        is_healthy: true,
-    });
-    
+            }],
+            is_healthy: true,
+        },
+    );
+
     // Mock worker 4 - Zero utilization
-    workers.insert("pod_idle_999".to_string(), WorkerInfo {
-        identifier: "pod_idle_999".to_string(),
-        devices: vec![
-            DeviceInfo {
+    workers.insert(
+        "pod_idle_999".to_string(),
+        WorkerInfo {
+            identifier: "pod_idle_999".to_string(),
+            devices: vec![DeviceInfo {
                 uuid: "GPU-00000000-0000-0000-0000-000000000000".to_string(),
                 available_cuda_cores: 2048,
                 total_cuda_cores: 2048,
                 mem_limit: 8192 * 1024 * 1024, // 8GB
-                pod_memory_used: 0, // No usage
+                pod_memory_used: 0,            // No usage
                 up_limit: 95,
-            },
-        ],
-        is_healthy: true,
-    });
-    
+            }],
+            is_healthy: true,
+        },
+    );
+
     workers
 }
 
 /// Generate mock detailed worker info
 fn generate_mock_detailed_worker(identifier: &str) -> WorkerDetailedInfo {
     use std::time::{SystemTime, UNIX_EPOCH};
-    
+
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    
+
     match identifier {
         "pod_example_123" => WorkerDetailedInfo {
             identifier: identifier.to_string(),
@@ -585,16 +600,14 @@ fn generate_mock_detailed_worker(identifier: &str) -> WorkerDetailedInfo {
         },
         "pod_stressed_456" => WorkerDetailedInfo {
             identifier: identifier.to_string(),
-            devices: vec![
-                DeviceInfo {
-                    uuid: "GPU-11111111-2222-3333-4444-555555555555".to_string(),
-                    available_cuda_cores: 64,
-                    total_cuda_cores: 2048,
-                    mem_limit: 2048 * 1024 * 1024,
-                    pod_memory_used: 1900 * 1024 * 1024,
-                    up_limit: 70,
-                },
-            ],
+            devices: vec![DeviceInfo {
+                uuid: "GPU-11111111-2222-3333-4444-555555555555".to_string(),
+                available_cuda_cores: 64,
+                total_cuda_cores: 2048,
+                mem_limit: 2048 * 1024 * 1024,
+                pod_memory_used: 1900 * 1024 * 1024,
+                up_limit: 70,
+            }],
             is_healthy: false,
             last_heartbeat: current_time - 120, // 2 minutes ago (stale)
             active_pids: vec![98765, 98766, 98767, 98768, 98769], // More PIDs
@@ -603,16 +616,14 @@ fn generate_mock_detailed_worker(identifier: &str) -> WorkerDetailedInfo {
         },
         "pod_normal_789" => WorkerDetailedInfo {
             identifier: identifier.to_string(),
-            devices: vec![
-                DeviceInfo {
-                    uuid: "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
-                    available_cuda_cores: 1500,
-                    total_cuda_cores: 2048,
-                    mem_limit: 4096 * 1024 * 1024,
-                    pod_memory_used: 1024 * 1024 * 1024,
-                    up_limit: 85,
-                },
-            ],
+            devices: vec![DeviceInfo {
+                uuid: "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+                available_cuda_cores: 1500,
+                total_cuda_cores: 2048,
+                mem_limit: 4096 * 1024 * 1024,
+                pod_memory_used: 1024 * 1024 * 1024,
+                up_limit: 85,
+            }],
             is_healthy: true,
             last_heartbeat: current_time - 5, // 5 seconds ago
             active_pids: vec![55555],
@@ -621,19 +632,17 @@ fn generate_mock_detailed_worker(identifier: &str) -> WorkerDetailedInfo {
         },
         "pod_idle_999" => WorkerDetailedInfo {
             identifier: identifier.to_string(),
-            devices: vec![
-                DeviceInfo {
-                    uuid: "GPU-00000000-0000-0000-0000-000000000000".to_string(),
-                    available_cuda_cores: 2048,
-                    total_cuda_cores: 2048,
-                    mem_limit: 8192 * 1024 * 1024,
-                    pod_memory_used: 0,
-                    up_limit: 95,
-                },
-            ],
+            devices: vec![DeviceInfo {
+                uuid: "GPU-00000000-0000-0000-0000-000000000000".to_string(),
+                available_cuda_cores: 2048,
+                total_cuda_cores: 2048,
+                mem_limit: 8192 * 1024 * 1024,
+                pod_memory_used: 0,
+                up_limit: 95,
+            }],
             is_healthy: true,
             last_heartbeat: current_time - 1, // 1 second ago
-            active_pids: vec![], // No active PIDs
+            active_pids: vec![],              // No active PIDs
             version: 1,
             device_count: 1,
         },
@@ -659,7 +668,7 @@ pub async fn run_tui_monitor_mock() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut monitor = WorkerMonitor::new();
-    
+
     // Load mock data
     monitor.workers = generate_mock_workers();
     monitor.update_selection();
