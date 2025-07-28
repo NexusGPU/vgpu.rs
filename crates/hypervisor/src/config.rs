@@ -52,6 +52,14 @@ pub struct ShowTuiWorkersArgs {
         default_value = "/tmp/hypervisor_tui_workers.log"
     )]
     pub log_path: String,
+
+    #[arg(
+        long,
+        help = "Enable mock mode for TUI development and testing",
+        default_value_t = false,
+        action = clap::ArgAction::SetTrue
+    )]
+    pub mock: bool,
 }
 
 #[derive(Parser)]

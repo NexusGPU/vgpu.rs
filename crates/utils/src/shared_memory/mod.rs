@@ -357,6 +357,22 @@ impl SharedDeviceState {
             )
         })
     }
+
+    /// Gets all detailed state information for TUI display
+    pub fn get_detailed_state_info(&self) -> (u64, Vec<usize>, u32) {
+        match self {
+            Self::V1(inner) => (
+                inner.get_last_heartbeat(),
+                inner.get_all_pids(),
+                1, // V1 version
+            ),
+        }
+    }
+
+    /// Gets version number
+    pub fn get_version(&self) -> u32 {
+        self.version()
+    }
 }
 
 impl SharedDeviceStateV1 {

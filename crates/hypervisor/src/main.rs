@@ -201,5 +201,9 @@ async fn run_show_tui_workers(args: crate::config::ShowTuiWorkersArgs) -> Result
 
     tracing::info!("Starting TUI worker monitor with pattern: {}", args.glob);
 
-    tui_workers::run_tui_monitor(format!("/dev/shm/{}", args.glob)).await
+    if args.mock {
+        tui_workers::run_tui_monitor_mock().await
+    } else {
+        tui_workers::run_tui_monitor(format!("/dev/shm/{}", args.glob)).await
+    }
 }
