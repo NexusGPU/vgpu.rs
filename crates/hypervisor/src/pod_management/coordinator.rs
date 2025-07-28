@@ -265,40 +265,38 @@ impl LimiterCoordinator {
 
         // First, try to detect if shared memory already exists and restore state if needed
         let mut restored_pids = Vec::new();
-
+        let mut shared_memory_exists = false;
+        
         // Try to open existing shared memory first to check if it already exists
-        match SharedMemoryHandle::open(&pod_identifier) {
-            Ok(handle) => {
-                // Shared memory already exists - this is a restart scenario
-                info!(
-                    pod_identifier = %pod_identifier,
-                    "Found existing shared memory for pod, restoring state"
-                );
-
-                // Get all existing PIDs from shared memory
-                restored_pids = handle.get_state().get_all_pids();
-
-                info!(
-                    pod_identifier = %pod_identifier,
-                    pids = ?restored_pids,
-                    "Found {} existing PIDs in shared memory",
-                    restored_pids.len()
-                );
-
-                // Create entry in manager's active_memories to track this handle
-                self.shared_memory_manager
-                    .create_or_get_shared_memory(&pod_identifier, &configs)?;
-            }
-            Err(_) => {
-                // Shared memory doesn't exist, create new one
-                info!(
-                    pod_identifier = %pod_identifier,
-                    "No existing shared memory found, creating new one"
-                );
-
-                self.shared_memory_manager
-                    .create_or_get_shared_memory(&pod_identifier, &configs)?;
-            }
+        if let Ok(handle) = SharedMemoryHandle::open(&pod_identifier) {
+            // Shared memory already exists - this is a restart scenario
+            shared_memory_exists = true;
+            info!(
+                pod_identifier = %pod_identifier,
+                "Found existing shared memory for pod, restoring state"
+            );
+            
+            // Get all existing PIDs from shared memory
+            restored_pids = handle.get_state().get_all_pids();
+            
+            info!(
+                pod_identifier = %pod_identifier,
+                pids = ?restored_pids,
+                "Found {} existing PIDs in shared memory",
+                restored_pids.len()
+            );
+            
+            // Directly register the existing handle in the manager to avoid reinitializing
+            self.shared_memory_manager.register_existing_handle(&pod_identifier, handle)?;
+        } else {
+            // Shared memory doesn't exist, create new one
+            info!(
+                pod_identifier = %pod_identifier,
+                "No existing shared memory found, creating new one"
+            );
+            
+            self.shared_memory_manager
+                .create_or_get_shared_memory(&pod_identifier, &configs)?;
         }
 
         // Initialize pod device usage
@@ -306,12 +304,12 @@ impl LimiterCoordinator {
             let mut active_pods = self.active_pods.write().unwrap();
             if !active_pods.contains_key(&pod_identifier) {
                 let mut pod_usage = PodDeviceUsage::new(configs.clone());
-
+                
                 // Restore PIDs if we found any in existing shared memory
                 for pid in &restored_pids {
                     pod_usage.add_process(*pid as u32);
                 }
-
+                
                 active_pods.insert(pod_identifier.clone(), pod_usage);
             }
         }
@@ -330,6 +328,7 @@ impl LimiterCoordinator {
             pod_identifier = %pod_identifier,
             device_count = configs.len(),
             restored_processes = restored_pids.len(),
+            shared_memory_existed = shared_memory_exists,
             "Registered pod with device configurations"
         );
 

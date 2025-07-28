@@ -49,6 +49,23 @@ impl ThreadSafeSharedMemoryManager {
         Ok(())
     }
 
+    /// Registers an existing shared memory handle without reinitializing the data.
+    /// This is useful when restoring state from existing shared memory.
+    pub fn register_existing_handle(
+        &self,
+        identifier: &str,
+        handle: super::handle::SharedMemoryHandle,
+    ) -> Result<()> {
+        let mut memories = self.active_memories.write();
+
+        // Only register if not already present
+        if !memories.contains_key(identifier) {
+            memories.insert(identifier.to_string(), handle);
+        }
+
+        Ok(())
+    }
+
     /// Gets a pointer to the shared memory by its identifier.
     pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut super::SharedDeviceState> {
         let memories = self.active_memories.read();
