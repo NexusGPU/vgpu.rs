@@ -372,6 +372,11 @@ impl SharedDeviceState {
     pub fn remove_pid(&self, pid: usize) {
         self.pids.lock().remove(pid);
     }
+
+    /// Gets all PIDs currently stored in shared memory
+    pub fn get_all_pids(&self) -> Vec<usize> {
+        self.pids.lock().values().copied().collect()
+    }
 }
 
 /// Device configuration information.
