@@ -381,7 +381,8 @@ impl PodManager {
 
         // Check each PID for liveness
         for pid in tracked_pids {
-            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            let is_alive = unsafe { libc::kill(pid as i32, 0) == 0 };
+            if !is_alive {
                 info!("Detected dead process: {}", pid);
                 dead_pids.push(pid);
 

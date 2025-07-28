@@ -345,6 +345,12 @@ impl SharedDeviceState {
     pub fn get_all_pids(&self) -> Vec<usize> {
         self.pids.lock().values().copied().collect()
     }
+
+    /// Cleans up any orphaned locks held by dead processes
+    /// This should be called during startup to prevent deadlocks
+    pub fn cleanup_orphaned_locks(&self) {
+        self.pids.cleanup_orphaned_lock();
+    }
 }
 
 /// Device configuration information.

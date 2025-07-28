@@ -48,12 +48,81 @@ impl<T> ShmMutex<T> {
         }
     }
 
-    pub fn lock(&self) -> ShmMutexGuard<T> {
-        while self
-            .lock
-            .compare_exchange(0, self.pid, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
+    /// Checks if a process with the given PID exists
+    fn is_process_alive(pid: usize) -> bool {
+        if pid == 0 {
+            return false;
+        }
+
+        // On Unix systems, we can use kill(pid, 0) to check if process exists
+        #[cfg(unix)]
         {
+            unsafe { libc::kill(pid as i32, 0) == 0 }
+        }
+
+        #[cfg(not(unix))]
+        {
+            // Fallback for non-Unix systems - always assume alive to be safe
+            true
+        }
+    }
+
+    /// Attempts to clean up the lock if the holding process is dead
+    fn try_cleanup_dead_lock(&self) -> bool {
+        let current_holder = self.lock.load(Ordering::Acquire);
+        if current_holder != 0 && !Self::is_process_alive(current_holder) {
+            // The process holding the lock is dead, try to clean it up
+            match self
+                .lock
+                .compare_exchange(current_holder, 0, Ordering::AcqRel, Ordering::Relaxed)
+            {
+                Ok(_) => {
+                    tracing::warn!(
+                        "Cleaned up orphaned lock held by dead process {}",
+                        current_holder
+                    );
+                    true
+                }
+                Err(_) => {
+                    // Someone else changed the lock state, retry
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Forcefully cleans up any orphaned locks during startup
+    pub fn cleanup_orphaned_lock(&self) {
+        let current_holder = self.lock.load(Ordering::Acquire);
+        if current_holder != 0 && !Self::is_process_alive(current_holder) {
+            self.lock.store(0, Ordering::Release);
+            tracing::info!(
+                "Cleaned up orphaned lock held by dead process {} during startup",
+                current_holder
+            );
+        }
+    }
+
+    pub fn lock(&self) -> ShmMutexGuard<T> {
+        loop {
+            // First try to acquire the lock normally
+            if self
+                .lock
+                .compare_exchange(0, self.pid, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
+                break;
+            }
+
+            // If that fails, check if we can clean up a dead lock holder
+            if self.try_cleanup_dead_lock() {
+                // Successfully cleaned up, try to acquire again
+                continue;
+            }
+
+            // Normal retry loop with backoff
             for _ in 0..100 {
                 spin_loop();
             }

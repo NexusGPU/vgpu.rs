@@ -141,12 +141,14 @@ impl ThreadSafeSharedMemoryManager {
                 .open()
             {
                 Ok(shmem) => {
-                    // Successfully opened, check if it has an active process
+                    // Successfully opened, first clean up any orphaned locks
                     let ptr = shmem.as_ptr() as *const super::SharedDeviceState;
                     unsafe {
                         let state = &*ptr;
-                        // If reference count is 0, it's likely orphaned
-                        // If no heartbeat within 1 hour, it's likely orphaned
+                        // Clean up orphaned locks before accessing shared data
+                        state.cleanup_orphaned_locks();
+
+                        // Now safely check if it has active processes and is healthy
                         state.get_all_pids().is_empty() && !state.is_healthy(100)
                     }
                 }
