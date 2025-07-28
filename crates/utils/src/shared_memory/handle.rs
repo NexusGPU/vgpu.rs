@@ -5,7 +5,6 @@ use shared_memory::Shmem;
 use shared_memory::ShmemConf;
 use shared_memory::ShmemError;
 use tracing::info;
-use tracing::warn;
 
 /// Safely access shared memory, automatically handling the segment's lifecycle.
 pub struct SharedMemoryHandle {
@@ -24,11 +23,6 @@ impl SharedMemoryHandle {
             .context("Failed to open shared memory")?;
 
         let ptr = shmem.as_ptr() as *mut super::SharedDeviceState;
-
-        // Increment reference count when opening existing shared memory
-        unsafe {
-            (*ptr).increment_ref_count();
-        }
 
         Ok(Self {
             _shmem: shmem,
@@ -102,38 +96,6 @@ impl SharedMemoryHandle {
     /// Gets the shared memory identifier.
     pub fn get_identifier(&self) -> &str {
         &self.identifier
-    }
-}
-
-// Implement Drop to handle reference counting cleanup
-impl Drop for SharedMemoryHandle {
-    fn drop(&mut self) {
-        unsafe {
-            match (*self.ptr).try_decrement_ref_count() {
-                Ok(ref_count) => {
-                    info!(
-                        identifier = %self.identifier,
-                        "Dropped shared memory reference, remaining count: {}",
-                        ref_count
-                    );
-                    if ref_count == 0 {
-                        info!(
-                            identifier = %self.identifier,
-                            "Last reference to shared memory dropped, reference count: {}",
-                            ref_count
-                        );
-                        // Note: We don't manually delete the file here. The shared_memory crate
-                        // and OS will handle cleanup when the underlying Shmem is dropped.
-                    }
-                }
-                Err(super::RefCountError::Underflow) => {
-                    warn!(
-                        identifier = %self.identifier,
-                        "Attempted to decrement reference count below zero"
-                    );
-                }
-            }
-        }
     }
 }
 

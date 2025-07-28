@@ -523,7 +523,11 @@ impl PodManager {
                 .values()
                 .find(|t| t.pod_identifier == pod_identifier)
             {
-                let actual_count = tracker.shared_memory_handle.get_state().get_ref_count();
+                let actual_count = tracker
+                    .shared_memory_handle
+                    .get_state()
+                    .get_all_pids()
+                    .len() as u32;
 
                 if actual_count != expected_count {
                     warn!(

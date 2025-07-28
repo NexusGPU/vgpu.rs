@@ -3,7 +3,6 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use anyhow::Result;
 use tracing::warn;
 
 use crate::shared_memory::mutex::ShmMutex;
@@ -214,8 +213,6 @@ pub struct SharedDeviceState {
     pub device_count: AtomicU32,
     /// Last heartbeat timestamp from hypervisor (for health monitoring).
     pub last_heartbeat: AtomicU64,
-    /// Reference count for tracking how many processes are using this shared memory
-    pub reference_count: AtomicU32,
     /// Set of pids
     pub pids: ShmMutex<Set<usize, MAX_PROCESSES>>,
 }
@@ -227,7 +224,6 @@ impl SharedDeviceState {
             devices: std::array::from_fn(|_| DeviceEntry::new()),
             device_count: AtomicU32::new(0),
             last_heartbeat: AtomicU64::new(0),
-            reference_count: AtomicU32::new(1),
             pids: ShmMutex::new(Set::new()),
         };
 
@@ -335,34 +331,6 @@ impl SharedDeviceState {
         // Note: Since SharedDeviceInfo uses atomic operations internally,
         // we don't actually need mutable access to modify its values
         self.with_device_by_uuid(device_uuid, f)
-    }
-
-    /// Increments the reference count and returns the new value.
-    pub fn increment_ref_count(&self) -> u32 {
-        self.reference_count.fetch_add(1, Ordering::AcqRel) + 1
-    }
-
-    /// Gets the current reference count.
-    pub fn get_ref_count(&self) -> u32 {
-        self.reference_count.load(Ordering::Acquire)
-    }
-
-    /// Safely decrements reference count using compare-and-swap to avoid underflow.
-    pub fn try_decrement_ref_count(&self) -> Result<u32, RefCountError> {
-        loop {
-            let current = self.reference_count.load(Ordering::Acquire);
-            if current == 0 {
-                return Err(RefCountError::Underflow);
-            }
-            let new_value = current - 1;
-            if self
-                .reference_count
-                .compare_exchange_weak(current, new_value, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                return Ok(new_value);
-            }
-        }
     }
 
     pub fn add_pid(&self, pid: usize) {
@@ -687,124 +655,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_memory_handle_reference_counting() {
-        let configs = create_test_configs();
-        let identifier = create_unique_identifier("ref_counting");
-
-        // Create first handle
-        let handle1 = SharedMemoryHandle::create(&identifier, &configs)
-            .expect("should create shared memory successfully");
-
-        let state1 = handle1.get_state();
-        assert_eq!(state1.get_ref_count(), 1);
-
-        // Verify shared memory file exists
-        assert!(shared_memory_file_exists(&identifier));
-
-        // Open second handle to same memory
-        let handle2 = SharedMemoryHandle::open(&identifier)
-            .expect("should open existing shared memory successfully");
-
-        let state2 = handle2.get_state();
-        assert_eq!(state2.get_ref_count(), 2);
-
-        // Verify they access the same memory
-        assert_eq!(state1.get_ref_count(), 2);
-
-        // Drop first handle
-        drop(handle1);
-        assert_eq!(state2.get_ref_count(), 1);
-
-        // What we care about is that the reference count is correctly maintained
-        let final_ref_count = state2.get_ref_count();
-        assert_eq!(final_ref_count, 1);
-
-        // Drop second handle
-        drop(handle2);
-    }
-
-    #[test]
-    fn thread_safe_manager_cleanup_operations() {
-        let manager = ThreadSafeSharedMemoryManager::new();
-        let configs = create_test_configs();
-        let identifier = create_unique_identifier("cleanup_test");
-
-        // Create shared memory
-        manager
-            .create_or_get_shared_memory(&identifier, &configs)
-            .unwrap();
-        assert!(manager.contains(&identifier));
-
-        // Verify shared memory file exists
-        assert!(shared_memory_file_exists(&identifier));
-
-        // Initially should not be ready for cleanup (has 1 reference)
-        assert!(!manager.should_cleanup(&identifier));
-
-        // Manually set reference count to 0 for testing
-        {
-            let ptr = manager.get_shared_memory(&identifier).unwrap();
-            unsafe {
-                (*ptr).try_decrement_ref_count().ok();
-            }
-        }
-
-        // Now should be ready for cleanup
-        assert!(manager.should_cleanup(&identifier));
-
-        // Cleanup unused segments
-        let cleaned = manager.cleanup_unused().unwrap();
-        assert_eq!(cleaned.len(), 1);
-        assert_eq!(cleaned[0], identifier);
-        assert!(!manager.contains(&identifier));
-
-        assert!(!shared_memory_file_exists(&identifier));
-    }
-
-    #[test]
-    fn concurrent_reference_counting() {
-        let configs = create_test_configs();
-        let identifier = create_unique_identifier("concurrent_ref_count");
-
-        let handle = Arc::new(
-            SharedMemoryHandle::create(&identifier, &configs)
-                .expect("should create shared memory successfully"),
-        );
-
-        let mut handles = vec![];
-
-        // Spawn multiple threads incrementing and decrementing reference count
-        for _ in 0..5 {
-            let handle_clone = Arc::clone(&handle);
-
-            let thread_handle = thread::spawn(move || {
-                let state = handle_clone.get_state();
-
-                for _ in 0..10 {
-                    // Increment
-                    state.increment_ref_count();
-                    thread::sleep(Duration::from_millis(1));
-
-                    // Try to decrement (may fail if already at 0)
-                    let _ = state.try_decrement_ref_count();
-                    thread::sleep(Duration::from_millis(1));
-                }
-            });
-
-            handles.push(thread_handle);
-        }
-
-        // Wait for all threads
-        for handle in handles {
-            handle.join().expect("Thread should complete successfully");
-        }
-
-        // Reference count should be >= 1 (the original reference)
-        let final_count = handle.get_state().get_ref_count();
-        assert!(final_count >= 1);
-    }
-
-    #[test]
     fn orphaned_file_cleanup() {
         let manager = ThreadSafeSharedMemoryManager::new();
 
@@ -826,25 +676,5 @@ mod tests {
 
         // Clean up test file
         std::fs::remove_file(test_file).unwrap();
-    }
-
-    #[test]
-    fn reference_counting_with_zero_refs() {
-        let state = SharedDeviceState::new(&[]);
-
-        // Start with 1 reference
-        assert_eq!(state.get_ref_count(), 1);
-
-        // Decrement to 0
-        let result = state.try_decrement_ref_count();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0);
-        assert_eq!(state.get_ref_count(), 0);
-
-        // Try to decrement below 0 - should fail
-        let result = state.try_decrement_ref_count();
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), RefCountError::Underflow);
-        assert_eq!(state.get_ref_count(), 0);
     }
 }

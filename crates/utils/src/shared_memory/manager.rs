@@ -130,7 +130,7 @@ impl ThreadSafeSharedMemoryManager {
                         let state = &*ptr;
                         // If reference count is 0, it's likely orphaned
                         // If no heartbeat within 1 hour, it's likely orphaned
-                        state.get_ref_count() == 0 && !state.is_healthy(3600)
+                        state.get_all_pids().is_empty() && !state.is_healthy(100)
                     }
                 }
                 Err(_) => {
@@ -168,7 +168,7 @@ impl ThreadSafeSharedMemoryManager {
         let memories = self.active_memories.read();
         if let Some(shmem) = memories.get(identifier) {
             let state = shmem.get_state();
-            state.get_ref_count() == 0
+            state.get_all_pids().is_empty()
         } else {
             false
         }
