@@ -11,6 +11,7 @@ pub unsafe fn culib() -> &'static Lib {
 
     static LIB: std::sync::OnceLock<Lib> = std::sync::OnceLock::new();
     LIB.get_or_init(|| {
+        tracing::info!("Loading CUDA library from {}", lib_path);
         let lib = Library::new(lib_path).expect("Failed to load CUDA library");
         Lib::from_library(lib).expect("Failed to convert library to Lib")
     })
