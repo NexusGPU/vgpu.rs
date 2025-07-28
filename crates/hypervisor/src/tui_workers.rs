@@ -95,17 +95,26 @@ impl WorkerMonitor {
         let device_count = state.device_count();
 
         for i in 0..device_count {
-            let device = &state.devices[i];
-            if device.is_active() {
-                let device_info = &device.device_info;
-                devices.push(DeviceInfo {
-                    uuid: device.get_uuid_owned(),
-                    available_cuda_cores: device_info.get_available_cores(),
-                    total_cuda_cores: device_info.get_total_cores(),
-                    mem_limit: device_info.get_mem_limit(),
-                    pod_memory_used: device_info.get_pod_memory_used(),
-                    up_limit: device_info.get_up_limit(),
-                });
+            if let Some((
+                uuid,
+                available_cores,
+                total_cores,
+                mem_limit,
+                pod_memory_used,
+                up_limit,
+                is_active,
+            )) = state.get_complete_device_info(i)
+            {
+                if is_active {
+                    devices.push(DeviceInfo {
+                        uuid,
+                        available_cuda_cores: available_cores,
+                        total_cuda_cores: total_cores,
+                        mem_limit,
+                        pod_memory_used,
+                        up_limit,
+                    });
+                }
             }
         }
 

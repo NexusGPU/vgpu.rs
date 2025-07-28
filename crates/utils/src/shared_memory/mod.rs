@@ -206,7 +206,7 @@ impl Default for DeviceEntry {
 
 /// Shared device state using only simple data types safe for inter-process sharing
 #[repr(C)]
-pub struct SharedDeviceState {
+pub struct SharedDeviceStateV1 {
     /// Fixed-size array of device entries
     pub devices: [DeviceEntry; MAX_DEVICES],
     /// Number of active devices
@@ -217,8 +217,150 @@ pub struct SharedDeviceState {
     pub pids: ShmMutex<Set<usize, MAX_PROCESSES>>,
 }
 
+/// Versioned shared device state enum for future compatibility
+#[repr(C)]
+pub enum SharedDeviceState {
+    V1(SharedDeviceStateV1),
+}
+
 impl SharedDeviceState {
-    /// Creates a new SharedDeviceState instance.
+    /// Creates a new SharedDeviceState instance (currently V1).
+    pub fn new(configs: &[DeviceConfig]) -> Self {
+        Self::V1(SharedDeviceStateV1::new(configs))
+    }
+
+    /// Gets the current version of the shared device state
+    pub fn version(&self) -> u32 {
+        match self {
+            Self::V1(_) => 1,
+        }
+    }
+
+    /// Delegates method calls to the appropriate version
+    fn with_inner<T, F>(&self, f: F) -> T
+    where
+        F: FnOnce(&SharedDeviceStateV1) -> T,
+    {
+        match self {
+            Self::V1(inner) => f(inner),
+        }
+    }
+
+    /// Delegates mutable method calls to the appropriate version
+    fn with_inner_mut<T, F>(&self, f: F) -> T
+    where
+        F: FnOnce(&SharedDeviceStateV1) -> T,
+    {
+        match self {
+            Self::V1(inner) => f(inner),
+        }
+    }
+
+    // Delegate all methods to the inner version
+    pub fn has_device(&self, device_uuid: &str) -> bool {
+        self.with_inner(|inner| inner.has_device(device_uuid))
+    }
+
+    pub fn get_device_uuids(&self) -> Vec<String> {
+        self.with_inner(|inner| inner.get_device_uuids())
+    }
+
+    pub fn device_count(&self) -> usize {
+        self.with_inner(|inner| inner.device_count())
+    }
+
+    pub fn update_heartbeat(&self, timestamp: u64) {
+        self.with_inner(|inner| inner.update_heartbeat(timestamp))
+    }
+
+    pub fn get_last_heartbeat(&self) -> u64 {
+        self.with_inner(|inner| inner.get_last_heartbeat())
+    }
+
+    pub fn is_healthy(&self, timeout_seconds: u64) -> bool {
+        self.with_inner(|inner| inner.is_healthy(timeout_seconds))
+    }
+
+    pub fn with_device_by_uuid<T, F>(&self, device_uuid: &str, f: F) -> Option<T>
+    where
+        F: FnOnce(&SharedDeviceInfo) -> T,
+    {
+        self.with_inner(|inner| inner.with_device_by_uuid(device_uuid, f))
+    }
+
+    pub fn with_device_by_uuid_mut<T, F>(&self, device_uuid: &str, f: F) -> Option<T>
+    where
+        F: FnOnce(&SharedDeviceInfo) -> T,
+    {
+        self.with_inner_mut(|inner| inner.with_device_by_uuid_mut(device_uuid, f))
+    }
+
+    pub fn add_pid(&self, pid: usize) {
+        self.with_inner(|inner| inner.add_pid(pid))
+    }
+
+    pub fn remove_pid(&self, pid: usize) {
+        self.with_inner(|inner| inner.remove_pid(pid))
+    }
+
+    pub fn get_all_pids(&self) -> Vec<usize> {
+        self.with_inner(|inner| inner.get_all_pids())
+    }
+
+    pub fn cleanup_orphaned_locks(&self) {
+        self.with_inner(|inner| inner.cleanup_orphaned_locks())
+    }
+
+    /// Executes a closure with a device entry by index
+    pub fn with_device<T, F>(&self, index: usize, f: F) -> Option<T>
+    where
+        F: FnOnce(&DeviceEntry) -> T,
+    {
+        match self {
+            Self::V1(inner) => {
+                if index < inner.device_count() {
+                    Some(f(&inner.devices[index]))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Gets device information by index (returns owned data to avoid lifetime issues)
+    pub fn get_device_info(&self, index: usize) -> Option<(String, i32, u32, u64, bool)> {
+        self.with_device(index, |device| {
+            (
+                device.get_uuid_owned(),
+                device.device_info.get_available_cores(),
+                device.device_info.get_total_cores(),
+                device.device_info.get_mem_limit(),
+                device.is_active(),
+            )
+        })
+    }
+
+    /// Gets complete device information including additional fields for UI
+    pub fn get_complete_device_info(
+        &self,
+        index: usize,
+    ) -> Option<(String, i32, u32, u64, u64, u32, bool)> {
+        self.with_device(index, |device| {
+            (
+                device.get_uuid_owned(),
+                device.device_info.get_available_cores(),
+                device.device_info.get_total_cores(),
+                device.device_info.get_mem_limit(),
+                device.device_info.get_pod_memory_used(),
+                device.device_info.get_up_limit(),
+                device.is_active(),
+            )
+        })
+    }
+}
+
+impl SharedDeviceStateV1 {
+    /// Creates a new SharedDeviceStateV1 instance.
     pub fn new(configs: &[DeviceConfig]) -> Self {
         let state = Self {
             devices: std::array::from_fn(|_| DeviceEntry::new()),
@@ -440,6 +582,7 @@ mod tests {
         let state = SharedDeviceState::new(&configs);
 
         // Test initial state
+        assert_eq!(state.version(), 1);
         assert_eq!(state.device_count(), 1);
         assert_eq!(state.get_last_heartbeat(), 0);
         assert!(!state.is_healthy(30));
@@ -517,6 +660,7 @@ mod tests {
             .expect("should create shared memory successfully");
 
         let state1 = handle1.get_state();
+        assert_eq!(state1.version(), 1);
         assert_eq!(state1.device_count(), 1);
 
         // Verify shared memory file exists after creation
@@ -527,6 +671,7 @@ mod tests {
             .expect("should open existing shared memory successfully");
 
         let state2 = handle2.get_state();
+        assert_eq!(state2.version(), 1);
         assert_eq!(state2.device_count(), 1);
 
         // Verify they access the same memory
@@ -619,6 +764,7 @@ mod tests {
         // Test accessing through pointer
         unsafe {
             let state = &*ptr;
+            assert_eq!(state.version(), 1);
             assert_eq!(state.device_count(), 1);
         }
 
