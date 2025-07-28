@@ -289,8 +289,8 @@ async fn setup_file_watcher(pattern: &str, tx: mpsc::Sender<RefreshEvent>) -> Re
     let mut watcher = RecommendedWatcher::new(
         move |res| {
             if let Ok(event) = res {
-                if watch_tx.blocking_send(event).is_err() {
-                    tracing::error!("Failed to send event to watch_tx: {:?}", event);
+                if let Err(e) = watch_tx.blocking_send(event) {
+                    tracing::error!("Failed to send event to watch_tx, error: {e:?}");
                 }
             }
         },
