@@ -7,8 +7,8 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use crate::ui::tui::state::WorkerMonitor;
-use crate::ui::tui::types::{AppState, RefreshEvent};
+use crate::tui::state::WorkerMonitor;
+use crate::tui::types::{AppState, RefreshEvent};
 
 pub async fn setup_file_watcher(pattern: &str, tx: mpsc::Sender<RefreshEvent>) -> Result<()> {
     let path = if pattern.starts_with("/dev/shm/") {

@@ -18,7 +18,7 @@ type GpuUuid = String;
 type ProcessMetrics = HashMap<ProcessId, GpuResources>;
 
 #[derive(Debug, Default)]
-pub(crate) struct GpuMetrics {
+pub struct GpuMetrics {
     // KB/s
     pub rx: u32,
     // KB/s
@@ -31,13 +31,13 @@ pub(crate) struct GpuMetrics {
 
 type LastSeenTimestamp = u64;
 #[derive(Debug, Default)]
-pub(crate) struct Metrics {
+pub struct Metrics {
     pub process_metrics: HashMap<GpuUuid, (ProcessMetrics, LastSeenTimestamp)>,
     pub gpu_metrics: HashMap<GpuUuid, GpuMetrics>,
 }
 
 #[derive(Debug)]
-pub(crate) struct GpuObserver {
+pub struct GpuObserver {
     nvml: Arc<Nvml>,
     pub metrics: RwLock<Metrics>,
     senders: RwLock<Vec<mpsc::Sender<()>>>,

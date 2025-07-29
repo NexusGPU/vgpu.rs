@@ -12,7 +12,7 @@ use crate::api::types::LimiterCommandType;
 use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
 
-pub(crate) struct TensorFusionWorker {
+pub struct TensorFusionWorker {
     id: u32,
     state: RwLock<ProcessState>,
     gpu_uuids: Vec<String>,

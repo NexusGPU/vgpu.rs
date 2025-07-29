@@ -47,6 +47,12 @@ pub struct ContainerInfo {
     pub workers: HashMap<u32, Arc<TensorFusionWorker>>,
 }
 
+impl Default for ContainerInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContainerInfo {
     pub fn new() -> Self {
         Self {

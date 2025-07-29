@@ -3,7 +3,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::utils::centered_rect;
-use crate::ui::tui::types::WorkerDetailedInfo;
+use crate::tui::types::WorkerDetailedInfo;
 
 pub struct DetailDialog;
 

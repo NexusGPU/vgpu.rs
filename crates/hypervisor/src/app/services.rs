@@ -17,26 +17,3 @@ pub struct ApplicationServices {
     pub limiter_coordinator: Arc<LimiterCoordinator>,
     pub gpu_device_state_watcher: Arc<GpuDeviceStateWatcher>,
 }
-
-impl ApplicationServices {
-    /// Create new application services with all dependencies
-    pub fn new(
-        hypervisor: Arc<HypervisorType>,
-        gpu_observer: Arc<GpuObserver>,
-        pod_manager: Arc<PodManagerType>,
-        host_pid_probe: Arc<HostPidProbe>,
-        command_dispatcher: Arc<CommandDispatcher>,
-        limiter_coordinator: Arc<LimiterCoordinator>,
-        gpu_device_state_watcher: Arc<GpuDeviceStateWatcher>,
-    ) -> Self {
-        Self {
-            hypervisor,
-            gpu_observer,
-            pod_manager,
-            host_pid_probe,
-            command_dispatcher,
-            limiter_coordinator,
-            gpu_device_state_watcher,
-        }
-    }
-}

@@ -59,16 +59,12 @@ impl QueueManager {
         self.sleep_queue.remove(&pid);
         self.trap_wait_queue.remove(&pid);
     }
-
-    /// Get total number of processes across all queues
-    pub fn total_processes(&self) -> usize {
-        self.running_queue.len() + self.sleep_queue.len() + self.trap_wait_queue.len()
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum QueueType {
     Running,
     Sleep,
+    #[allow(dead_code)]
     TrapWait,
 }

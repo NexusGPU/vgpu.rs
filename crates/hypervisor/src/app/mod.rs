@@ -10,4 +10,3 @@ pub mod tasks;
 // Re-export main types
 pub use core::Application;
 pub use services::ApplicationServices;
-pub use tasks::Tasks;

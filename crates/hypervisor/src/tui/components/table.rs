@@ -2,7 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState};
 use std::collections::HashMap;
 
-use crate::ui::tui::types::{AppState, WorkerInfo};
+use crate::tui::types::{AppState, WorkerInfo};
 
 pub struct WorkerTable;
 

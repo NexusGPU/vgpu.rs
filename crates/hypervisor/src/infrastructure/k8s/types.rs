@@ -22,7 +22,7 @@ pub enum WorkerUpdate {
 
 /// Errors that can occur during Kubernetes operations.
 #[derive(Debug, derive_more::Display)]
-pub(crate) enum KubernetesError {
+pub enum KubernetesError {
     #[display("Failed to connect to Kubernetes API: {message}")]
     ConnectionFailed { message: String },
     #[display("Failed to watch pods: {message}")]

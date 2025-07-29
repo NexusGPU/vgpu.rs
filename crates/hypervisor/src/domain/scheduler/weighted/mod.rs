@@ -13,7 +13,3 @@ mod weight_calculator;
 pub use scheduler::WeightedScheduler;
 pub use types::{Trap, WithTraps};
 pub use weight_calculator::Weight;
-
-// Internal modules for implementation
-use decision_engine::DecisionEngine;
-use queue_manager::QueueManager;
