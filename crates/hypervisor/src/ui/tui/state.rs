@@ -1,0 +1,239 @@
+use anyhow::{Context, Result};
+use glob::glob;
+use ratatui::prelude::*;
+use ratatui::widgets::TableState;
+use std::collections::HashMap;
+use std::path::Path;
+use utils::shared_memory::handle::SharedMemoryHandle;
+
+use crate::ui::tui::components::{DetailDialog, WorkerTable};
+use crate::ui::tui::types::{AppState, DeviceInfo, WorkerDetailedInfo, WorkerInfo};
+
+pub struct WorkerMonitor {
+    workers: HashMap<String, WorkerInfo>,
+    table_state: TableState,
+    selected_index: usize,
+    app_state: AppState,
+}
+
+impl WorkerMonitor {
+    pub fn new() -> Self {
+        Self {
+            workers: HashMap::new(),
+            table_state: TableState::default(),
+            selected_index: 0,
+            app_state: AppState::Normal,
+        }
+    }
+
+    pub fn update_workers(&mut self, pattern: &str) -> Result<()> {
+        let mut new_workers = HashMap::new();
+
+        for entry in glob(pattern).context("Failed to parse glob pattern")? {
+            let path = entry.context("Failed to read glob entry")?;
+
+            if !path.is_file() {
+                continue;
+            }
+
+            let identifier = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("")
+                .to_string();
+
+            if identifier.is_empty() {
+                continue;
+            }
+
+            match self.read_worker_info(&identifier, &path) {
+                Ok(info) => {
+                    new_workers.insert(identifier.clone(), info);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read worker {}: {}", identifier, e);
+                    continue;
+                }
+            }
+        }
+
+        self.workers = new_workers;
+        self.update_selection();
+        Ok(())
+    }
+
+    fn read_worker_info(&self, identifier: &str, path: &Path) -> Result<WorkerInfo> {
+        let handle = SharedMemoryHandle::open(path.to_string_lossy().as_ref())?;
+        let state = handle.get_state();
+        let is_healthy = state.is_healthy(10);
+
+        let mut devices = Vec::new();
+        let device_count = state.device_count();
+
+        for i in 0..device_count {
+            if let Some((
+                uuid,
+                available_cores,
+                total_cores,
+                mem_limit,
+                pod_memory_used,
+                up_limit,
+                is_active,
+            )) = state.get_complete_device_info(i)
+            {
+                if is_active {
+                    devices.push(DeviceInfo {
+                        uuid,
+                        available_cuda_cores: available_cores,
+                        total_cuda_cores: total_cores,
+                        mem_limit,
+                        pod_memory_used,
+                        up_limit,
+                    });
+                }
+            }
+        }
+
+        Ok(WorkerInfo {
+            identifier: identifier.to_string(),
+            devices,
+            is_healthy,
+        })
+    }
+
+    fn read_detailed_worker_info(&self, identifier: &str) -> Result<WorkerDetailedInfo> {
+        // Try to find the file path for this worker
+        let pattern = format!("*{}", identifier);
+        for entry in glob(&pattern).context("Failed to parse glob pattern")? {
+            let path = entry.context("Failed to read glob entry")?;
+            if !path.is_file() {
+                continue;
+            }
+
+            let handle = SharedMemoryHandle::open(path.to_string_lossy().as_ref())?;
+            let state = handle.get_state();
+            let is_healthy = state.is_healthy(10);
+            let (last_heartbeat, active_pids, version) = state.get_detailed_state_info();
+
+            let mut devices = Vec::new();
+            let device_count = state.device_count();
+
+            for i in 0..device_count {
+                if let Some((
+                    uuid,
+                    available_cores,
+                    total_cores,
+                    mem_limit,
+                    pod_memory_used,
+                    up_limit,
+                    is_active,
+                )) = state.get_complete_device_info(i)
+                {
+                    if is_active {
+                        devices.push(DeviceInfo {
+                            uuid,
+                            available_cuda_cores: available_cores,
+                            total_cuda_cores: total_cores,
+                            mem_limit,
+                            pod_memory_used,
+                            up_limit,
+                        });
+                    }
+                }
+            }
+
+            return Ok(WorkerDetailedInfo {
+                identifier: identifier.to_string(),
+                devices,
+                is_healthy,
+                last_heartbeat,
+                active_pids,
+                version,
+                device_count,
+            });
+        }
+
+        Err(anyhow::anyhow!("Worker not found: {}", identifier))
+    }
+
+    pub fn show_details(&mut self) {
+        if let Some(selected_worker) = self.get_selected_worker_identifier() {
+            match self.read_detailed_worker_info(&selected_worker) {
+                Ok(detailed_info) => {
+                    self.app_state = AppState::DetailDialog(detailed_info);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to read detailed worker info: {}", e);
+                }
+            }
+        }
+    }
+
+    pub fn close_details(&mut self) {
+        self.app_state = AppState::Normal;
+    }
+
+    fn get_selected_worker_identifier(&self) -> Option<String> {
+        let workers: Vec<_> = self.workers.keys().cloned().collect();
+        if self.selected_index < workers.len() {
+            Some(workers[self.selected_index].clone())
+        } else {
+            None
+        }
+    }
+
+    fn update_selection(&mut self) {
+        let worker_count = self.workers.len();
+        if worker_count == 0 {
+            self.selected_index = 0;
+            self.table_state.select(None);
+        } else {
+            if self.selected_index >= worker_count {
+                self.selected_index = worker_count - 1;
+            }
+            self.table_state.select(Some(self.selected_index));
+        }
+    }
+
+    pub fn next(&mut self) {
+        let worker_count = self.workers.len();
+        if worker_count > 0 {
+            self.selected_index = (self.selected_index + 1) % worker_count;
+            self.table_state.select(Some(self.selected_index));
+        }
+    }
+
+    pub fn previous(&mut self) {
+        let worker_count = self.workers.len();
+        if worker_count > 0 {
+            if self.selected_index == 0 {
+                self.selected_index = worker_count - 1;
+            } else {
+                self.selected_index -= 1;
+            }
+            self.table_state.select(Some(self.selected_index));
+        }
+    }
+
+    pub fn app_state(&self) -> &AppState {
+        &self.app_state
+    }
+
+    pub fn render(&mut self, frame: &mut Frame) {
+        let area = frame.area();
+
+        // Render main table
+        WorkerTable::render(
+            &self.workers,
+            &mut self.table_state,
+            &self.app_state,
+            frame,
+            area,
+        );
+
+        // Render detail dialog if in DetailDialog state
+        if let AppState::DetailDialog(ref detailed_info) = self.app_state {
+            DetailDialog::render(detailed_info, frame, area);
+        }
+    }
+}
