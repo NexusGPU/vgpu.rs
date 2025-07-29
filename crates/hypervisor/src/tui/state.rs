@@ -3,7 +3,6 @@ use glob::glob;
 use ratatui::prelude::*;
 use ratatui::widgets::TableState;
 use std::collections::HashMap;
-use std::path::Path;
 use utils::shared_memory::handle::SharedMemoryHandle;
 
 use crate::tui::components::{DetailDialog, WorkerTable};
@@ -46,7 +45,7 @@ impl WorkerMonitor {
                 continue;
             }
 
-            match self.read_worker_info(&identifier, &path) {
+            match self.read_worker_info(&identifier) {
                 Ok(info) => {
                     new_workers.insert(identifier.clone(), info);
                 }
@@ -62,8 +61,8 @@ impl WorkerMonitor {
         Ok(())
     }
 
-    fn read_worker_info(&self, identifier: &str, path: &Path) -> Result<WorkerInfo> {
-        let handle = SharedMemoryHandle::open(path.to_string_lossy().as_ref())?;
+    fn read_worker_info(&self, identifier: &str) -> Result<WorkerInfo> {
+        let handle = SharedMemoryHandle::open(identifier)?;
         let state = handle.get_state();
         let is_healthy = state.is_healthy(10);
 

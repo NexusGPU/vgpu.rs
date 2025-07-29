@@ -22,6 +22,6 @@ pub enum Commands {
     #[command(name = "show-shm")]
     ShowShm(ShowShmArgs),
     /// Show TUI for monitoring workers
-    #[command(name = "show-tui-workers")]
+    #[command(name = "tui")]
     ShowTuiWorkers(ShowTuiWorkersArgs),
 }

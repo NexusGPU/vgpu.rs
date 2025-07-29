@@ -77,8 +77,7 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
         show_shm_args.shm_identifier
     );
 
-    let handle = SharedMemoryHandle::open(&show_shm_args.shm_identifier)
-        .context("Failed to open shared memory")?;
+    let handle = SharedMemoryHandle::open(&show_shm_args.shm_identifier)?;
 
     // Get the raw pointer for validation
     let ptr = handle.get_ptr();
