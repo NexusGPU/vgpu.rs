@@ -78,7 +78,7 @@ impl WorkerMonitor {
                 pod_memory_used,
                 up_limit,
                 is_active,
-            )) = state.get_complete_device_info(i)
+            )) = state.get_device_info(i)
             {
                 if is_active {
                     devices.push(DeviceInfo {
@@ -101,58 +101,47 @@ impl WorkerMonitor {
     }
 
     fn read_detailed_worker_info(&self, identifier: &str) -> Result<WorkerDetailedInfo> {
-        // Try to find the file path for this worker
-        let pattern = format!("*{identifier}");
-        for entry in glob(&pattern).context("Failed to parse glob pattern")? {
-            let path = entry.context("Failed to read glob entry")?;
-            if !path.is_file() {
-                continue;
-            }
+        let handle = SharedMemoryHandle::open(identifier)?;
+        let state = handle.get_state();
+        let is_healthy = state.is_healthy(10);
+        let (last_heartbeat, active_pids, version) = state.get_detailed_state_info();
 
-            let handle = SharedMemoryHandle::open(path.to_string_lossy().as_ref())?;
-            let state = handle.get_state();
-            let is_healthy = state.is_healthy(10);
-            let (last_heartbeat, active_pids, version) = state.get_detailed_state_info();
+        let mut devices = Vec::new();
+        let device_count = state.device_count();
 
-            let mut devices = Vec::new();
-            let device_count = state.device_count();
-
-            for i in 0..device_count {
-                if let Some((
-                    uuid,
-                    available_cores,
-                    total_cores,
-                    mem_limit,
-                    pod_memory_used,
-                    up_limit,
-                    is_active,
-                )) = state.get_complete_device_info(i)
-                {
-                    if is_active {
-                        devices.push(DeviceInfo {
-                            uuid,
-                            available_cuda_cores: available_cores,
-                            total_cuda_cores: total_cores,
-                            mem_limit,
-                            pod_memory_used,
-                            up_limit,
-                        });
-                    }
+        for i in 0..device_count {
+            if let Some((
+                uuid,
+                available_cores,
+                total_cores,
+                mem_limit,
+                pod_memory_used,
+                up_limit,
+                is_active,
+            )) = state.get_device_info(i)
+            {
+                if is_active {
+                    devices.push(DeviceInfo {
+                        uuid,
+                        available_cuda_cores: available_cores,
+                        total_cuda_cores: total_cores,
+                        mem_limit,
+                        pod_memory_used,
+                        up_limit,
+                    });
                 }
             }
-
-            return Ok(WorkerDetailedInfo {
-                identifier: identifier.to_string(),
-                devices,
-                is_healthy,
-                last_heartbeat,
-                active_pids,
-                version,
-                device_count,
-            });
         }
 
-        Err(anyhow::anyhow!("Worker not found: {}", identifier))
+        Ok(WorkerDetailedInfo {
+            identifier: identifier.to_string(),
+            devices,
+            is_healthy,
+            last_heartbeat,
+            active_pids,
+            version,
+            device_count,
+        })
     }
 
     pub fn show_details(&mut self) {

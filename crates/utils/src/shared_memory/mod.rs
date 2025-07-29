@@ -327,24 +327,8 @@ impl SharedDeviceState {
         }
     }
 
-    /// Gets device information by index (returns owned data to avoid lifetime issues)
-    pub fn get_device_info(&self, index: usize) -> Option<(String, i32, u32, u64, bool)> {
-        self.with_device(index, |device| {
-            (
-                device.get_uuid_owned(),
-                device.device_info.get_available_cores(),
-                device.device_info.get_total_cores(),
-                device.device_info.get_mem_limit(),
-                device.is_active(),
-            )
-        })
-    }
-
-    /// Gets complete device information including additional fields for UI
-    pub fn get_complete_device_info(
-        &self,
-        index: usize,
-    ) -> Option<(String, i32, u32, u64, u64, u32, bool)> {
+    /// Gets device information including additional fields for UI
+    pub fn get_device_info(&self, index: usize) -> Option<(String, i32, u32, u64, u64, u32, bool)> {
         self.with_device(index, |device| {
             (
                 device.get_uuid_owned(),
