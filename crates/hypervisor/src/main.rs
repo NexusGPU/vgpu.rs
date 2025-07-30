@@ -104,6 +104,10 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
     let is_healthy = state.is_healthy(60); // 60 seconds timeout
     tracing::info!("Shared memory health status (60s timeout): {}", is_healthy);
 
+    // Print version information
+    let version = state.get_version();
+    tracing::info!("Shared memory state version: v{}", version);
+
     // Print device details one by one
     for uuid in &device_uuids {
         if let Some(info) = state.with_device_by_uuid(uuid, |device| {
@@ -117,6 +121,40 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
             )
         }) {
             tracing::info!("Device info: {}", info);
+        } else {
+            tracing::warn!("Failed to access device with UUID: {}", uuid);
+        }
+    }
+
+    // Print additional state information
+    let (heartbeat, pids, state_version) = state.get_detailed_state_info();
+    tracing::info!(
+        "Detailed state - Heartbeat: {}, PIDs count: {}, State version: {}",
+        heartbeat,
+        pids.len(),
+        state_version
+    );
+
+    if !pids.is_empty() {
+        tracing::info!("Active PIDs: {:?}", pids);
+    }
+
+    // Print individual device information using the new API
+    for i in 0..device_count {
+        if let Some((
+            uuid,
+            available_cores,
+            total_cores,
+            mem_limit,
+            pod_memory_used,
+            up_limit,
+            is_active,
+        )) = state.get_device_info(i)
+        {
+            tracing::info!(
+                "Device {}: UUID={}, Available={}, Total={}, MemLimit={}, MemUsed={}, UpLimit={}%, Active={}",
+                i, uuid, available_cores, total_cores, mem_limit, pod_memory_used, up_limit, is_active
+            );
         }
     }
 

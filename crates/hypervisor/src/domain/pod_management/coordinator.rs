@@ -57,6 +57,16 @@ impl LimiterCoordinator {
         }
     }
 
+    /// Ensures shared memory exists for a pod with given configurations
+    pub fn ensure_shared_memory_exists(
+        &self,
+        pod_identifier: &str,
+        configs: &[DeviceConfig],
+    ) -> Result<()> {
+        self.shared_memory_manager
+            .create_or_get_shared_memory(pod_identifier, configs)
+    }
+
     /// Run the coordinator with cancellation support
     pub async fn run(&self, cancellation_token: CancellationToken) {
         tracing::info!(

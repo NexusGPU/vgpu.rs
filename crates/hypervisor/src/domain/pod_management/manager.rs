@@ -257,6 +257,22 @@ impl PodManager {
         };
 
         // get shared memory handle for this process
+        // First create device configs from the worker info
+        let device_configs =
+            create_device_configs_from_worker_info(&pod_entry.info, &self.nvml).await?;
+
+        // Ensure shared memory exists using the coordinator
+        self.limiter_coordinator
+            .ensure_shared_memory_exists(&pod_identifier, &device_configs)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to ensure shared memory exists for {}: {}",
+                    pod_identifier,
+                    e
+                )
+            })?;
+
+        // Open the shared memory handle (now guaranteed to exist)
         let shared_memory_handle =
             Arc::new(SharedMemoryHandle::open(&pod_identifier).map_err(|e| {
                 anyhow::anyhow!("Failed to open shared memory for {}: {}", pod_identifier, e)

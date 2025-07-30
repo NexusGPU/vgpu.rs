@@ -50,6 +50,15 @@ pub async fn create_device_configs_from_worker_info(
     let gpu_uuids = worker_info.gpu_uuids.as_deref().unwrap_or(&[]);
     let mut device_configs = Vec::new();
 
+    tracing::info!(
+        pod_name = %worker_info.pod_name,
+        namespace = %worker_info.namespace,
+        tflops_limit = ?worker_info.tflops_limit,
+        vram_limit = ?worker_info.vram_limit,
+        gpu_uuids = ?gpu_uuids,
+        "Creating device configs from WorkerInfo"
+    );
+
     for gpu_uuid in gpu_uuids {
         let device = nvml.device_by_uuid(gpu_uuid.as_str())?;
         let device_idx = device.index()?;
@@ -59,6 +68,14 @@ pub async fn create_device_configs_from_worker_info(
             .expect("poisoned")
             .get(gpu_uuid.as_str())
             .unwrap_or(&0.0);
+
+        tracing::debug!(
+            gpu_uuid = %gpu_uuid,
+            device_idx = device_idx,
+            tflops_capacity = tflops_capacity,
+            "Retrieved TFLOPS capacity from GPU_CAPACITY_MAP"
+        );
+
         let (total_cuda_cores, sm_count, max_thread_per_sm, up_limit, mem_limit) =
             calculate_device_limits_from_gpu_info(
                 nvml,
@@ -109,11 +126,30 @@ fn calculate_device_limits_from_gpu_info(
     let memory_info = device.memory_info()?;
     let total_memory = memory_info.total;
 
+    // Add detailed logging for up_limit calculation
+    tracing::debug!(
+        device_idx = device_idx,
+        tflops_limit = ?tflops_limit,
+        tflops_capacity = ?tflops_capacity,
+        "Input parameters for up_limit calculation"
+    );
+
     let up_limit = match (tflops_limit, tflops_capacity) {
         (Some(tflops_limit), Some(tflops_capacity)) if tflops_capacity > 0.0 => {
-            (((tflops_limit / tflops_capacity) * 100.0).round() as u32).min(100)
+            let percentage = (tflops_limit / tflops_capacity) * 100.0;
+            let rounded_percentage = percentage.round() as u32;
+
+            rounded_percentage.min(100)
         }
-        _ => 100,
+        _ => {
+            tracing::warn!(
+                device_idx = device_idx,
+                tflops_limit = ?tflops_limit,
+                tflops_capacity = ?tflops_capacity,
+                "Using default up_limit=100 because tflops_limit or tflops_capacity is missing/invalid"
+            );
+            100
+        }
     };
     let mem_limit = vram_limit.unwrap_or(total_memory);
 

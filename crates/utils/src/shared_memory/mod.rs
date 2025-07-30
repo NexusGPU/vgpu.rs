@@ -379,6 +379,9 @@ impl SharedDeviceStateV1 {
                 .total_cuda_cores
                 .store(config.total_cuda_cores, Ordering::Relaxed);
             device_info
+                .available_cuda_cores
+                .store(config.total_cuda_cores as i32, Ordering::Relaxed);
+            device_info
                 .up_limit
                 .store(config.up_limit, Ordering::Relaxed);
             device_info
