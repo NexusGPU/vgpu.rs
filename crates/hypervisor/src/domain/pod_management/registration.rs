@@ -66,7 +66,7 @@ pub async fn create_device_configs_from_worker_info(
         let tflops_capacity = *GPU_CAPACITY_MAP
             .read()
             .expect("poisoned")
-            .get(gpu_uuid.as_str())
+            .get(gpu_uuid.to_lowercase().as_str())
             .unwrap_or(&0.0);
 
         tracing::debug!(
