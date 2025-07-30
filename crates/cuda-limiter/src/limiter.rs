@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use cudarc::driver::sys::CUdevice;
 use nvml_wrapper::error::NvmlError;
@@ -35,6 +36,9 @@ pub(crate) enum Error {
 
     #[error("Device dim not configured: {0}")]
     DeviceDimNotConfigured(i32),
+
+    #[error("Device {0} not healthy")]
+    DeviceNotHealthy(String),
 
     #[error("NVML error: {0}")]
     Nvml(#[from] nvml_wrapper::error::NvmlError),
@@ -122,6 +126,9 @@ impl Limiter {
         if !state.has_device(device_uuid) {
             return Err(Error::DeviceNotConfigured(device_uuid.to_string()));
         }
+        if !state.is_healthy(Duration::from_secs(1)) {
+            return Err(Error::DeviceNotHealthy(device_uuid.to_string()));
+        }
 
         // Exponential backoff parameters
         let mut backoff_ms = 1;
@@ -159,6 +166,10 @@ impl Limiter {
     pub(crate) fn get_pod_memory_usage(&self, device_uuid: &str) -> Result<(u64, u64), Error> {
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
+
+        if !state.is_healthy(Duration::from_secs(1)) {
+            return Err(Error::DeviceNotHealthy(device_uuid.to_string()));
+        }
 
         if let Some((used, limit)) = state.with_device_by_uuid(device_uuid, |device| {
             (device.get_pod_memory_used(), device.get_mem_limit())

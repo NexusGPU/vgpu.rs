@@ -2,42 +2,47 @@ mod api;
 mod app;
 mod app_builder;
 mod config;
-mod gpu_allocation_watcher;
-mod gpu_init;
-mod gpu_observer;
-mod host_pid_probe;
-mod hypervisor;
-mod k8s;
-mod kube_client;
-mod limiter_comm;
-mod logging;
-mod metrics;
-mod pod_management;
-mod process;
-mod scheduler;
-mod tui_workers;
+mod core;
+mod domain;
+mod infrastructure;
+mod tui;
 
-use anyhow::Context;
-use anyhow::Result;
+// Re-export main modules for backward compatibility
+pub use domain::hypervisor;
+pub use domain::pod_management;
+pub use domain::process;
+pub use domain::scheduler;
+pub use infrastructure::gpu_device_state_watcher;
+pub use infrastructure::gpu_init;
+pub use infrastructure::gpu_observer;
+pub use infrastructure::host_pid_probe;
+pub use infrastructure::k8s;
+pub use infrastructure::kube_client;
+pub use infrastructure::limiter_comm;
+pub use infrastructure::logging;
+pub use infrastructure::metrics;
+
+use anyhow::{Context, Result};
 use clap::Parser;
+use std::time::Duration;
 use utils::version;
 
 use crate::app_builder::ApplicationBuilder;
-use crate::config::Cli;
-use crate::config::Commands;
+use crate::config::{Cli, Commands};
 
 /// Sets up global panic hooks.
-fn setup_global_hooks() {
-    let default_hook = std::panic::take_hook();
+fn setup_panic() {
+    let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        default_hook(panic_info);
-        tracing::error!("Thread panicked: {}", panic_info);
+        crossterm::terminal::disable_raw_mode().unwrap();
+        crossterm::execute!(std::io::stderr(), crossterm::terminal::LeaveAlternateScreen).unwrap();
+        original_hook(panic_info);
     }));
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    setup_global_hooks();
+    setup_panic();
 
     let cli = Cli::parse();
 
@@ -51,6 +56,19 @@ async fn main() -> Result<()> {
     }
 }
 
+async fn run_daemon(daemon_args: crate::config::DaemonArgs) -> Result<()> {
+    let _guard = logging::init(daemon_args.gpu_metrics_file.clone());
+
+    tracing::info!("Starting hypervisor daemon {}", &**version::VERSION);
+
+    let app = ApplicationBuilder::new(daemon_args).build().await?;
+
+    app.run().await?;
+    app.shutdown().await?;
+
+    Ok(())
+}
+
 async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
     use utils::shared_memory::handle::SharedMemoryHandle;
     utils::logging::init();
@@ -60,8 +78,7 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
         show_shm_args.shm_identifier
     );
 
-    let handle = SharedMemoryHandle::open(&show_shm_args.shm_identifier)
-        .context("Failed to open shared memory")?;
+    let handle = SharedMemoryHandle::open(&show_shm_args.shm_identifier)?;
 
     // Get the raw pointer for validation
     let ptr = handle.get_ptr();
@@ -85,8 +102,12 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
     tracing::info!("Device UUIDs: {:?}", device_uuids);
 
     // Try to check if the shared memory is healthy
-    let is_healthy = state.is_healthy(60); // 60 seconds timeout
+    let is_healthy = state.is_healthy(Duration::from_secs(60)); // 60 seconds timeout
     tracing::info!("Shared memory health status (60s timeout): {}", is_healthy);
+
+    // Print version information
+    let version = state.get_version();
+    tracing::info!("Shared memory state version: v{}", version);
 
     // Print device details one by one
     for uuid in &device_uuids {
@@ -101,21 +122,42 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
             )
         }) {
             tracing::info!("Device info: {}", info);
+        } else {
+            tracing::warn!("Failed to access device with UUID: {}", uuid);
         }
     }
 
-    Ok(())
-}
+    // Print additional state information
+    let (heartbeat, pids, state_version) = state.get_detailed_state_info();
+    tracing::info!(
+        "Detailed state - Heartbeat: {}, PIDs count: {}, State version: {}",
+        heartbeat,
+        pids.len(),
+        state_version
+    );
 
-async fn run_daemon(daemon_args: crate::config::DaemonArgs) -> Result<()> {
-    let _guard = logging::init(daemon_args.gpu_metrics_file.clone());
+    if !pids.is_empty() {
+        tracing::info!("Active PIDs: {:?}", pids);
+    }
 
-    tracing::info!("Starting hypervisor daemon {}", &**version::VERSION);
-
-    let app = ApplicationBuilder::new(daemon_args).build().await?;
-
-    app.run().await?;
-    app.shutdown().await?;
+    // Print individual device information using the new API
+    for i in 0..device_count {
+        if let Some((
+            uuid,
+            available_cores,
+            total_cores,
+            mem_limit,
+            pod_memory_used,
+            up_limit,
+            is_active,
+        )) = state.get_device_info(i)
+        {
+            tracing::info!(
+                "Device {}: UUID={}, Available={}, Total={}, MemLimit={}, MemUsed={}, UpLimit={}%, Active={}",
+                i, uuid, available_cores, total_cores, mem_limit, pod_memory_used, up_limit, is_active
+            );
+        }
+    }
 
     Ok(())
 }
@@ -129,6 +171,36 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
 
     tracing::info!("mount point: {:?}", mount_shm_args.mount_point);
     tracing::info!("size: {} MB", mount_shm_args.size_mb);
+
+    // Clean up shared memory files if prefix is provided
+    if let Some(ref cleanup_prefix) = mount_shm_args.cleanup_prefix {
+        tracing::info!(
+            "Cleaning up ALL shared memory files with prefix: {}",
+            cleanup_prefix
+        );
+
+        let cleanup_result = cleanup_all_shared_memory_files(cleanup_prefix);
+
+        match cleanup_result {
+            Ok(cleaned_files) => {
+                if !cleaned_files.is_empty() {
+                    tracing::info!(
+                        "Cleaned up {} shared memory files: {:?}",
+                        cleaned_files.len(),
+                        cleaned_files
+                    );
+                } else {
+                    tracing::info!(
+                        "No shared memory files found with prefix: {}",
+                        cleanup_prefix
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to cleanup shared memory files: {}", e);
+            }
+        }
+    }
 
     // create mount point directory
     if !mount_shm_args.mount_point.exists() {
@@ -196,14 +268,60 @@ async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()
     Ok(())
 }
 
+/// Cleans up ALL shared memory files in /dev/shm with the specified prefix pattern
+/// This function directly removes files without orphan detection
+fn cleanup_all_shared_memory_files(prefix_pattern: &str) -> Result<Vec<String>> {
+    use std::fs;
+
+    let mut cleaned_files = Vec::new();
+
+    // Use glob to find matching files in /dev/shm
+    let pattern = format!("/dev/shm/{prefix_pattern}");
+    let paths = glob::glob(&pattern)
+        .with_context(|| format!("Failed to compile glob pattern: {pattern}"))?;
+
+    for path_result in paths {
+        let file_path = path_result
+            .with_context(|| format!("Failed to read glob path for pattern: {pattern}"))?;
+
+        if !file_path.is_file() {
+            continue;
+        }
+
+        // Extract filename for logging
+        let filename = file_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("<unknown>");
+
+        // Directly remove the file without any orphan checks
+        match fs::remove_file(&file_path) {
+            Ok(_) => {
+                cleaned_files.push(filename.to_string());
+                tracing::info!("Removed shared memory file: {}", file_path.display());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to remove shared memory file {}: {}",
+                    file_path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    Ok(cleaned_files)
+}
+
 async fn run_show_tui_workers(args: crate::config::ShowTuiWorkersArgs) -> Result<()> {
     utils::logging::init_with_log_path(args.log_path);
 
     tracing::info!("Starting TUI worker monitor with pattern: {}", args.glob);
 
     if args.mock {
-        tui_workers::run_tui_monitor_mock().await
+        tracing::info!("Starting TUI in mock mode for local debugging");
+        tui::handlers::run_tui_monitor_mock().await
     } else {
-        tui_workers::run_tui_monitor(format!("/dev/shm/{}", args.glob)).await
+        tui::handlers::run_tui_monitor(format!("/dev/shm/{}", args.glob)).await
     }
 }

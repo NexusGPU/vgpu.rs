@@ -17,6 +17,7 @@ use utils::replace_symbol;
 
 use crate::detour::round_up;
 use crate::global_trap;
+use crate::limiter::Error;
 use crate::with_device;
 use crate::GLOBAL_LIMITER;
 
@@ -46,6 +47,10 @@ macro_rules! check_and_alloc {
                 CUresult::CUDA_ERROR_OUT_OF_MEMORY
             }
             Ok(_) => cuda_alloc_with_retry($request_size, || $alloc_fn()),
+            Err(Error::DeviceNotHealthy(device_uuid)) => {
+                tracing::warn!("Device {device_uuid} is not healthy");
+                $alloc_fn()
+            }
             Err(e) => {
                 tracing::error!("Failed to get pod memory usage: {e}");
                 CUresult::CUDA_ERROR_UNKNOWN
@@ -272,7 +277,14 @@ pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) 
                 *free = mem_limit - used;
                 CUresult::CUDA_SUCCESS
             }
-            Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
+            Err(Error::DeviceNotHealthy(device_uuid)) => {
+                tracing::warn!("Device {device_uuid} is not healthy");
+                CUresult::CUDA_ERROR_UNKNOWN
+            }
+            Err(e) => {
+                tracing::error!("Failed to get pod memory usage: {e}");
+                CUresult::CUDA_ERROR_UNKNOWN
+            }
         }
     })
 }
@@ -287,7 +299,14 @@ pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> 
                 *free = mem_limit - used;
                 CUresult::CUDA_SUCCESS
             }
-            Err(_) => CUresult::CUDA_ERROR_UNKNOWN,
+            Err(Error::DeviceNotHealthy(device_uuid)) => {
+                tracing::warn!("Device {device_uuid} is not healthy");
+                CUresult::CUDA_ERROR_UNKNOWN
+            }
+            Err(e) => {
+                tracing::error!("Failed to get pod memory usage: {e}");
+                CUresult::CUDA_ERROR_UNKNOWN
+            }
         }
     })
 }

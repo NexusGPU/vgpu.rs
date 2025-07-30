@@ -2,6 +2,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use tracing::warn;
 
@@ -277,8 +278,8 @@ impl SharedDeviceState {
         self.with_inner(|inner| inner.get_last_heartbeat())
     }
 
-    pub fn is_healthy(&self, timeout_seconds: u64) -> bool {
-        self.with_inner(|inner| inner.is_healthy(timeout_seconds))
+    pub fn is_healthy(&self, timeout: Duration) -> bool {
+        self.with_inner(|inner| inner.is_healthy(timeout))
     }
 
     pub fn with_device_by_uuid<T, F>(&self, device_uuid: &str, f: F) -> Option<T>
@@ -327,24 +328,8 @@ impl SharedDeviceState {
         }
     }
 
-    /// Gets device information by index (returns owned data to avoid lifetime issues)
-    pub fn get_device_info(&self, index: usize) -> Option<(String, i32, u32, u64, bool)> {
-        self.with_device(index, |device| {
-            (
-                device.get_uuid_owned(),
-                device.device_info.get_available_cores(),
-                device.device_info.get_total_cores(),
-                device.device_info.get_mem_limit(),
-                device.is_active(),
-            )
-        })
-    }
-
-    /// Gets complete device information including additional fields for UI
-    pub fn get_complete_device_info(
-        &self,
-        index: usize,
-    ) -> Option<(String, i32, u32, u64, u64, u32, bool)> {
+    /// Gets device information including additional fields for UI
+    pub fn get_device_info(&self, index: usize) -> Option<(String, i32, u32, u64, u64, u32, bool)> {
         self.with_device(index, |device| {
             (
                 device.get_uuid_owned(),
@@ -394,6 +379,9 @@ impl SharedDeviceStateV1 {
             device_info
                 .total_cuda_cores
                 .store(config.total_cuda_cores, Ordering::Relaxed);
+            device_info
+                .available_cuda_cores
+                .store(config.total_cuda_cores as i32, Ordering::Relaxed);
             device_info
                 .up_limit
                 .store(config.up_limit, Ordering::Relaxed);
@@ -458,7 +446,7 @@ impl SharedDeviceStateV1 {
     }
 
     /// Checks if the shared memory is healthy based on heartbeat.
-    pub fn is_healthy(&self, timeout_seconds: u64) -> bool {
+    pub fn is_healthy(&self, timeout: Duration) -> bool {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -469,7 +457,7 @@ impl SharedDeviceStateV1 {
             return false; // No heartbeat recorded
         }
 
-        now.saturating_sub(last_heartbeat) <= timeout_seconds
+        now.saturating_sub(last_heartbeat) <= timeout.as_secs()
     }
 
     /// Executes a closure with a device by UUID efficiently.
@@ -601,7 +589,7 @@ mod tests {
         assert_eq!(state.version(), 1);
         assert_eq!(state.device_count(), 1);
         assert_eq!(state.get_last_heartbeat(), 0);
-        assert!(!state.is_healthy(30));
+        assert!(!state.is_healthy(Duration::from_secs(30)));
 
         // Test device exists
         let device_uuid = &configs[0].device_uuid;
@@ -618,7 +606,7 @@ mod tests {
         let state = SharedDeviceState::new(&[]);
 
         // Test initial unhealthy state
-        assert!(!state.is_healthy(30));
+        assert!(!state.is_healthy(Duration::from_secs(30)));
 
         // Test setting heartbeat
         let now = std::time::SystemTime::now()
@@ -628,11 +616,11 @@ mod tests {
 
         state.update_heartbeat(now);
         assert_eq!(state.get_last_heartbeat(), now);
-        assert!(state.is_healthy(30));
+        assert!(state.is_healthy(Duration::from_secs(30)));
 
         // Test old heartbeat
         state.update_heartbeat(now - 60);
-        assert!(!state.is_healthy(30));
+        assert!(!state.is_healthy(Duration::from_secs(30)));
     }
 
     #[test]

@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use crate::app;
-use crate::app::Application;
+use crate::app::{Application, ApplicationServices};
 use crate::config::DaemonArgs;
-use crate::gpu_allocation_watcher::GpuDeviceStateWatcher;
+use crate::core::types::{HypervisorType, PodManagerType};
+use crate::gpu_device_state_watcher::GpuDeviceStateWatcher;
 use crate::gpu_init::initialize_gpu_system;
 use crate::gpu_init::GpuSystem;
 use crate::gpu_observer::GpuObserver;
@@ -40,16 +40,18 @@ impl ApplicationBuilder {
         // Create pod manager (special handling for callback functions)
         let pod_manager = self.create_pod_manager(&components, &gpu_system).await?;
 
-        Ok(Application {
+        // Build application services with all components
+        let services = ApplicationServices {
             hypervisor: components.hypervisor,
             gpu_observer: components.gpu_observer,
             pod_manager,
             host_pid_probe: components.host_pid_probe,
             command_dispatcher: components.command_dispatcher,
-            daemon_args: self.daemon_args,
             limiter_coordinator: components.limiter_coordinator,
             gpu_device_state_watcher: components.gpu_device_state_watcher,
-        })
+        };
+
+        Ok(Application::new(services, self.daemon_args))
     }
 
     /// Create core components
@@ -96,7 +98,7 @@ impl ApplicationBuilder {
         &self,
         components: &CoreComponents,
         gpu_system: &GpuSystem,
-    ) -> Result<Arc<crate::app::PodManagerType>> {
+    ) -> Result<Arc<PodManagerType>> {
         // Create worker manager with direct component dependencies
         let pod_manager = Arc::new(PodManager::new(
             components.host_pid_probe.clone(),
@@ -112,7 +114,7 @@ impl ApplicationBuilder {
 
 /// Core components collection
 struct CoreComponents {
-    hypervisor: Arc<app::HypervisorType>,
+    hypervisor: Arc<HypervisorType>,
     gpu_observer: Arc<GpuObserver>,
     host_pid_probe: Arc<HostPidProbe>,
     command_dispatcher: Arc<CommandDispatcher>,
