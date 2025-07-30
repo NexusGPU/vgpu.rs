@@ -115,7 +115,7 @@ impl PodManager {
                 let device_configs =
                     create_device_configs_from_worker_info(&pod_info.0, &self.nvml).await?;
                 self.limiter_coordinator
-                    .register_pod(&pod_identifier, device_configs)?;
+                    .ensure_pod_registered(&pod_identifier, device_configs)?;
                 info!("Registered pod {} with limiter coordinator", pod_identifier);
             }
         }
@@ -261,15 +261,11 @@ impl PodManager {
         let device_configs =
             create_device_configs_from_worker_info(&pod_entry.info, &self.nvml).await?;
 
-        // Ensure shared memory exists using the coordinator
+        // Ensure pod exists using the coordinator
         self.limiter_coordinator
-            .ensure_shared_memory_exists(&pod_identifier, &device_configs)
+            .ensure_pod_registered(&pod_identifier, device_configs)
             .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to ensure shared memory exists for {}: {}",
-                    pod_identifier,
-                    e
-                )
+                anyhow::anyhow!("Failed to ensure pod exists for {}: {}", pod_identifier, e)
             })?;
 
         // Open the shared memory handle (now guaranteed to exist)

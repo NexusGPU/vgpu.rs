@@ -3,6 +3,7 @@ use glob::glob;
 use ratatui::prelude::*;
 use ratatui::widgets::TableState;
 use std::collections::HashMap;
+use std::time::Duration;
 use utils::shared_memory::handle::SharedMemoryHandle;
 
 use crate::tui::components::{DetailDialog, WorkerTable};
@@ -64,7 +65,7 @@ impl WorkerMonitor {
     fn read_worker_info(&self, identifier: &str) -> Result<WorkerInfo> {
         let handle = SharedMemoryHandle::open(identifier)?;
         let state = handle.get_state();
-        let is_healthy = state.is_healthy(10);
+        let is_healthy = state.is_healthy(Duration::from_secs(10));
 
         let mut devices = Vec::new();
         let device_count = state.device_count();
@@ -103,7 +104,7 @@ impl WorkerMonitor {
     fn read_detailed_worker_info(&self, identifier: &str) -> Result<WorkerDetailedInfo> {
         let handle = SharedMemoryHandle::open(identifier)?;
         let state = handle.get_state();
-        let is_healthy = state.is_healthy(10);
+        let is_healthy = state.is_healthy(Duration::from_secs(10));
         let (last_heartbeat, active_pids, version) = state.get_detailed_state_info();
 
         let mut devices = Vec::new();

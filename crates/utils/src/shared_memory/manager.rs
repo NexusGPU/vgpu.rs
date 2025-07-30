@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -149,7 +150,8 @@ impl ThreadSafeSharedMemoryManager {
                         state.cleanup_orphaned_locks();
 
                         // Now safely check if it has active processes and is healthy
-                        state.get_all_pids().is_empty() && !state.is_healthy(100)
+                        state.get_all_pids().is_empty()
+                            && !state.is_healthy(Duration::from_secs(100))
                     }
                 }
                 Err(_) => {

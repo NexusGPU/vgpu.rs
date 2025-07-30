@@ -24,6 +24,7 @@ pub use infrastructure::metrics;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use std::time::Duration;
 use utils::version;
 
 use crate::app_builder::ApplicationBuilder;
@@ -101,7 +102,7 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
     tracing::info!("Device UUIDs: {:?}", device_uuids);
 
     // Try to check if the shared memory is healthy
-    let is_healthy = state.is_healthy(60); // 60 seconds timeout
+    let is_healthy = state.is_healthy(Duration::from_secs(60)); // 60 seconds timeout
     tracing::info!("Shared memory health status (60s timeout): {}", is_healthy);
 
     // Print version information

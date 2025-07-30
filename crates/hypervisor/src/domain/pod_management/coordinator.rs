@@ -57,16 +57,6 @@ impl LimiterCoordinator {
         }
     }
 
-    /// Ensures shared memory exists for a pod with given configurations
-    pub fn ensure_shared_memory_exists(
-        &self,
-        pod_identifier: &str,
-        configs: &[DeviceConfig],
-    ) -> Result<()> {
-        self.shared_memory_manager
-            .create_or_get_shared_memory(pod_identifier, configs)
-    }
-
     /// Run the coordinator with cancellation support
     pub async fn run(&self, cancellation_token: CancellationToken) {
         tracing::info!(
@@ -269,9 +259,19 @@ impl LimiterCoordinator {
         );
     }
 
-    /// Registers a pod with device configurations (Pod-level operation)
-    pub fn register_pod(&self, pod_identifier: &str, configs: Vec<DeviceConfig>) -> Result<()> {
+    /// Ensures a pod is registered with device configurations (idempotent operation)
+    pub fn ensure_pod_registered(
+        &self,
+        pod_identifier: &str,
+        configs: Vec<DeviceConfig>,
+    ) -> Result<()> {
         let pod_identifier = pod_identifier.to_string();
+
+        // Check if pod is already fully registered
+        let already_registered = {
+            let active_pods = self.active_pods.read().expect("poisoned");
+            active_pods.contains_key(&pod_identifier)
+        };
 
         // First, try to detect if shared memory already exists and restore state if needed
         let mut restored_pids = Vec::new();
@@ -281,38 +281,40 @@ impl LimiterCoordinator {
         if let Ok(handle) = SharedMemoryHandle::open(&pod_identifier) {
             // Shared memory already exists - this is a restart scenario
             shared_memory_exists = true;
-            info!(
+            debug!(
                 pod_identifier = %pod_identifier,
-                "Found existing shared memory for pod, restoring state"
+                "Shared memory already exists for pod, ensuring registration consistency"
             );
 
             // Get all existing PIDs from shared memory
             restored_pids = handle.get_state().get_all_pids();
 
-            info!(
-                pod_identifier = %pod_identifier,
-                pids = ?restored_pids,
-                "Found {} existing PIDs in shared memory",
-                restored_pids.len()
-            );
+            if !restored_pids.is_empty() {
+                debug!(
+                    pod_identifier = %pod_identifier,
+                    pids = ?restored_pids,
+                    "Found {} existing PIDs in shared memory",
+                    restored_pids.len()
+                );
+            }
 
             // Directly register the existing handle in the manager to avoid reinitializing
             self.shared_memory_manager
                 .register_existing_handle(&pod_identifier, handle)?;
         } else {
             // Shared memory doesn't exist, create new one
-            info!(
+            debug!(
                 pod_identifier = %pod_identifier,
-                "No existing shared memory found, creating new one"
+                "Creating new shared memory for pod"
             );
 
             self.shared_memory_manager
                 .create_or_get_shared_memory(&pod_identifier, &configs)?;
         }
 
-        // Initialize pod device usage
+        // Initialize or update pod device usage
         {
-            let mut active_pods = self.active_pods.write().unwrap();
+            let mut active_pods = self.active_pods.write().expect("poisoned");
             if !active_pods.contains_key(&pod_identifier) {
                 let mut pod_usage = PodDeviceUsage::new(configs.clone());
 
@@ -322,26 +324,33 @@ impl LimiterCoordinator {
                 }
 
                 active_pods.insert(pod_identifier.clone(), pod_usage);
+
+                info!(
+                    pod_identifier = %pod_identifier,
+                    device_count = configs.len(),
+                    restored_processes = restored_pids.len(),
+                    shared_memory_existed = shared_memory_exists,
+                    "Pod registered successfully"
+                );
+            } else {
+                // Pod already registered, this is an idempotent call
+                debug!(
+                    pod_identifier = %pod_identifier,
+                    device_count = configs.len(),
+                    "Pod already registered, ensuring consistency"
+                );
             }
         }
 
-        // If we restored PIDs from shared memory, log them as registered processes
-        if !restored_pids.is_empty() {
+        // If we restored PIDs from shared memory, log them
+        if !restored_pids.is_empty() && !already_registered {
             info!(
                 pod_identifier = %pod_identifier,
                 restored_pid_count = restored_pids.len(),
-                "Restored {} processes from existing shared memory during pod registration",
+                "Restored {} processes from existing shared memory",
                 restored_pids.len()
             );
         }
-
-        info!(
-            pod_identifier = %pod_identifier,
-            device_count = configs.len(),
-            restored_processes = restored_pids.len(),
-            shared_memory_existed = shared_memory_exists,
-            "Registered pod with device configurations"
-        );
 
         Ok(())
     }
@@ -386,8 +395,12 @@ impl LimiterCoordinator {
 
         let mut active_pods = self.active_pods.write().unwrap();
         if let Some(pod_usage) = active_pods.get_mut(&pod_identifier) {
-            pod_usage.remove_process(host_pid);
+            if pod_usage.remove_process(host_pid) {
+                // process is empty, remove the pod
+                active_pods.remove(&pod_identifier);
+            }
         }
+
         self.shared_memory_manager
             .remove_pid(&pod_identifier, host_pid as usize);
 
@@ -403,6 +416,10 @@ impl LimiterCoordinator {
     /// Unregisters a pod from the coordinator.
     pub fn unregister_pod(&self, pod_identifier: &str) -> Result<()> {
         self.shared_memory_manager.cleanup(pod_identifier)?;
+        self.active_pods
+            .write()
+            .expect("poisoned")
+            .remove(&pod_identifier.to_string());
         Ok(())
     }
 
@@ -610,14 +627,13 @@ impl LimiterCoordinator {
         })
     }
 
-    /// Starts the heartbeat task that updates heartbeat every 3 seconds
+    /// Starts the heartbeat task that updates heartbeat every 0.5 seconds
     pub fn start_heartbeat_task(&self, cancellation_token: CancellationToken) {
         let active_pods = self.active_pods.clone();
-        let heartbeat_interval = Duration::from_secs(3);
+        let heartbeat_interval = Duration::from_millis(500);
 
         let task = tokio::spawn(async move {
             let mut interval = interval(heartbeat_interval);
-            info!("Starting heartbeat task with 3-second interval");
 
             loop {
                 tokio::select! {
