@@ -1,9 +1,3 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::mpsc as std_mpsc;
-use std::time::Duration;
-
 use error_stack::Report;
 use error_stack::ResultExt;
 use k8s_openapi::ClusterResourceScope;
@@ -12,12 +6,19 @@ use notify::Config;
 use notify::Event;
 use notify::RecommendedWatcher;
 use notify::Watcher;
+use rand::Rng;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::mpsc as std_mpsc;
+use std::time::Duration;
 use tokio::fs;
 use tokio::select;
 use tokio::sync::mpsc;
+use tokio::time::interval;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -39,6 +40,17 @@ impl GpuDeviceStateWatcher {
         }
     }
 
+    /// Create a duration with jitter to avoid thundering herd problems
+    fn duration_with_jitter(base_duration: Duration, jitter_percent: f64) -> Duration {
+        let mut rng = rand::thread_rng();
+        let jitter_range = base_duration.as_secs_f64() * jitter_percent;
+
+        let jitter_offset = rng.gen_range(-jitter_range..=jitter_range);
+        let final_duration = base_duration.as_secs_f64() + jitter_offset;
+
+        Duration::from_secs_f64(final_duration)
+    }
+
     #[tracing::instrument(skip(self, cancellation_token))]
     pub(crate) async fn run(
         &self,
@@ -47,13 +59,15 @@ impl GpuDeviceStateWatcher {
     ) -> Result<(), Report<KubernetesError>> {
         info!("Starting gpu allocation watcher");
 
+        let mut previous_device_ids = HashSet::new();
+
         loop {
             select! {
                 _ = cancellation_token.cancelled() => {
                     info!("GPU allocation watcher shutdown requested");
                     break;
                 }
-                result = self.watch_and_patch_gpu_device_state(kubeconfig.clone()) => {
+                result = self.watch_and_patch_gpu_device_state(&mut previous_device_ids, kubeconfig.clone()) => {
                     match result {
                         Ok(()) => {
                             warn!("GPU allocation watch stream ended unexpectedly, restarting...");
@@ -74,13 +88,13 @@ impl GpuDeviceStateWatcher {
     #[tracing::instrument(skip(self))]
     async fn watch_and_patch_gpu_device_state(
         &self,
+        previous_device_ids: &mut HashSet<String>,
         kubeconfig: Option<PathBuf>,
     ) -> Result<(), Report<KubernetesError>> {
         info!("Starting GPU device state watcher");
         let client = kube_client::init_kube_client(kubeconfig).await?;
         let gpu_api: Api<GPU> = Api::all(client);
 
-        let mut previous_device_ids = HashSet::new();
         let resource_to_system_map = Self::create_resource_system_map();
 
         info!(
@@ -92,57 +106,46 @@ impl GpuDeviceStateWatcher {
         let (fs_tx, mut fs_rx) = mpsc::channel(10);
         let watcher_result = self.setup_filesystem_watcher(fs_tx).await;
 
-        match watcher_result {
-            Ok(_watcher) => {
-                // Keep watcher alive by holding it in scope
-                info!("Filesystem watcher enabled for real-time updates");
+        // Hybrid approach: filesystem events + periodic polling fallback
+        let mut poll_interval = interval(Duration::from_secs(30));
+        poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-                // Hybrid approach: filesystem events + periodic polling fallback
-                let mut poll_interval = tokio::time::interval(Duration::from_secs(30)); // Reduced frequency since we have fs events
-                poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let patch_duration_with_jitter = Self::duration_with_jitter(Duration::from_secs(300), 0.15); // ±15% jitter
+        let mut patch_all_devices_interval = interval(patch_duration_with_jitter);
+        patch_all_devices_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-                loop {
-                    select! {
-                        // Process filesystem events
-                        Some(_event) = fs_rx.recv() => {
-                            debug!("Filesystem event detected, processing device state");
-                            if let Err(e) = self.read_and_process_device_state(&gpu_api, &mut previous_device_ids, &resource_to_system_map).await {
-                                error!("Failed to process device state after filesystem event: {e:?}");
-                            }
-                        }
-                        // Fallback polling every 30 seconds
-                        _ = poll_interval.tick() => {
-                            debug!("Periodic polling check");
-                            if let Err(e) = self.read_and_process_device_state(&gpu_api, &mut previous_device_ids, &resource_to_system_map).await {
-                                error!("Failed to process device state during periodic check: {e:?}");
-                            }
-                        }
+        if let Err(e) = watcher_result {
+            warn!("Failed to setup filesystem watcher, falling back to polling only: {e:?}");
+            poll_interval = interval(Duration::from_secs(5));
+            poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        }
+
+        // Keep watcher alive by holding it in scope
+        info!("Filesystem watcher enabled for real-time updates");
+
+        loop {
+            select! {
+                // Process filesystem events
+                Some(_event) = fs_rx.recv() => {
+                    debug!("Filesystem event detected, processing device state");
+                    if let Err(e) = self.read_and_process_device_state(&gpu_api, previous_device_ids, &resource_to_system_map, false).await {
+                        error!("Failed to process device state after filesystem event: {e:?}");
                     }
                 }
-            }
-            Err(e) => {
-                warn!("Failed to setup filesystem watcher, falling back to polling only: {e:?}");
-
-                // Fallback to polling-only mode
-                loop {
-                    match self
-                        .read_and_process_device_state(
-                            &gpu_api,
-                            &mut previous_device_ids,
-                            &resource_to_system_map,
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            debug!("Successfully processed device state");
-                        }
-                        Err(e) => {
-                            error!("Failed to process device state: {e:?}");
-                        }
+                // Fallback polling every 30 seconds
+                _ = poll_interval.tick() => {
+                    debug!("Periodic polling check");
+                    if let Err(e) = self.read_and_process_device_state(&gpu_api, previous_device_ids, &resource_to_system_map, false).await {
+                        error!("Failed to process device state during periodic check: {e:?}");
                     }
+                }
 
-                    // Poll every 5 seconds in fallback mode
-                    sleep(Duration::from_secs(5)).await;
+                // Patch all devices periodically with jitter
+                _ = patch_all_devices_interval.tick() => {
+                    debug!("Patching all devices");
+                    if let Err(e) = self.read_and_process_device_state(&gpu_api, previous_device_ids, &resource_to_system_map, true).await {
+                        error!("Failed to process device state during patch all devices check: {e:?}");
+                    }
                 }
             }
         }
@@ -195,19 +198,33 @@ impl GpuDeviceStateWatcher {
         gpu_api: &Api<GPU>,
         previous_device_ids: &mut HashSet<String>,
         resource_to_system_map: &HashMap<String, String>,
+        patch_all_devices: bool,
     ) -> Result<(), Report<KubernetesError>> {
         // Read and parse the kubelet device state file
         let device_state = self.read_device_state_file().await?;
 
         // Extract current device IDs from PodDeviceEntries
-        let current_device_ids = self.extract_device_ids(&device_state, resource_to_system_map)?;
+        let (current_allocated_device_ids, current_registered_device_ids) =
+            self.extract_device_ids(&device_state, resource_to_system_map)?;
 
         // Find added and removed devices
-        let added_devices: HashSet<_> =
-            current_device_ids.difference(previous_device_ids).collect();
-        let removed_devices: HashSet<_> = previous_device_ids
-            .difference(&current_device_ids)
-            .collect();
+        let (added_devices, removed_devices) = if patch_all_devices {
+            (
+                current_allocated_device_ids.clone(),
+                current_registered_device_ids,
+            )
+        } else {
+            (
+                current_allocated_device_ids
+                    .difference(previous_device_ids)
+                    .cloned()
+                    .collect(),
+                previous_device_ids
+                    .difference(&current_allocated_device_ids)
+                    .cloned()
+                    .collect(),
+            )
+        };
 
         // Process added devices
         let mut has_error = false;
@@ -250,7 +267,7 @@ impl GpuDeviceStateWatcher {
 
         // Update previous state when no error, if any error occurred, retry in next loop
         if !has_error {
-            *previous_device_ids = current_device_ids;
+            *previous_device_ids = current_allocated_device_ids;
         }
         Ok(())
     }
@@ -270,12 +287,14 @@ impl GpuDeviceStateWatcher {
         })
     }
 
+    // return (allocated_device_ids, registered_device_ids)
     fn extract_device_ids(
         &self,
         device_state: &KubeletDeviceState,
         resource_to_system_map: &HashMap<String, String>,
-    ) -> Result<HashSet<String>, Report<KubernetesError>> {
-        let mut device_ids = HashSet::new();
+    ) -> Result<(HashSet<String>, HashSet<String>), Report<KubernetesError>> {
+        let mut allocated_device_ids = HashSet::new();
+        let mut registered_device_ids = HashSet::new();
 
         if let Some(pod_device_entries) = &device_state.data.pod_device_entries {
             for entry in pod_device_entries {
@@ -283,15 +302,18 @@ impl GpuDeviceStateWatcher {
                 if resource_to_system_map.contains_key(&entry.resource_name) {
                     for device_list in entry.device_ids.values() {
                         for device_id in device_list {
-                            device_ids.insert(device_id.to_lowercase());
+                            allocated_device_ids.insert(device_id.to_lowercase());
                         }
                     }
                 }
             }
-            debug!("Extracted {} unique device IDs", device_ids.len());
         }
 
-        Ok(device_ids)
+        if let Some(device_ids) = device_state.data.registered_devices.get("nvidia.com/gpu") {
+            registered_device_ids.extend(device_ids.iter().map(|id| id.to_lowercase()));
+        }
+
+        Ok((allocated_device_ids, registered_device_ids))
     }
 
     fn log_device_allocation_details(&self, device_state: &KubeletDeviceState, device_id: &str) {
@@ -478,6 +500,7 @@ struct KubeletDeviceState {
 #[serde(rename_all = "PascalCase")]
 struct DeviceStateData {
     pod_device_entries: Option<Vec<PodDeviceEntry>>,
+    // nvidia.com/gpu -> [GPU-uuid, GPU-uuid-2]
     registered_devices: HashMap<String, Vec<String>>,
 }
 
@@ -683,9 +706,11 @@ mod tests {
 
         assert!(result.is_ok(), "should successfully extract device IDs");
         let device_ids = result.unwrap();
-        assert_eq!(device_ids.len(), 1, "should extract one device ID");
+        assert_eq!(device_ids.0.len(), 1, "should extract one device ID");
         assert!(
-            device_ids.contains("gpu-7d8429d5-531d-d6a6-6510-3b662081a75a"),
+            device_ids
+                .0
+                .contains("gpu-7d8429d5-531d-d6a6-6510-3b662081a75a"),
             "should contain expected device ID"
         );
     }
@@ -703,7 +728,7 @@ mod tests {
             "should successfully extract empty device IDs"
         );
         let device_ids = result.unwrap();
-        assert_eq!(device_ids.len(), 0, "should extract no device IDs");
+        assert_eq!(device_ids.0.len(), 0, "should extract no device IDs");
     }
 
     #[test]
@@ -752,13 +777,13 @@ mod tests {
         );
         let device_ids = result.unwrap();
         assert_eq!(
-            device_ids.len(),
+            device_ids.0.len(),
             3,
             "should extract three unique device IDs"
         );
-        assert!(device_ids.contains("gpu-1"), "should contain GPU-1");
-        assert!(device_ids.contains("gpu-2"), "should contain GPU-2");
-        assert!(device_ids.contains("gpu-3"), "should contain GPU-3");
+        assert!(device_ids.0.contains("gpu-1"), "should contain GPU-1");
+        assert!(device_ids.0.contains("gpu-2"), "should contain GPU-2");
+        assert!(device_ids.0.contains("gpu-3"), "should contain GPU-3");
     }
 
     #[test]
@@ -1000,9 +1025,9 @@ mod tests {
         assert!(result.is_ok(), "should handle complex device ID structure");
 
         let device_ids = result.unwrap();
-        assert_eq!(device_ids.len(), 3, "should extract all three device IDs");
-        assert!(device_ids.contains("gpu-1"), "should contain GPU-1");
-        assert!(device_ids.contains("gpu-2"), "should contain GPU-2");
-        assert!(device_ids.contains("gpu-3"), "should contain GPU-3");
+        assert_eq!(device_ids.0.len(), 3, "should extract all three device IDs");
+        assert!(device_ids.0.contains("gpu-1"), "should contain GPU-1");
+        assert!(device_ids.0.contains("gpu-2"), "should contain GPU-2");
+        assert!(device_ids.0.contains("gpu-3"), "should contain GPU-3");
     }
 }

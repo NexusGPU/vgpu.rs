@@ -1570,6 +1570,7 @@ dependencies = [
  "once_cell",
  "poem",
  "priority-queue",
+ "rand 0.8.5",
  "ratatui",
  "schemars",
  "serde",

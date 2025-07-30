@@ -43,6 +43,7 @@ crossterm = "0.28"
 glob = "0.3"
 async-trait = { workspace = true }
 dashmap = { workspace = true }
+rand = { workspace = true }
 [[bin]]
 name = "hypervisor"
 path = "src/main.rs"

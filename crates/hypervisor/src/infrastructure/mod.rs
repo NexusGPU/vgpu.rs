@@ -1,6 +1,6 @@
+pub mod gpu_device_state_watcher;
 pub mod gpu_init;
 pub mod gpu_observer;
-pub mod gpu_watcher;
 pub mod host_pid_probe;
 pub mod k8s;
 pub mod kube_client;
