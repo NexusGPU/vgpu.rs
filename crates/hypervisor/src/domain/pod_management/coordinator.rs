@@ -291,8 +291,8 @@ impl LimiterCoordinator {
         pod_identifier: &str,
         configs: Vec<DeviceConfig>,
     ) -> Result<()> {
-        let shared_memory_state = self.detect_existing_shared_memory(&pod_identifier, &configs)?;
-        self.finalize_pod_registration(&pod_identifier, configs, shared_memory_state)
+        let shared_memory_state = self.detect_existing_shared_memory(pod_identifier, &configs)?;
+        self.finalize_pod_registration(pod_identifier, configs, shared_memory_state)
             .await
     }
 

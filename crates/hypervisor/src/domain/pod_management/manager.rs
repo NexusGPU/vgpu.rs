@@ -393,8 +393,11 @@ impl PodManager {
                 }
 
                 // Verify reference count consistency
-                if let Err(e) =
-                    Self::verify_reference_count_consistency_static(&process_resources, &limiter_coordinator).await
+                if let Err(e) = Self::verify_reference_count_consistency_static(
+                    &process_resources,
+                    &limiter_coordinator,
+                )
+                .await
                 {
                     tracing::error!("Failed to verify reference count consistency: {}", e);
                 }
