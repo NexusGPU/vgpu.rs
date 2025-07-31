@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use anyhow::Context;
 use anyhow::Result;
 use shared_memory::Mode;
@@ -8,7 +10,7 @@ use tracing::info;
 
 /// Safely access shared memory, automatically handling the segment's lifecycle.
 pub struct SharedMemoryHandle {
-    _shmem: Shmem,
+    shmem: RefCell<Shmem>,
     ptr: *mut super::SharedDeviceState,
     identifier: String,
 }
@@ -25,7 +27,7 @@ impl SharedMemoryHandle {
         let ptr = shmem.as_ptr() as *mut super::SharedDeviceState;
 
         Ok(Self {
-            _shmem: shmem,
+            shmem: RefCell::new(shmem),
             ptr,
             identifier: identifier.to_string(),
         })
@@ -77,7 +79,7 @@ impl SharedMemoryHandle {
         );
 
         Ok(Self {
-            _shmem: shmem,
+            shmem: RefCell::new(shmem),
             ptr,
             identifier: identifier.to_string(),
         })
@@ -102,3 +104,78 @@ impl SharedMemoryHandle {
 // Implement Send and Sync because SharedDeviceState uses atomic operations.
 unsafe impl Send for SharedMemoryHandle {}
 unsafe impl Sync for SharedMemoryHandle {}
+
+impl Drop for SharedMemoryHandle {
+    fn drop(&mut self) {
+        if self.shmem.borrow().is_owner() {
+            let need_cleanup = self.get_state().get_all_pids().is_empty();
+            
+            if !need_cleanup {
+                info!(
+                    identifier = %self.identifier,
+                    pid_count = self.get_state().get_all_pids().len(),
+                    "Other processes still using shared memory, preserving it"
+                );
+                // Don't clean up - other processes are still using it
+                self.shmem.borrow_mut().set_owner(false);
+            } else {
+                info!(
+                    identifier = %self.identifier,
+                    "No other processes using shared memory, allowing cleanup"
+                );
+                // Clean up - no other processes are using it
+                self.shmem.borrow_mut().set_owner(true);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process;
+
+
+    #[test]
+    fn test_shared_memory_preserved_with_pids() {
+        let test_id = format!("test_cleanup_{}", process::id());
+        let configs = vec![];
+
+        // Test case: Create shared memory, add PID, then test cleanup behavior
+        let handle = SharedMemoryHandle::create(&test_id, &configs).unwrap();
+        
+        // Initially no PIDs
+        assert!(handle.get_state().get_all_pids().is_empty());
+        assert!(handle.shmem.borrow().is_owner());
+        
+        // Add a PID to simulate another process using the memory
+        handle.get_state().add_pid(12345);
+        assert!(!handle.get_state().get_all_pids().is_empty());
+        assert_eq!(handle.get_state().get_all_pids().len(), 1);
+
+        drop(handle);
+
+        let handle2 = SharedMemoryHandle::open(&test_id);
+        
+        assert!(handle2.is_ok());
+    }
+
+    #[test]
+    fn test_shared_memory_cleanup() {
+        let test_id = format!("test_cleanup_{}", process::id());
+        let configs = vec![];
+
+        // Test case: Create shared memory, add PID, then test cleanup behavior
+        let handle = SharedMemoryHandle::create(&test_id, &configs).unwrap();
+        
+        // Initially no PIDs
+        assert!(handle.get_state().get_all_pids().is_empty());
+        assert!(handle.shmem.borrow().is_owner());
+        
+        drop(handle);
+
+        let handle2 = SharedMemoryHandle::open(&test_id);
+        
+        assert!(handle2.is_err());
+    }
+}

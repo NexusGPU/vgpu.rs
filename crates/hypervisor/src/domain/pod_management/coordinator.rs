@@ -745,27 +745,6 @@ impl LimiterCoordinator {
     }
 }
 
-impl Drop for LimiterCoordinator {
-    fn drop(&mut self) {
-        // Stop all monitoring tasks - use blocking on async in drop
-        if let Ok(rt) = tokio::runtime::Handle::try_current() {
-            rt.block_on(async {
-                let mut watcher_tasks = self.device_watcher_tasks.write().await;
-                for (_, task) in watcher_tasks.drain() {
-                    task.abort();
-                }
-
-                let mut heartbeat_task = self.heartbeat_task.write().await;
-                if let Some(task) = heartbeat_task.take() {
-                    task.abort();
-                }
-            });
-        }
-
-        info!("LimiterCoordinator dropped, all tasks stopped");
-    }
-}
-
 /// Calculate core adjustment value
 fn calculate_delta(device: &DeviceConfig, user_current: u32, share: i32) -> i32 {
     let up_limit = device.up_limit as i32;
