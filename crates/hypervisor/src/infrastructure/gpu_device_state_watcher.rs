@@ -42,10 +42,10 @@ impl GpuDeviceStateWatcher {
 
     /// Create a duration with jitter to avoid thundering herd problems
     fn duration_with_jitter(base_duration: Duration, jitter_percent: f64) -> Duration {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let jitter_range = base_duration.as_secs_f64() * jitter_percent;
 
-        let jitter_offset = rng.gen_range(-jitter_range..=jitter_range);
+        let jitter_offset = rng.random_range(-jitter_range..=jitter_range);
         let final_duration = base_duration.as_secs_f64() + jitter_offset;
 
         Duration::from_secs_f64(final_duration)
