@@ -259,7 +259,7 @@ mod tests {
         handler: Arc<H>,
     }
 
-    impl<H: TrapHandler + Send + Sync + Clone> TaskProcessor<HttpTrapRequest, HttpTrapResponse>
+    impl<H: TrapHandler + Send + Sync + Clone + 'static> TaskProcessor<HttpTrapRequest, HttpTrapResponse>
         for TrapTaskProcessor<H>
     {
         fn process_task(
@@ -272,14 +272,27 @@ mod tests {
             // Create a simple waker that captures the response
             let waker = SimpleWaker::new();
 
-            // Handle the trap - since this is a sync context, we need to block on the async call
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(self.handler.handle_trap(
-                task.process_id,
-                trap_id,
-                &task.frame,
-                Box::new(waker.clone()),
-            ));
+            // Handle the trap - we need to handle async calls from within a potentially async context
+            let handler = self.handler.clone();
+            let process_id = task.process_id;
+            let frame = task.frame.clone();
+            let waker_for_handler = Box::new(waker.clone());
+            
+            // Try to detect if we're already in an async context
+            if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+                // We're in an async context, use spawn_blocking
+                let task_handle = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                        handler.handle_trap(process_id, trap_id, &frame, waker_for_handler).await
+                    })
+                });
+                task_handle.join().unwrap();
+            } else {
+                // We're in a sync context, create a runtime
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(handler.handle_trap(process_id, trap_id, &frame, waker_for_handler));
+            }
 
             // Get the action from the waker
             let action = waker.get_action().unwrap_or(TrapAction::Resume);
