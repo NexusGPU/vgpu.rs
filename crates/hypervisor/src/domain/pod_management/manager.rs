@@ -394,7 +394,7 @@ impl PodManager {
 
                 // Verify reference count consistency
                 if let Err(e) =
-                    Self::verify_reference_count_consistency_static(&process_resources).await
+                    Self::verify_reference_count_consistency_static(&process_resources, &limiter_coordinator).await
                 {
                     tracing::error!("Failed to verify reference count consistency: {}", e);
                 }
@@ -547,6 +547,7 @@ impl PodManager {
     /// Static version of verify_reference_count_consistency for use in monitoring task
     async fn verify_reference_count_consistency_static(
         process_resources: &Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
+        limiter_coordinator: &Arc<LimiterCoordinator>,
     ) -> Result<()> {
         let process_resources = process_resources.read().await;
 
@@ -579,7 +580,7 @@ impl PodManager {
                         expected_count - 1,
                         actual_count - 1
                     );
-                    // Could implement corrective action here if needed
+                    limiter_coordinator.unregister_pod(&pod_identifier).await?;
                 }
             }
         }
