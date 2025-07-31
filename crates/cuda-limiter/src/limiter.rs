@@ -204,6 +204,10 @@ impl Limiter {
         Ok(nvml_idx)
     }
 
+    pub(crate) fn nvml_index_reverse_mapping(&self, physical_index: u32) -> Result<usize, Error> {
+        Limiter::find_reverse_index(&self.cu_device_mapping, physical_index)
+    }
+
     /// Get the NVML device handle for a specific device
     pub(crate) fn device_uuid_by_handle(
         &self,
@@ -259,6 +263,18 @@ impl Limiter {
 
         Ok(())
     }
+
+    fn find_reverse_index(
+        cu_device_mapping: &BTreeMap<CUdevice, (u32, String)>,
+        physical_index: u32,
+    ) -> Result<usize, Error> {
+        cu_device_mapping
+            .values()
+            .enumerate()
+            .find(|(_, &(device_idx, _))| device_idx == physical_index)
+            .map(|(index, _)| index)
+            .ok_or(Error::Nvml(nvml_wrapper::error::NvmlError::NotFound))
+    }
 }
 
 /// Get pod name from environment variable
@@ -271,8 +287,9 @@ fn get_pod_identifier() -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeMap, sync::Arc};
 
+    use cudarc::driver::sys::CUdevice;
     use utils::shared_memory::SharedDeviceInfo;
 
     /// Trait for shared memory operations
@@ -379,5 +396,27 @@ mod tests {
             1024 * 1024 * 1024,
             "Pod memory used should match"
         );
+    }
+
+    #[test]
+    fn test_nvml_index_reverse_mapping() {
+        let mut cu_device_mapping = BTreeMap::new();
+        cu_device_mapping.insert(0 as CUdevice, (0, "GPU-uuid-1".to_string()));
+        cu_device_mapping.insert(1 as CUdevice, (10, "GPU-uuid-2".to_string()));
+        // Test successful mapping
+        assert_eq!(
+            super::Limiter::find_reverse_index(&cu_device_mapping, 0).unwrap(),
+            0
+        );
+        assert_eq!(
+            super::Limiter::find_reverse_index(&cu_device_mapping, 10).unwrap(),
+            1
+        );
+        // Test non-existent physical_index
+        assert!(super::Limiter::find_reverse_index(&cu_device_mapping, 99).is_err());
+
+        let cu_device_mapping2 = BTreeMap::new();
+
+        assert!(super::Limiter::find_reverse_index(&cu_device_mapping2, 10).is_err());
     }
 }

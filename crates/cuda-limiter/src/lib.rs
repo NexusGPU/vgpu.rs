@@ -66,11 +66,6 @@ fn are_hooks_enabled() -> (bool, bool) {
     (enable_nvml_hooks, enable_cuda_hooks)
 }
 
-fn is_mapping_device_idx() -> bool {
-    let cmdline = std::fs::read_to_string("/proc/self/cmdline").unwrap();
-    cmdline.starts_with("nvidia-smi")
-}
-
 fn init_ngpu_library() {
     static NGPU_INITIALIZED: Once = Once::new();
     NGPU_INITIALIZED.call_once(|| {
@@ -139,6 +134,10 @@ fn init_ngpu_library() {
                 return;
             }
         };
+
+        // after limiter initialized, remove CUDA_VISIBLE_DEVICES to avoid confusion with nvml index related hook
+        // after hooks installed, only specific devices will be visible, no need to set CUDA_VISIBLE_DEVICES
+        std::env::remove_var("CUDA_VISIBLE_DEVICES");
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
     });
 }
@@ -177,7 +176,7 @@ fn try_install_cuda_hooks() {
     }
 }
 
-fn try_install_nvml_hooks(mapping_device_idx: bool) {
+fn try_install_nvml_hooks() {
     if HOOKS_INITIALIZED.0.load(Ordering::Acquire) {
         return;
     }
@@ -196,7 +195,7 @@ fn try_install_nvml_hooks(mapping_device_idx: bool) {
     tracing::debug!("Installing NVML hooks...");
 
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        detour::nvml::enable_hooks(&mut hook_manager, mapping_device_idx);
+        detour::nvml::enable_hooks(&mut hook_manager);
     }));
 
     match install_result {
@@ -233,7 +232,7 @@ fn init_hooks() {
     }
 
     if has_libnvml {
-        try_install_nvml_hooks(is_mapping_device_idx());
+        try_install_nvml_hooks();
     }
 
     // Install dlsym hook to catch dynamic library loading
@@ -291,7 +290,7 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     }
 
     if may_be_nvml && !HOOKS_INITIALIZED.0.load(Ordering::Acquire) {
-        try_install_nvml_hooks(is_mapping_device_idx());
+        try_install_nvml_hooks();
     }
 
     FN_DLSYM(handle, symbol)
