@@ -163,7 +163,7 @@ mod tests {
         assert!(handle2.is_ok());
 
         {
-            std::fs::remove_file(format!("/dev/shm/{}", test_id)).unwrap();
+            std::fs::remove_file(format!("/dev/shm/{test_id}")).unwrap();
         }
     }
 
