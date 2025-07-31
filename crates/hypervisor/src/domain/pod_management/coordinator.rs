@@ -293,20 +293,9 @@ impl LimiterCoordinator {
     ) -> Result<()> {
         let pod_identifier = pod_identifier.to_string();
 
-        if self.is_pod_already_registered(&pod_identifier).await {
-            debug!(pod_identifier = %pod_identifier, device_count = configs.len(), "Pod already registered, ensuring consistency");
-            return Ok(());
-        }
-
         let shared_memory_state = self.detect_existing_shared_memory(&pod_identifier, &configs)?;
         self.finalize_pod_registration(&pod_identifier, configs, shared_memory_state)
             .await
-    }
-
-    /// Check if pod is already registered
-    async fn is_pod_already_registered(&self, pod_identifier: &str) -> bool {
-        let active_pods = self.active_pods.read().await;
-        active_pods.contains_key(pod_identifier)
     }
 
     /// Detect and handle existing shared memory, returning restoration state
