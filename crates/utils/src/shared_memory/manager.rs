@@ -180,8 +180,11 @@ impl ThreadSafeSharedMemoryManager {
                     let state = &*ptr;
                     // Clean up orphaned locks before accessing shared data
                     state.cleanup_orphaned_locks();
+                    let pids = state.get_all_pids();
+                    let is_healthy = state.is_healthy(Duration::from_secs(10));
                     // Check if it has active processes and is healthy
-                    state.get_all_pids().is_empty() && !state.is_healthy(Duration::from_secs(100))
+                    let all_dead = pids.iter().all(|pid| libc::kill(*pid as i32, 0) != 0);
+                    all_dead && !is_healthy
                 };
                 Ok(is_orphaned)
             }

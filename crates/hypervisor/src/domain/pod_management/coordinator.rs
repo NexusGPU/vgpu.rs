@@ -71,11 +71,6 @@ impl LimiterCoordinator {
             self.device_count
         );
 
-        // Clean up orphaned shared memory files on startup
-        if let Err(e) = self.cleanup_orphaned_files_on_startup().await {
-            tracing::warn!("Failed to cleanup orphaned files on startup: {}", e);
-        }
-
         // Start monitoring tasks
         self.start_watcher_with_cancellation(cancellation_token.clone())
             .await;
@@ -611,32 +606,11 @@ impl LimiterCoordinator {
         .context("Blocking task failed")?
     }
 
-    /// Clean up orphaned shared memory files on startup
-    async fn cleanup_orphaned_files_on_startup(&self) -> Result<()> {
-        tracing::info!("Cleaning up orphaned shared memory files on startup...");
-
-        let cleaned_files = self
-            .shared_memory_manager
-            .cleanup_orphaned_files(&self.shared_memory_glob_pattern)
-            .context("Failed to cleanup orphaned shared memory files")?;
-
-        if !cleaned_files.is_empty() {
-            tracing::info!(
-                "Cleaned up {} orphaned shared memory files: {:?}",
-                cleaned_files.len(),
-                cleaned_files
-            );
-        } else {
-            tracing::info!("No orphaned shared memory files found");
-        }
-
-        Ok(())
-    }
-
     /// Start periodic cleanup task for unused shared memory segments
     fn start_periodic_cleanup_task(&self, cancellation_token: CancellationToken) -> JoinHandle<()> {
         let shared_memory_manager = self.shared_memory_manager.clone();
 
+        let shared_memory_glob_pattern = self.shared_memory_glob_pattern.clone();
         tokio::spawn(async move {
             // Run cleanup every 5 minutes
             let mut cleanup_interval = interval(Duration::from_secs(300));
@@ -648,6 +622,10 @@ impl LimiterCoordinator {
                 tokio::select! {
                     _ = cleanup_interval.tick() => {
                         tracing::debug!("Running periodic cleanup of unused shared memory segments");
+
+                        if let Err(e) = shared_memory_manager.cleanup_orphaned_files(&shared_memory_glob_pattern) {
+                            tracing::warn!("Failed to cleanup orphaned shared memory files: {}", e);
+                        }
 
                         match shared_memory_manager.cleanup_unused() {
                             Ok(cleaned_files) => {
