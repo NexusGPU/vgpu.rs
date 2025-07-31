@@ -109,7 +109,7 @@ impl Drop for SharedMemoryHandle {
     fn drop(&mut self) {
         if self.shmem.borrow().is_owner() {
             let need_cleanup = self.get_state().get_all_pids().is_empty();
-            
+
             if !need_cleanup {
                 info!(
                     identifier = %self.identifier,
@@ -135,7 +135,6 @@ mod tests {
     use super::*;
     use std::process;
 
-
     #[test]
     fn test_shared_memory_preserved_with_pids() {
         let test_id = format!("test_cleanup_{}", process::id());
@@ -143,11 +142,11 @@ mod tests {
 
         // Test case: Create shared memory, add PID, then test cleanup behavior
         let handle = SharedMemoryHandle::create(&test_id, &configs).unwrap();
-        
+
         // Initially no PIDs
         assert!(handle.get_state().get_all_pids().is_empty());
         assert!(handle.shmem.borrow().is_owner());
-        
+
         // Add a PID to simulate another process using the memory
         handle.get_state().add_pid(12345);
         assert!(!handle.get_state().get_all_pids().is_empty());
@@ -156,7 +155,7 @@ mod tests {
         drop(handle);
 
         let handle2 = SharedMemoryHandle::open(&test_id);
-        
+
         assert!(handle2.is_ok());
     }
 
@@ -167,15 +166,15 @@ mod tests {
 
         // Test case: Create shared memory, add PID, then test cleanup behavior
         let handle = SharedMemoryHandle::create(&test_id, &configs).unwrap();
-        
+
         // Initially no PIDs
         assert!(handle.get_state().get_all_pids().is_empty());
         assert!(handle.shmem.borrow().is_owner());
-        
+
         drop(handle);
 
         let handle2 = SharedMemoryHandle::open(&test_id);
-        
+
         assert!(handle2.is_err());
     }
 }
