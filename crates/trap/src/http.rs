@@ -259,8 +259,8 @@ mod tests {
         handler: Arc<H>,
     }
 
-    impl<H: TrapHandler + Send + Sync + Clone + 'static> TaskProcessor<HttpTrapRequest, HttpTrapResponse>
-        for TrapTaskProcessor<H>
+    impl<H: TrapHandler + Send + Sync + Clone + 'static>
+        TaskProcessor<HttpTrapRequest, HttpTrapResponse> for TrapTaskProcessor<H>
     {
         fn process_task(
             &self,
@@ -277,14 +277,16 @@ mod tests {
             let process_id = task.process_id;
             let frame = task.frame.clone();
             let waker_for_handler = Box::new(waker.clone());
-            
+
             // Try to detect if we're already in an async context
             if let Ok(_handle) = tokio::runtime::Handle::try_current() {
                 // We're in an async context, use spawn_blocking
                 let task_handle = std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().unwrap();
                     rt.block_on(async {
-                        handler.handle_trap(process_id, trap_id, &frame, waker_for_handler).await
+                        handler
+                            .handle_trap(process_id, trap_id, &frame, waker_for_handler)
+                            .await
                     })
                 });
                 task_handle.join().unwrap();
