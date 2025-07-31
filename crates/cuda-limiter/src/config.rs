@@ -193,11 +193,10 @@ fn request_worker_info(
                 Report::new(ConfigError::JsonParsing)
             })?;
 
-            // For Initialize, we get the actual host_pid from the response
-            // Device limits are not returned in process response, so use defaults or get from pod
             DeviceConfigResult {
                 host_pid: process_info.host_pid,
-                gpu_uuids: process_info.gpu_uuids,
+                // there is no gpu_uuids in the process response
+                gpu_uuids: vec![],
             }
         }
     };

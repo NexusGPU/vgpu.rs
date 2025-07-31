@@ -12,6 +12,7 @@ use crate::gpu_init::GpuSystem;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::hypervisor::Hypervisor;
+use crate::k8s::PodWatcher;
 use crate::limiter_comm::CommandDispatcher;
 use crate::pod_management::{LimiterCoordinator, PodManager};
 use crate::scheduler::weighted::WeightedScheduler;
@@ -49,6 +50,7 @@ impl ApplicationBuilder {
             command_dispatcher: components.command_dispatcher,
             limiter_coordinator: components.limiter_coordinator,
             gpu_device_state_watcher: components.gpu_device_state_watcher,
+            pod_watcher: components.pod_watcher,
         };
 
         Ok(Application::new(services, self.daemon_args))
@@ -83,6 +85,13 @@ impl ApplicationBuilder {
             self.daemon_args.kubelet_device_state_path.clone(),
         ));
 
+        // create a pod watcher
+        let pod_watcher = Arc::new(PodWatcher::new(
+            self.daemon_args.kubeconfig.clone(),
+            self.daemon_args.k8s_namespace.clone(),
+            self.daemon_args.node_name.clone(),
+        ));
+
         Ok(CoreComponents {
             hypervisor,
             gpu_observer,
@@ -90,6 +99,7 @@ impl ApplicationBuilder {
             command_dispatcher,
             limiter_coordinator,
             gpu_device_state_watcher,
+            pod_watcher,
         })
     }
 
@@ -106,6 +116,7 @@ impl ApplicationBuilder {
             components.hypervisor.clone(),
             components.limiter_coordinator.clone(),
             gpu_system.nvml.clone(),
+            components.pod_watcher.clone(),
         ));
 
         Ok(pod_manager)
@@ -120,4 +131,5 @@ struct CoreComponents {
     command_dispatcher: Arc<CommandDispatcher>,
     limiter_coordinator: Arc<LimiterCoordinator>,
     gpu_device_state_watcher: Arc<GpuDeviceStateWatcher>,
+    pod_watcher: Arc<PodWatcher>,
 }

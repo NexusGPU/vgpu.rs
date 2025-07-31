@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Ok;
 use anyhow::Result;
 use api_types::QosLevel;
 use api_types::WorkerInfo;
@@ -18,6 +19,7 @@ use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::host_pid_probe::PodProcessInfo;
 use crate::host_pid_probe::SubscriptionRequest;
+use crate::k8s::PodWatcher;
 use crate::k8s::TensorFusionPodInfo;
 use crate::limiter_comm::CommandDispatcher;
 use crate::process::worker::TensorFusionWorker;
@@ -42,6 +44,7 @@ pub struct PodManager {
     hypervisor: Arc<HypervisorType>,
     limiter_coordinator: Arc<LimiterCoordinator>,
     nvml: Arc<Nvml>,
+    pod_watcher: Arc<PodWatcher>,
 }
 
 impl PodManager {
@@ -57,10 +60,33 @@ impl PodManager {
 
     /// Find a pod entry by namespace and pod name.
     /// This allows other modules to access pod information without needing to call pod_identifier directly.
-    pub async fn find_pod_by_name(&self, namespace: &str, pod_name: &str) -> Option<PodEntry> {
+    pub async fn find_pod_by_name(
+        &self,
+        namespace: &str,
+        pod_name: &str,
+    ) -> Result<Option<PodEntry>> {
         let pod_identifier = self.pod_identifier(namespace, pod_name);
-        let registry = self.registry.read().await;
-        registry.get(&pod_identifier).cloned()
+        {
+            let registry = self.registry.read().await;
+            if let Some(entry) = registry.get(&pod_identifier) {
+                return Ok(Some(entry.clone()));
+            }
+        }
+        let pod_info = self
+            .pod_watcher
+            .get_pod_info_manually(namespace, pod_name)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get pod info: {e:?}"))?;
+        if let Some(pod_info) = pod_info {
+            let pod_info = TensorFusionPodInfo(pod_info.0);
+            self.handle_pod_created(pod_info).await?;
+
+            {
+                let registry = self.registry.read().await;
+                return Ok(registry.get(&pod_identifier).cloned());
+            }
+        }
+        Ok(None)
     }
 
     /// Find a pod by worker PID.
@@ -83,6 +109,7 @@ impl PodManager {
         hypervisor: Arc<HypervisorType>,
         limiter_coordinator: Arc<LimiterCoordinator>,
         nvml: Arc<Nvml>,
+        pod_watcher: Arc<PodWatcher>,
     ) -> Self {
         Self {
             registry: Arc::new(RwLock::new(HashMap::new())),
@@ -93,6 +120,7 @@ impl PodManager {
             hypervisor,
             limiter_coordinator,
             nvml,
+            pod_watcher,
         }
     }
 
@@ -100,13 +128,6 @@ impl PodManager {
     pub async fn handle_pod_created(&self, pod_info: TensorFusionPodInfo) -> Result<()> {
         let pod_identifier = self.pod_identifier(&pod_info.0.namespace, &pod_info.0.pod_name);
         info!("Processing pod creation: {pod_identifier}");
-
-        // Store pod info in registry
-        {
-            let mut registry = self.registry.write().await;
-            registry.insert(pod_identifier.clone(), PodEntry::new(pod_info.0.clone()));
-            info!("Added pod to registry: {pod_identifier}");
-        }
 
         // Register pod with limiter coordinator (Pod-level operation)
         if let Some(gpu_uuids) = &pod_info.0.gpu_uuids {
@@ -118,6 +139,13 @@ impl PodManager {
                     .await?;
                 info!("Registered pod {} with limiter coordinator", pod_identifier);
             }
+        }
+
+        // Store pod info in registry
+        {
+            let mut registry = self.registry.write().await;
+            info!("Added pod to registry: {pod_identifier}");
+            registry.insert(pod_identifier, PodEntry::new(pod_info.0));
         }
 
         Ok(())
