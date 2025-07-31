@@ -4154,6 +4154,7 @@ dependencies = [
 name = "trap"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "http-bidir-comm",
  "ipc-channel",

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::RwLock;
 use std::time::Duration;
+
+use tokio::sync::RwLock;
 
 use anyhow::Result;
 use nvml_wrapper::enum_wrappers::device::PcieUtilCounter;
@@ -71,14 +72,14 @@ impl GpuObserver {
                 _ = async {
                     // Query new metrics without holding the lock across .await
                     let metrics_result = {
-                        let last_metrics_guard = self.metrics.read().expect("poisoned");
+                        let last_metrics_guard = self.metrics.read().await;
                         self.query_metrics(&last_metrics_guard)
                     };
 
                     match metrics_result {
                         Ok(metrics) => {
                             // Update the metrics – obtain write lock briefly
-                            *self.metrics.write().expect("poisoned") = metrics;
+                            *self.metrics.write().await = metrics;
 
                             // Notify subscribers and clean up closed channels
                             self.notify_subscribers().await;
@@ -100,7 +101,7 @@ impl GpuObserver {
     async fn notify_subscribers(&self) {
         // Clone sender list while holding read lock
         let sender_list = {
-            let senders_guard = self.senders.read().expect("poisoned");
+            let senders_guard = self.senders.read().await;
             senders_guard.clone()
         };
 
@@ -124,7 +125,7 @@ impl GpuObserver {
 
         // Update the senders list with only valid senders
         {
-            let mut senders_guard = self.senders.write().expect("poisoned");
+            let mut senders_guard = self.senders.write().await;
             *senders_guard = valid_senders;
         }
     }
@@ -235,23 +236,23 @@ impl GpuObserver {
         })
     }
 
-    pub(crate) fn get_process_resources(
+    pub(crate) async fn get_process_resources(
         &self,
         gpu_uuid: &str,
         process_id: u32,
     ) -> Option<GpuResources> {
         self.metrics
             .read()
-            .expect("poisoned")
+            .await
             .process_metrics
             .get(gpu_uuid)
             .and_then(|(processes, _)| processes.get(&process_id))
             .cloned()
     }
 
-    pub(crate) fn subscribe(&self) -> mpsc::Receiver<()> {
+    pub(crate) async fn subscribe(&self) -> mpsc::Receiver<()> {
         let (sender, receiver) = mpsc::channel(32);
-        self.senders.write().expect("poisoned").push(sender);
+        self.senders.write().await.push(sender);
         receiver
     }
 }

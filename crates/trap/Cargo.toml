@@ -13,7 +13,7 @@ ipc-channel = { workspace = true, optional = true}
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true }
-
+async-trait = { workspace = true }
 # HTTP feature dependencies
 reqwest = { workspace = true, features = ["json", "rustls-tls"], optional = true, default-features = false }
 tokio = { workspace = true, features = ["full"], optional = true }

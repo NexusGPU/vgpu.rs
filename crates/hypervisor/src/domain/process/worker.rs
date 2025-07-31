@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::RwLock;
+
+use tokio::sync::RwLock;
 
 use anyhow::Result;
 use api_types::QosLevel;
@@ -103,6 +104,7 @@ impl TensorFusionWorker {
     }
 }
 
+#[async_trait::async_trait]
 impl GpuProcess for TensorFusionWorker {
     fn pid(&self) -> u32 {
         self.id
@@ -112,12 +114,13 @@ impl GpuProcess for TensorFusionWorker {
         &self.name
     }
 
-    fn current_resources(&self) -> HashMap<&str, GpuResources> {
+    async fn current_resources(&self) -> HashMap<&str, GpuResources> {
         let mut resources: HashMap<&str, GpuResources> = HashMap::new();
         for gpu_uuid in &self.gpu_uuids {
             let resource = self
                 .gpu_observer
-                .get_process_resources(gpu_uuid, self.pid());
+                .get_process_resources(gpu_uuid, self.pid())
+                .await;
             if let Some(resource) = resource {
                 resources.insert(gpu_uuid.as_str(), resource);
             }
@@ -125,10 +128,10 @@ impl GpuProcess for TensorFusionWorker {
         resources
     }
 
-    fn pause(&self) -> Result<()> {
+    async fn pause(&self) -> Result<()> {
         match self.send_command(LimiterCommandType::TfSuspend) {
             Ok(()) => {
-                *self.state.write().expect("poisoned") = ProcessState::Paused;
+                *self.state.write().await = ProcessState::Paused;
                 tracing::info!("Process {} paused successfully", self.id);
                 Ok(())
             }
@@ -139,10 +142,10 @@ impl GpuProcess for TensorFusionWorker {
         }
     }
 
-    fn release(&self) -> Result<()> {
+    async fn release(&self) -> Result<()> {
         match self.send_command(LimiterCommandType::TfVramReclaim) {
             Ok(()) => {
-                *self.state.write().expect("poisoned") = ProcessState::Released;
+                *self.state.write().await = ProcessState::Released;
                 tracing::info!("Process {} released successfully", self.id);
                 Ok(())
             }
@@ -153,10 +156,10 @@ impl GpuProcess for TensorFusionWorker {
         }
     }
 
-    fn resume(&self) -> Result<()> {
+    async fn resume(&self) -> Result<()> {
         match self.send_command(LimiterCommandType::TfResume) {
             Ok(()) => {
-                *self.state.write().expect("poisoned") = ProcessState::Running;
+                *self.state.write().await = ProcessState::Running;
                 tracing::info!("Process {} resumed successfully", self.id);
                 Ok(())
             }
@@ -172,31 +175,12 @@ impl GpuProcess for TensorFusionWorker {
     }
 }
 
-// Custom Clone implementation because some fields are not Clone
-impl Clone for TensorFusionWorker {
-    fn clone(&self) -> Self {
-        // Clone requested fields; reset non-cloneable unix_stream to uninit; clone state value
-        let state_value = *self.state.read().expect("poisoned");
-        Self {
-            id: self.id,
-            state: RwLock::new(state_value),
-            gpu_uuids: self.gpu_uuids.clone(),
-            gpu_observer: Arc::clone(&self.gpu_observer),
-            qos_level: self.qos_level,
-            name: self.name.clone(),
-            pod_name: self.pod_name.clone(),
-            namespace: self.namespace.clone(),
-            command_dispatcher: Arc::clone(&self.command_dispatcher),
-        }
-    }
-}
-
 // Manual Debug implementation to avoid issues with non-Debug fields
 impl std::fmt::Debug for TensorFusionWorker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // For Debug, we can't use async, so we show a placeholder for state
         f.debug_struct("TensorFusionWorker")
             .field("id", &self.id)
-            .field("state", &*self.state.read().expect("poisoned"))
             .field("gpu_uuids", &self.gpu_uuids)
             .field("qos_level", &self.qos_level)
             .field("name", &self.name)

@@ -13,16 +13,15 @@ use tracing::info;
 use tracing::warn;
 use utils::shared_memory::handle::SharedMemoryHandle;
 
+use crate::core::types::HypervisorType;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::host_pid_probe::PodProcessInfo;
 use crate::host_pid_probe::SubscriptionRequest;
-use crate::hypervisor::Hypervisor;
 use crate::k8s::TensorFusionPodInfo;
 use crate::limiter_comm::CommandDispatcher;
 use crate::process::worker::TensorFusionWorker;
 use crate::process::GpuProcess;
-use crate::scheduler::weighted::WeightedScheduler;
 use tokio_util::sync::CancellationToken;
 
 use super::coordinator::LimiterCoordinator;
@@ -40,7 +39,7 @@ pub struct PodManager {
     process_resources: Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
     host_pid_probe: Arc<HostPidProbe>,
     command_dispatcher: Arc<CommandDispatcher>,
-    hypervisor: Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
+    hypervisor: Arc<HypervisorType>,
     limiter_coordinator: Arc<LimiterCoordinator>,
     nvml: Arc<Nvml>,
 }
@@ -81,7 +80,7 @@ impl PodManager {
     pub fn new(
         host_pid_probe: Arc<HostPidProbe>,
         command_dispatcher: Arc<CommandDispatcher>,
-        hypervisor: Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
+        hypervisor: Arc<HypervisorType>,
         limiter_coordinator: Arc<LimiterCoordinator>,
         nvml: Arc<Nvml>,
     ) -> Self {
@@ -115,7 +114,8 @@ impl PodManager {
                 let device_configs =
                     create_device_configs_from_worker_info(&pod_info.0, &self.nvml).await?;
                 self.limiter_coordinator
-                    .ensure_pod_registered(&pod_identifier, device_configs)?;
+                    .ensure_pod_registered(&pod_identifier, device_configs)
+                    .await?;
                 info!("Registered pod {} with limiter coordinator", pod_identifier);
             }
         }
@@ -264,6 +264,7 @@ impl PodManager {
         // Ensure pod exists using the coordinator
         self.limiter_coordinator
             .ensure_pod_registered(&pod_identifier, device_configs)
+            .await
             .map_err(|e| {
                 anyhow::anyhow!("Failed to ensure pod exists for {}: {}", pod_identifier, e)
             })?;
@@ -289,9 +290,9 @@ impl PodManager {
         }
 
         // Add worker to hypervisor
-        if !self.hypervisor.process_exists(host_pid) {
+        if !self.hypervisor.process_exists(host_pid).await {
             tracing::info!("Adding new worker to hypervisor: {}", worker.name());
-            self.hypervisor.add_process(worker.as_ref().clone());
+            self.hypervisor.add_process(worker.clone()).await;
         }
 
         // Register worker to limiter coordinator
@@ -378,7 +379,7 @@ impl PodManager {
     /// Static version of check_and_cleanup_dead_processes for use in monitoring task
     async fn check_and_cleanup_dead_processes_static(
         process_resources: &Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
-        hypervisor: &Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
+        hypervisor: &Arc<HypervisorType>,
         limiter_coordinator: &Arc<LimiterCoordinator>,
         registry: &PodRegistry,
         pid_registry: &PidToPodRegistry,
@@ -429,7 +430,7 @@ impl PodManager {
     async fn handle_process_exited_static(
         host_pid: u32,
         process_resources: &Arc<RwLock<HashMap<u32, ProcessResourceTracker>>>,
-        hypervisor: &Arc<Hypervisor<TensorFusionWorker, WeightedScheduler<TensorFusionWorker>>>,
+        hypervisor: &Arc<HypervisorType>,
         limiter_coordinator: &Arc<LimiterCoordinator>,
         registry: &PodRegistry,
         pid_registry: &PidToPodRegistry,
@@ -453,14 +454,15 @@ impl PodManager {
         );
 
         // Step 2: Remove from hypervisor
-        if hypervisor.process_exists(host_pid) {
+        if hypervisor.process_exists(host_pid).await {
             info!("Removing process {} from hypervisor", host_pid);
-            hypervisor.remove_process(host_pid);
+            hypervisor.remove_process(host_pid).await;
         }
 
         // Step 3: Unregister from limiter coordinator
-        if let Err(e) =
-            limiter_coordinator.unregister_process(&process_tracker.pod_identifier, host_pid)
+        if let Err(e) = limiter_coordinator
+            .unregister_process(&process_tracker.pod_identifier, host_pid)
+            .await
         {
             tracing::error!(
                 "Failed to unregister process {} from limiter coordinator: {}",
@@ -622,7 +624,7 @@ impl PodManager {
         // Step 2: Remove all workers from hypervisor
         for host_pid in &all_host_pids {
             info!("Removing process {} from hypervisor", host_pid);
-            self.hypervisor.remove_process(*host_pid);
+            self.hypervisor.remove_process(*host_pid).await;
         }
 
         // Step 3: Unregister all processes from limiter coordinator
@@ -630,6 +632,7 @@ impl PodManager {
             if let Err(e) = self
                 .limiter_coordinator
                 .unregister_process(&pod_identifier, *host_pid)
+                .await
             {
                 tracing::error!(
                     "Failed to unregister process {} from limiter coordinator: {}",
@@ -642,7 +645,9 @@ impl PodManager {
         }
 
         // Step 4: Unregister pod from limiter coordinator
-        self.limiter_coordinator.unregister_pod(&pod_identifier)?;
+        self.limiter_coordinator
+            .unregister_pod(&pod_identifier)
+            .await?;
 
         // Step 6: Clean up PID registry
         {

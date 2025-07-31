@@ -42,19 +42,22 @@ pub trait Trap {
 }
 
 /// Waker trait for sending trap responses
+#[async_trait::async_trait]
 pub trait Waker: Send + Sync {
-    fn send(&self, trap_id: u64, action: TrapAction) -> Result<(), TrapError>;
+    async fn send(&self, trap_id: u64, action: TrapAction) -> Result<(), TrapError>;
 }
 
+#[async_trait::async_trait]
 pub trait TrapHandler {
-    fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Box<dyn Waker>);
+    async fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Box<dyn Waker>);
 }
 
+#[async_trait::async_trait]
 impl<T> TrapHandler for Arc<T>
 where
-    T: TrapHandler + ?Sized,
+    T: TrapHandler + Send + Sync + ?Sized,
 {
-    fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Box<dyn Waker>) {
-        (**self).handle_trap(pid, trap_id, frame, waker);
+    async fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Box<dyn Waker>) {
+        TrapHandler::handle_trap(&**self, pid, trap_id, frame, waker).await;
     }
 }

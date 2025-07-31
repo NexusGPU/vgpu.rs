@@ -118,24 +118,26 @@ impl ApiServer {
 /// Simple waker implementation for capturing trap actions
 #[derive(Clone)]
 struct SimpleWaker {
-    action: Arc<std::sync::Mutex<Option<TrapAction>>>,
+    action: Arc<tokio::sync::Mutex<Option<TrapAction>>>,
 }
 
 impl SimpleWaker {
     fn new() -> Self {
         Self {
-            action: Arc::new(std::sync::Mutex::new(None)),
+            action: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
-    fn get_action(&self) -> Option<TrapAction> {
-        self.action.lock().unwrap().clone()
+    async fn get_action(&self) -> Option<TrapAction> {
+        self.action.lock().await.clone()
     }
 }
 
+#[async_trait::async_trait]
 impl Waker for SimpleWaker {
-    fn send(&self, _trap_id: u64, action: TrapAction) -> Result<(), TrapError> {
-        let mut action_guard = self.action.lock().unwrap();
+    async fn send(&self, _trap_id: u64, action: TrapAction) -> Result<(), TrapError> {
+        let action_arc = self.action.clone();
+        let mut action_guard = action_arc.lock().await;
         *action_guard = Some(action);
         Ok(())
     }
@@ -147,13 +149,15 @@ async fn trap_endpoint(
     Data(handler): Data<&Arc<dyn trap::TrapHandler + Send + Sync + 'static>>,
 ) -> Json<HttpTrapResponse> {
     let waker = SimpleWaker::new();
-    handler.handle_trap(
-        req.process_id,
-        req.trap_id.parse::<u64>().unwrap_or(0),
-        &req.frame,
-        Box::new(waker.clone()),
-    );
-    let action = waker.get_action().unwrap_or(TrapAction::Resume);
+    handler
+        .handle_trap(
+            req.process_id,
+            req.trap_id.parse::<u64>().unwrap_or(0),
+            &req.frame,
+            Box::new(waker.clone()),
+        )
+        .await;
+    let action = waker.get_action().await.unwrap_or(TrapAction::Resume);
     Json(HttpTrapResponse {
         trap_id: req.trap_id.clone(),
         action,

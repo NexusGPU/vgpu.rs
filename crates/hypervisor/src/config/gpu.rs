@@ -51,32 +51,46 @@ pub async fn load_gpu_info(
         model_to_info.insert(info.full_model_name.clone(), info);
     }
 
-    // Populate GPU_CAPACITY_MAP
-    let mut capacity_map = GPU_CAPACITY_MAP
-        .write()
-        .expect("Failed to acquire write lock");
-    let mut matched_count = 0;
-    let total_gpus = gpu_uuid_to_name_map.len();
-
+    // Create a mapping from GPU UUID to TFlops for spawn_blocking
+    let mut gpu_tflops_map = HashMap::new();
     for (gpu_uuid, gpu_name) in gpu_uuid_to_name_map {
-        if let Some(gpu_info) = model_to_info.get(gpu_name) {
-            capacity_map.insert(gpu_uuid.clone(), gpu_info.fp16_tflops);
+        let tflops = if let Some(gpu_info) = model_to_info.get(gpu_name) {
             tracing::info!(
                 "Mapped GPU {} ({}) to {} TFlops",
                 gpu_uuid,
                 gpu_name,
                 gpu_info.fp16_tflops
             );
-            matched_count += 1;
+            gpu_info.fp16_tflops
         } else {
             tracing::warn!(
                 "GPU {} ({}) not found in configuration, using default 0.0 TFlops",
                 gpu_uuid,
                 gpu_name
             );
-            capacity_map.insert(gpu_uuid.clone(), 0.0);
-        }
+            0.0
+        };
+        gpu_tflops_map.insert(gpu_uuid.clone(), tflops);
     }
+
+    // Populate GPU_CAPACITY_MAP using spawn_blocking
+    let matched_count = gpu_tflops_map
+        .iter()
+        .filter(|(_, &tflops)| tflops > 0.0)
+        .count();
+    let total_gpus = gpu_tflops_map.len();
+
+    tokio::task::spawn_blocking(move || {
+        let mut capacity_map = GPU_CAPACITY_MAP
+            .write()
+            .expect("Failed to acquire write lock");
+
+        for (gpu_uuid, tflops) in gpu_tflops_map {
+            capacity_map.insert(gpu_uuid, tflops);
+        }
+    })
+    .await
+    .expect("Failed to execute blocking task");
 
     tracing::info!(
         "Successfully loaded GPU capacity map: {}/{} GPUs matched",

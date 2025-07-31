@@ -10,12 +10,12 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
+use crate::TrapError;
 use ipc_channel::ipc;
 use ipc_channel::ipc::IpcOneShotServer;
 use ipc_channel::ipc::IpcReceiver;
 use ipc_channel::ipc::IpcReceiverSet;
 use ipc_channel::ipc::IpcSender;
-use TrapError;
 
 use crate::Trap;
 use crate::TrapAction;
@@ -28,8 +28,9 @@ struct IpcWaker {
     sender: Arc<Mutex<IpcSender<(u64, TrapAction)>>>,
 }
 
+#[async_trait::async_trait]
 impl Waker for IpcWaker {
-    fn send(&self, trap_id: u64, action: TrapAction) -> Result<(), TrapError> {
+    async fn send(&self, trap_id: u64, action: TrapAction) -> Result<(), TrapError> {
         let sender = self.sender.lock().expect("poisoned");
         sender.send((trap_id, action)).map_err(TrapError::Ipc)
     }
@@ -292,7 +293,7 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
         }
     }
 
-    pub fn run(&self) -> Result<(), TrapError> {
+    pub async fn run(&self) -> Result<(), TrapError> {
         loop {
             let events = self.ipc_receiver_set.lock().expect("poisoning").select()?;
             for event in events {
@@ -301,19 +302,22 @@ impl<H: TrapHandler + Send + Sync + 'static> IpcTrapServer<H> {
                         // Extract the trap ID and frame from the message
                         if let Ok((trap_id, frame)) = msg.to::<(u64, TrapFrame)>() {
                             // Get the client associated with this receiver ID
-                            let clients = self.clients.lock().expect("poisoning");
-                            if let Some(client) = clients.get(&id) {
+                            let client_info = {
+                                let clients = self.clients.lock().expect("poisoning");
+                                clients
+                                    .get(&id)
+                                    .map(|client| (client.pid, client.sender.clone()))
+                            };
+
+                            if let Some((client_pid, sender)) = client_info {
                                 // Handle the trap using the provided handler
                                 // The handler will now need to include the trap_id when sending the response
                                 let waker = IpcWaker {
-                                    sender: Arc::new(Mutex::new(client.sender.clone())),
+                                    sender: Arc::new(Mutex::new(sender)),
                                 };
-                                self.handler.handle_trap(
-                                    client.pid,
-                                    trap_id,
-                                    &frame,
-                                    Box::new(waker),
-                                );
+                                self.handler
+                                    .handle_trap(client_pid, trap_id, &frame, Box::new(waker))
+                                    .await;
                             }
                         }
                     }

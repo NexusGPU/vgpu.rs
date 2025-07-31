@@ -24,12 +24,9 @@ pub async fn register_worker_to_limiter_coordinator(
     host_pid: u32,
 ) -> Result<()> {
     // Register process with the limiter coordinator.
-    limiter_coordinator.register_process(
-        pod_identifier,
-        container_name,
-        container_pid,
-        host_pid,
-    )?;
+    limiter_coordinator
+        .register_process(pod_identifier, container_name, container_pid, host_pid)
+        .await?;
 
     tracing::info!(
         "Registered worker {} (container_name: {}, container_pid: {}, host_pid: {}) to limiter coordinator",
@@ -63,11 +60,18 @@ pub async fn create_device_configs_from_worker_info(
         let device = nvml.device_by_uuid(gpu_uuid.as_str())?;
         let device_idx = device.index()?;
 
-        let tflops_capacity = *GPU_CAPACITY_MAP
-            .read()
-            .expect("poisoned")
-            .get(gpu_uuid.to_lowercase().as_str())
-            .unwrap_or(&0.0);
+        let tflops_capacity = tokio::task::spawn_blocking({
+            let gpu_uuid = gpu_uuid.clone();
+            move || {
+                *GPU_CAPACITY_MAP
+                    .read()
+                    .expect("poisoned")
+                    .get(gpu_uuid.to_lowercase().as_str())
+                    .unwrap_or(&0.0)
+            }
+        })
+        .await
+        .expect("spawn_blocking failed");
 
         tracing::debug!(
             gpu_uuid = %gpu_uuid,

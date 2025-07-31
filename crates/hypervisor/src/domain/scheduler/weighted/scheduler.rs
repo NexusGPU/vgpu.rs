@@ -65,6 +65,7 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
     }
 }
 
+#[async_trait::async_trait]
 impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
     fn add_process(&mut self, process: Proc) {
         let pid = process.pid();
@@ -114,7 +115,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
         self.processes.get(&process_id).map(|p| &p.process)
     }
 
-    fn schedule(&mut self) -> Result<Vec<SchedulingDecision>> {
+    async fn schedule(&mut self) -> Result<Vec<SchedulingDecision>> {
         DecisionEngine::make_decisions(
             &self.processes,
             &self.queues.running_queue,
@@ -150,7 +151,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
         }
     }
 
-    fn on_trap(
+    async fn on_trap(
         &mut self,
         process_id: u32,
         _trap_id: u64,

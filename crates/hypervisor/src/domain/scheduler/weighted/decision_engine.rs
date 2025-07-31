@@ -92,8 +92,9 @@ impl DecisionEngine {
 /// Dummy waker implementation for compilation - in real implementation you'd store the original waker
 struct DummyWaker;
 
+#[async_trait::async_trait]
 impl trap::Waker for DummyWaker {
-    fn send(&self, _trap_id: u64, _action: trap::TrapAction) -> Result<(), trap::TrapError> {
+    async fn send(&self, _trap_id: u64, _action: trap::TrapAction) -> Result<(), trap::TrapError> {
         Ok(())
     }
 }
