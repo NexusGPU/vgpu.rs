@@ -259,8 +259,8 @@ mod tests {
         handler: Arc<H>,
     }
 
-    impl<H: TrapHandler + Send + Sync + Clone> TaskProcessor<HttpTrapRequest, HttpTrapResponse>
-        for TrapTaskProcessor<H>
+    impl<H: TrapHandler + Send + Sync + Clone + 'static>
+        TaskProcessor<HttpTrapRequest, HttpTrapResponse> for TrapTaskProcessor<H>
     {
         fn process_task(
             &self,
@@ -272,13 +272,29 @@ mod tests {
             // Create a simple waker that captures the response
             let waker = SimpleWaker::new();
 
-            // Handle the trap
-            self.handler.handle_trap(
-                task.process_id,
-                trap_id,
-                &task.frame,
-                Box::new(waker.clone()),
-            );
+            // Handle the trap - we need to handle async calls from within a potentially async context
+            let handler = self.handler.clone();
+            let process_id = task.process_id;
+            let frame = task.frame.clone();
+            let waker_for_handler = Box::new(waker.clone());
+
+            // Try to detect if we're already in an async context
+            if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+                // We're in an async context, use spawn_blocking
+                let task_handle = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                        handler
+                            .handle_trap(process_id, trap_id, &frame, waker_for_handler)
+                            .await
+                    })
+                });
+                task_handle.join().unwrap();
+            } else {
+                // We're in a sync context, create a runtime
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(handler.handle_trap(process_id, trap_id, &frame, waker_for_handler));
+            }
 
             // Get the action from the waker
             let action = waker.get_action().unwrap_or(TrapAction::Resume);
@@ -309,8 +325,9 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
     impl Waker for SimpleWaker {
-        fn send(&self, _trap_id: u64, action: TrapAction) -> Result<(), TrapError> {
+        async fn send(&self, _trap_id: u64, action: TrapAction) -> Result<(), TrapError> {
             let mut action_guard = self.action.lock().unwrap();
             *action_guard = Some(action);
             Ok(())
@@ -335,13 +352,20 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
     impl TrapHandler for RecordingTrapHandler {
-        fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Box<dyn Waker>) {
+        async fn handle_trap(
+            &self,
+            pid: u32,
+            trap_id: u64,
+            frame: &TrapFrame,
+            waker: Box<dyn Waker>,
+        ) {
             self.requests
                 .lock()
                 .unwrap()
                 .push((pid, trap_id, frame.clone()));
-            let _ = waker.send(trap_id, TrapAction::Resume);
+            let _ = waker.send(trap_id, TrapAction::Resume).await;
         }
     }
 
@@ -349,9 +373,16 @@ mod tests {
     #[derive(Clone)]
     struct TestTrapHandler;
 
+    #[async_trait::async_trait]
     impl TrapHandler for TestTrapHandler {
-        fn handle_trap(&self, _pid: u32, trap_id: u64, _frame: &TrapFrame, waker: Box<dyn Waker>) {
-            let _ = waker.send(trap_id, TrapAction::Resume);
+        async fn handle_trap(
+            &self,
+            _pid: u32,
+            trap_id: u64,
+            _frame: &TrapFrame,
+            waker: Box<dyn Waker>,
+        ) {
+            let _ = waker.send(trap_id, TrapAction::Resume).await;
         }
     }
 
@@ -362,12 +393,14 @@ mod tests {
         Data(handler): Data<&Arc<TestTrapHandler>>,
     ) -> Json<HttpTrapResponse> {
         let waker = SimpleWaker::new();
-        handler.handle_trap(
-            req.process_id,
-            req.trap_id.parse::<u64>().unwrap_or(0),
-            &req.frame,
-            Box::new(waker.clone()),
-        );
+        handler
+            .handle_trap(
+                req.process_id,
+                req.trap_id.parse::<u64>().unwrap_or(0),
+                &req.frame,
+                Box::new(waker.clone()),
+            )
+            .await;
         let action = waker.get_action().unwrap_or(TrapAction::Resume);
         Json(HttpTrapResponse {
             trap_id: req.trap_id.clone(),

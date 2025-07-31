@@ -38,6 +38,7 @@ impl fmt::Debug for SchedulingDecision {
 }
 
 /// Trait for GPU scheduler
+#[async_trait::async_trait]
 pub trait GpuScheduler<Proc: GpuProcess> {
     /// Add a new process to the scheduler
     fn add_process(&mut self, process: Proc);
@@ -50,12 +51,12 @@ pub trait GpuScheduler<Proc: GpuProcess> {
 
     /// Execute scheduling decisions
     /// Returns a series of scheduling operations to be executed
-    fn schedule(&mut self) -> Result<Vec<SchedulingDecision>>;
+    async fn schedule(&mut self) -> Result<Vec<SchedulingDecision>>;
 
     fn done_decision(&mut self, decision: &SchedulingDecision);
 
     /// Handle a trap event for a process
-    fn on_trap(
+    async fn on_trap(
         &mut self,
         process_id: u32,
         trap_id: u64,

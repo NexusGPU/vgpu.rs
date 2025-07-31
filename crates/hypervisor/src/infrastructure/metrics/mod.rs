@@ -92,7 +92,7 @@ pub(crate) async fn run_metrics(
         .collect();
     let has_dynamic_metrics_labels = !metrics_extra_labels.is_empty();
 
-    let mut receiver = gpu_observer.subscribe();
+    let mut receiver = gpu_observer.subscribe().await;
 
     loop {
         tokio::select! {
@@ -108,7 +108,7 @@ pub(crate) async fn run_metrics(
                         for (gpu_uuid, gpu) in gpu_observer
                             .metrics
                             .read()
-                            .expect("poisoned")
+                            .await
                             .gpu_metrics
                             .iter()
                         {
@@ -135,7 +135,7 @@ pub(crate) async fn run_metrics(
                         // Accumulate process metrics
                         // First, collect all the process metrics data to avoid holding the lock across await points
                         let process_metrics_snapshot: Vec<(String, Vec<(u32, GpuResources)>)> = {
-                            let metrics_guard = gpu_observer.metrics.read().expect("poisoned");
+                            let metrics_guard = gpu_observer.metrics.read().await;
                             metrics_guard
                                 .process_metrics
                                 .iter()

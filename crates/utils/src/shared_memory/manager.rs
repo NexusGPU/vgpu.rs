@@ -69,28 +69,35 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Gets a pointer to the shared memory by its identifier.
     pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut super::SharedDeviceState> {
-        let memories = self.active_memories.read();
-
-        if let Some(shmem) = memories.get(identifier) {
-            let ptr = shmem.get_ptr();
-            Ok(ptr)
-        } else {
-            Err(anyhow::anyhow!("Shared memory not found: {}", identifier))
-        }
+        self.with_memory_handle(identifier, |shmem| Ok(shmem.get_ptr()))
     }
 
-    pub fn add_pid(&self, identifier: &str, pid: usize) {
-        let memories = self.active_memories.read();
-        if let Some(shmem) = memories.get(identifier) {
-            shmem.get_state().add_pid(pid);
-        }
+    pub fn add_pid(&self, identifier: &str, pid: usize) -> Result<()> {
+        self.with_memory_handle(identifier, |shmem| {
+            let state = shmem.get_state();
+            state.add_pid(pid);
+            Ok(())
+        })
     }
 
-    pub fn remove_pid(&self, identifier: &str, pid: usize) {
+    pub fn remove_pid(&self, identifier: &str, pid: usize) -> Result<()> {
+        self.with_memory_handle(identifier, |shmem| {
+            let state = shmem.get_state();
+            state.remove_pid(pid);
+            Ok(())
+        })
+    }
+
+    /// Helper method to safely access shared memory handles with error handling
+    fn with_memory_handle<T, F>(&self, identifier: &str, f: F) -> Result<T>
+    where
+        F: FnOnce(&super::handle::SharedMemoryHandle) -> Result<T>,
+    {
         let memories = self.active_memories.read();
-        if let Some(shmem) = memories.get(identifier) {
-            shmem.get_state().remove_pid(pid);
-        }
+        let shmem = memories
+            .get(identifier)
+            .context(format!("Shared memory not found: {identifier}"))?;
+        f(shmem)
     }
 
     /// Cleans up a shared memory segment.
@@ -112,70 +119,20 @@ impl ThreadSafeSharedMemoryManager {
     /// This should be called at startup to clean up files left by crashed processes.
     pub fn cleanup_orphaned_files(&self, glob_pattern: &str) -> Result<Vec<String>> {
         let mut cleaned_files = Vec::new();
+        let file_paths = self.find_shared_memory_files(glob_pattern)?;
 
-        // Use glob to find matching files
-        let paths = glob::glob(&format!("/dev/shm/{glob_pattern}"))
-            .context("Failed to compile glob pattern")?;
+        for file_path in file_paths {
+            let identifier = self.extract_identifier_from_path(&file_path)?;
 
-        for path_result in paths {
-            let file_path = path_result.context("Failed to read glob path")?;
-
-            if !file_path.is_file() {
-                continue;
-            }
-
-            // Extract identifier by removing /dev/shm/ prefix
-            let identifier = if let Ok(relative_path) = file_path.strip_prefix("/dev/shm/") {
-                relative_path.to_string_lossy().to_string()
-            } else {
-                warn!(
-                    "Failed to strip /dev/shm/ prefix from {}",
-                    file_path.display()
-                );
-                continue;
-            };
-
-            // Try to determine if this file is actually in use by attempting to open it
-            let is_orphaned = match ShmemConf::new()
-                .size(std::mem::size_of::<super::SharedDeviceState>())
-                .os_id(&identifier)
-                .open()
-            {
-                Ok(shmem) => {
-                    // Successfully opened, first clean up any orphaned locks
-                    let ptr = shmem.as_ptr() as *const super::SharedDeviceState;
-                    unsafe {
-                        let state = &*ptr;
-                        // Clean up orphaned locks before accessing shared data
-                        state.cleanup_orphaned_locks();
-
-                        // Now safely check if it has active processes and is healthy
-                        state.get_all_pids().is_empty()
-                            && !state.is_healthy(Duration::from_secs(100))
-                    }
-                }
-                Err(_) => {
-                    // Failed to open as shared memory, but file exists - likely corrupted
-                    true
-                }
-            };
-
-            if is_orphaned {
-                match std::fs::remove_file(&file_path) {
-                    Ok(_) => {
-                        cleaned_files.push(identifier.clone());
-                        info!(
-                            "Cleaned up orphaned shared memory file: {}",
-                            file_path.display()
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to remove orphaned file {}: {}",
-                            file_path.display(),
-                            e
-                        );
-                    }
+            if self.is_shared_memory_orphaned(&identifier)? {
+                if let Err(e) = self.remove_orphaned_file(&file_path, &identifier) {
+                    warn!(
+                        "Failed to remove orphaned file {}: {}",
+                        file_path.display(),
+                        e
+                    );
+                } else {
+                    cleaned_files.push(identifier);
                 }
             }
         }
@@ -183,16 +140,79 @@ impl ThreadSafeSharedMemoryManager {
         Ok(cleaned_files)
     }
 
+    /// Find shared memory files matching the glob pattern
+    fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<std::path::PathBuf>> {
+        let paths = glob::glob(&format!("/dev/shm/{glob_pattern}"))
+            .context("Failed to compile glob pattern")?;
+
+        let mut file_paths = Vec::new();
+        for path_result in paths {
+            let file_path = path_result.context("Failed to read glob path")?;
+            if file_path.is_file() {
+                file_paths.push(file_path);
+            }
+        }
+
+        Ok(file_paths)
+    }
+
+    /// Extract identifier from file path by removing /dev/shm/ prefix
+    fn extract_identifier_from_path(&self, file_path: &std::path::Path) -> Result<String> {
+        file_path
+            .strip_prefix("/dev/shm/")
+            .map(|relative_path| relative_path.to_string_lossy().to_string())
+            .context(format!(
+                "Failed to strip /dev/shm/ prefix from {}",
+                file_path.display()
+            ))
+    }
+
+    /// Check if a shared memory segment is orphaned
+    fn is_shared_memory_orphaned(&self, identifier: &str) -> Result<bool> {
+        match ShmemConf::new()
+            .size(std::mem::size_of::<super::SharedDeviceState>())
+            .os_id(identifier)
+            .open()
+        {
+            Ok(shmem) => {
+                let ptr = shmem.as_ptr() as *const super::SharedDeviceState;
+                let is_orphaned = unsafe {
+                    let state = &*ptr;
+                    // Clean up orphaned locks before accessing shared data
+                    state.cleanup_orphaned_locks();
+                    let pids = state.get_all_pids();
+                    let is_healthy = state.is_healthy(Duration::from_secs(10));
+                    // Check if it has active processes and is healthy
+                    let all_dead = pids.iter().all(|pid| libc::kill(*pid as i32, 0) != 0);
+                    all_dead && !is_healthy
+                };
+                Ok(is_orphaned)
+            }
+            Err(_) => {
+                // Failed to open as shared memory, but file exists - likely corrupted
+                Ok(true)
+            }
+        }
+    }
+
+    /// Remove an orphaned shared memory file
+    fn remove_orphaned_file(&self, file_path: &std::path::Path, _identifier: &str) -> Result<()> {
+        std::fs::remove_file(file_path)
+            .context(format!("Failed to remove file {}", file_path.display()))?;
+        info!(
+            "Cleaned up orphaned shared memory file: {}",
+            file_path.display()
+        );
+        Ok(())
+    }
+
     /// Checks if a shared memory segment should be cleaned up based on reference count.
     /// Returns true if the segment exists and has zero references.
     pub fn should_cleanup(&self, identifier: &str) -> bool {
-        let memories = self.active_memories.read();
-        if let Some(shmem) = memories.get(identifier) {
-            let state = shmem.get_state();
-            state.get_all_pids().is_empty()
-        } else {
-            false
-        }
+        self.with_memory_handle(identifier, |shmem| {
+            Ok(shmem.get_state().get_all_pids().is_empty())
+        })
+        .unwrap_or(false)
     }
 
     /// Attempt to cleanup shared memory segments with zero reference count.

@@ -42,20 +42,29 @@ pub async fn get_pod_info(
     let pod_name = &jwt_payload.kubernetes.pod.name;
     let namespace = &jwt_payload.kubernetes.namespace;
 
-    let Some(pod_entry) = pod_manager.find_pod_by_name(namespace, pod_name).await else {
-        warn!(
-            pod_name = pod_name,
-            namespace = namespace,
-            "Pod not found in registry"
-        );
-        return Ok(poem::web::Json(PodInfoResponse {
-            success: false,
-            data: None,
-            message: format!("Pod {pod_name} not found in namespace {namespace}"),
-        }));
+    let pod_entry = match pod_manager.find_pod_by_name(namespace, pod_name).await {
+        Ok(Some(pod_entry)) => pod_entry,
+        Ok(None) => {
+            warn!(
+                pod_name = pod_name,
+                namespace = namespace,
+                "Pod not found in registry"
+            );
+            return Ok(poem::web::Json(PodInfoResponse {
+                success: false,
+                data: None,
+                message: format!("Pod {pod_name} not found in namespace {namespace}"),
+            }));
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to find pod in registry");
+            return Ok(poem::web::Json(PodInfoResponse {
+                success: false,
+                data: None,
+                message: format!("Failed to find pod in registry: {e}"),
+            }));
+        }
     };
-
-    info!(pod_name = pod_name, "Pod found in registry");
 
     let pod_info = PodInfo {
         pod_name: pod_entry.info.pod_name.clone(),
@@ -102,33 +111,6 @@ pub async fn process_init(
         "Initializing worker"
     );
 
-    // Validate pod and container exist
-    let gpu_uuids = {
-        let Some(pod_entry) = pod_manager.find_pod_by_name(namespace, pod_name).await else {
-            warn!(pod_name = pod_name, namespace = namespace, "Pod not found");
-            return Ok(poem::web::Json(ProcessInitResponse {
-                success: false,
-                data: None,
-                message: format!("Pod {pod_name} not found in namespace {namespace}"),
-            }));
-        };
-
-        if pod_entry.get_container(container_name).is_none() {
-            warn!(
-                pod_name = pod_name,
-                container_name = container_name,
-                "Container not found"
-            );
-            return Ok(poem::web::Json(ProcessInitResponse {
-                success: false,
-                data: None,
-                message: format!("Container {container_name} not found in pod {pod_name}"),
-            }));
-        }
-
-        pod_entry.info.gpu_uuids.clone().unwrap_or_default()
-    };
-
     // Initialize the process (discover PID and register to all components)
     let discovery_timeout = Duration::from_secs(5);
     let process_result = match timeout(
@@ -158,7 +140,6 @@ pub async fn process_init(
                 container_name: container_name.to_string(),
                 pod_name: pod_name.to_string(),
                 namespace: namespace.to_string(),
-                gpu_uuids,
             }
         }
         Ok(Err(e)) => {

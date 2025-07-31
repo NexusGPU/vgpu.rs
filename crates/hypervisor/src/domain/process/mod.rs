@@ -38,6 +38,7 @@ pub enum ProcessState {
 }
 
 /// Trait for GPU processes
+#[async_trait::async_trait]
 pub trait GpuProcess: Send + Sync {
     /// Get process pid
     fn pid(&self) -> u32;
@@ -46,21 +47,22 @@ pub trait GpuProcess: Send + Sync {
     fn name(&self) -> &str;
 
     /// Get current actual resource usage for each GPU
-    fn current_resources(&self) -> HashMap<&str, GpuResources>;
+    async fn current_resources(&self) -> HashMap<&str, GpuResources>;
 
     /// Get qos level
     fn qos_level(&self) -> QosLevel;
 
     /// Pause process (retain memory)
-    fn pause(&self) -> Result<()>;
+    async fn pause(&self) -> Result<()>;
 
     /// Pause process and release memory
-    fn release(&self) -> Result<()>;
+    async fn release(&self) -> Result<()>;
 
     /// Resume process execution
-    fn resume(&self) -> Result<()>;
+    async fn resume(&self) -> Result<()>;
 }
 
+#[async_trait::async_trait]
 impl<T: GpuProcess> GpuProcess for Arc<T> {
     fn pid(&self) -> u32 {
         self.as_ref().pid()
@@ -70,23 +72,23 @@ impl<T: GpuProcess> GpuProcess for Arc<T> {
         self.as_ref().name()
     }
 
-    fn current_resources(&self) -> HashMap<&str, GpuResources> {
-        self.as_ref().current_resources()
+    async fn current_resources(&self) -> HashMap<&str, GpuResources> {
+        self.as_ref().current_resources().await
     }
 
     fn qos_level(&self) -> QosLevel {
         self.as_ref().qos_level()
     }
 
-    fn pause(&self) -> Result<()> {
-        self.as_ref().pause()
+    async fn pause(&self) -> Result<()> {
+        self.as_ref().pause().await
     }
 
-    fn release(&self) -> Result<()> {
-        self.as_ref().release()
+    async fn release(&self) -> Result<()> {
+        self.as_ref().release().await
     }
 
-    fn resume(&self) -> Result<()> {
-        self.as_ref().resume()
+    async fn resume(&self) -> Result<()> {
+        self.as_ref().resume().await
     }
 }

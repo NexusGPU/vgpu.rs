@@ -100,27 +100,6 @@ mod tests {
         message: Option<String>,
     }
 
-    #[derive(Clone)]
-    #[expect(dead_code, reason = "Used in commented-out tests")]
-    struct TestProcessor;
-
-    impl TaskProcessor<TestTask, TestResult> for TestProcessor {
-        fn process_task(
-            &self,
-            task: &TestTask,
-        ) -> Result<TestResult, Box<dyn std::error::Error + Send + Sync>> {
-            if task.command == "fail" {
-                Err("Task failed".into())
-            } else {
-                Ok(TestResult {
-                    id: task.id,
-                    success: true,
-                    message: Some(format!("Processed: {}", task.command)),
-                })
-            }
-        }
-    }
-
     #[test(tokio::test)]
     async fn create_server_and_enqueue_task() {
         let server = HttpServer::<TestTask, TestResult>::new();

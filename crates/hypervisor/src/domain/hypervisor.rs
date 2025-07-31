@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::process::GpuProcess;
@@ -25,34 +25,28 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
     }
 
     /// Add a new process to hypervisor
-    pub(crate) fn add_process(&self, process: Proc) {
-        self.scheduler
-            .lock()
-            .expect("poisoned")
-            .add_process(process);
+    pub(crate) async fn add_process(&self, process: Proc) {
+        self.scheduler.lock().await.add_process(process);
     }
 
     /// Remove a process from hypervisor
-    pub(crate) fn remove_process(&self, process_id: u32) {
-        self.scheduler
-            .lock()
-            .expect("poisoned")
-            .remove_process(process_id);
+    pub(crate) async fn remove_process(&self, process_id: u32) {
+        self.scheduler.lock().await.remove_process(process_id);
     }
 
     /// Get a process by id
-    pub(crate) fn process_exists(&self, process_id: u32) -> bool {
+    pub(crate) async fn process_exists(&self, process_id: u32) -> bool {
         self.scheduler
             .lock()
-            .expect("poisoned")
+            .await
             .get_process(process_id)
             .is_some()
     }
 
-    pub(crate) fn schedule_once(&self) {
-        let mut scheduler = self.scheduler.lock().expect("poisoned");
+    pub(crate) async fn schedule_once(&self) {
+        let mut scheduler = self.scheduler.lock().await;
         // Execute scheduling decisions
-        let decisions = match scheduler.schedule() {
+        let decisions = match scheduler.schedule().await {
             Ok(d) => d,
             Err(e) => {
                 tracing::error!("scheduling error: {}", e);
@@ -66,7 +60,7 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
                 SchedulingDecision::Pause(id) => {
                     tracing::info!("pausing process {}", id);
                     if let Some(process) = scheduler.get_process(*id) {
-                        if let Err(e) = process.pause() {
+                        if let Err(e) = process.pause().await {
                             tracing::warn!("failed to pause process {}: {}", id, e);
                             continue;
                         }
@@ -75,7 +69,7 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
                 SchedulingDecision::Release(id) => {
                     tracing::info!("releasing process {}", id);
                     if let Some(process) = scheduler.get_process(*id) {
-                        if let Err(e) = process.release() {
+                        if let Err(e) = process.release().await {
                             tracing::warn!("failed to release process {}: {}", id, e);
                             continue;
                         }
@@ -84,7 +78,7 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
                 SchedulingDecision::Resume(id) => {
                     tracing::info!("resuming process {}", id);
                     if let Some(process) = scheduler.get_process(*id) {
-                        if let Err(e) = process.resume() {
+                        if let Err(e) = process.resume().await {
                             tracing::warn!("failed to resume process {}: {}", id, e);
                             continue;
                         }
@@ -92,7 +86,9 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
                 }
                 SchedulingDecision::Wake(waker, trap_id, arg) => {
                     tracing::info!("waking up trapped process");
-                    let _ = waker.send(*trap_id, arg.clone());
+                    if let Err(e) = waker.send(*trap_id, arg.clone()).await {
+                        tracing::warn!("failed to wake trapped process: {}", e);
+                    }
                 }
             }
             scheduler.done_decision(decision);
@@ -110,7 +106,7 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
                     break;
                 }
                 _ = async {
-                    self.schedule_once();
+                    self.schedule_once().await;
                     // Sleep for the scheduling interval
                     tokio::time::sleep(scheduling_interval).await;
                 } => {
@@ -121,18 +117,25 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
     }
 }
 
-impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> trap::TrapHandler for Hypervisor<Proc, Sched> {
-    fn handle_trap(
+#[async_trait::async_trait]
+impl<Proc: GpuProcess, Sched: GpuScheduler<Proc> + Send + 'static> trap::TrapHandler
+    for Hypervisor<Proc, Sched>
+{
+    async fn handle_trap(
         &self,
         pid: u32,
         trap_id: u64,
         frame: &trap::TrapFrame,
         waker: Box<dyn trap::Waker>,
     ) {
-        // Handle the trap event
-        self.scheduler
+        // Handle the trap event - spawn async task for lock acquisition
+        // Clone frame to avoid lifetime issues
+        let frame_clone = frame.clone();
+        let scheduler = self.scheduler.clone();
+        scheduler
             .lock()
-            .expect("poisoned")
-            .on_trap(pid, trap_id, frame, waker);
+            .await
+            .on_trap(pid, trap_id, &frame_clone, waker)
+            .await;
     }
 }

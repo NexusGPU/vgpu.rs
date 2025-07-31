@@ -117,8 +117,6 @@ pub struct ProcessInfo {
     pub pod_name: String,
     /// Namespace
     pub namespace: String,
-    /// GPU UUIDs this process can access
-    pub gpu_uuids: Vec<String>,
 }
 
 /// Kubernetes information from JWT token

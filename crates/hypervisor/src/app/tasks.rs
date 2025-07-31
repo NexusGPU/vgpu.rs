@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::core::Application;
 use crate::core::types::PodManagerType;
-use crate::infrastructure::k8s::{PodWatcher, WorkerUpdate};
+use crate::infrastructure::k8s::WorkerUpdate;
 use crate::infrastructure::metrics;
 
 /// Task manager, responsible for starting and managing all background tasks
@@ -194,25 +194,14 @@ impl Tasks {
         app: &Application,
         k8s_update_sender: mpsc::Sender<WorkerUpdate>,
     ) -> JoinHandle<()> {
-        let cli = app.daemon_args();
-        let k8s_namespace = cli.k8s_namespace.clone();
-        let node_name = cli.node_name.clone();
-        let kubeconfig = cli.kubeconfig.clone();
         let token = self.cancellation_token.clone();
-
+        let pod_watcher = app.services().pod_watcher.clone();
         tokio::spawn(async move {
             tracing::info!("Starting Kubernetes pod watcher task");
-            match PodWatcher::new(kubeconfig, k8s_namespace, node_name, k8s_update_sender).await {
-                Ok(watcher) => {
-                    if let Err(e) = watcher.run(token).await {
-                        tracing::error!("Kubernetes pod watcher failed: {e:?}");
-                    } else {
-                        tracing::info!("Kubernetes pod watcher completed");
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to create Kubernetes pod watcher: {e:?}");
-                }
+            if let Err(e) = pod_watcher.run(k8s_update_sender, token).await {
+                tracing::error!("Kubernetes pod watcher failed: {e:?}");
+            } else {
+                tracing::info!("Kubernetes pod watcher completed");
             }
         })
     }
