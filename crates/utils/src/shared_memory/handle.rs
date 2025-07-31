@@ -90,6 +90,10 @@ impl SharedMemoryHandle {
         self.ptr
     }
 
+    pub fn set_owner(&self, is_owner: bool) {
+        self.shmem.borrow_mut().set_owner(is_owner);
+    }
+
     /// Gets a reference to the shared device state.
     pub fn get_state(&self) -> &super::SharedDeviceState {
         unsafe { &*self.ptr }
@@ -137,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_shared_memory_preserved_with_pids() {
-        let test_id = format!("test_cleanup_{}", process::id());
+        let test_id = format!("test_preserved_{}", process::id());
         let configs = vec![];
 
         // Test case: Create shared memory, add PID, then test cleanup behavior
@@ -157,6 +161,10 @@ mod tests {
         let handle2 = SharedMemoryHandle::open(&test_id);
 
         assert!(handle2.is_ok());
+
+        {
+            std::fs::remove_file(format!("/dev/shm/{}", test_id)).unwrap();
+        }
     }
 
     #[test]
