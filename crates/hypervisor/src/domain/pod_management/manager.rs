@@ -300,24 +300,7 @@ impl PodManager {
             container_name.to_string(),
         )?;
 
-        // 2. Set up shared memory handle
-        let shared_memory_handle =
-            Arc::new(SharedMemoryHandle::open(&pod_identifier).map_err(|e| {
-                PodManagementError::SharedMemoryError {
-                    message: format!("Failed to open shared memory for {pod_identifier}: {e}"),
-                }
-            })?);
-
-        self.pod_state_store
-            .set_shared_memory_handle(&pod_identifier, shared_memory_handle)?;
-
-        // 3. Add worker to hypervisor
-        if !self.hypervisor.process_exists(host_pid).await {
-            info!("Adding new worker to hypervisor: {}", worker.name());
-            self.hypervisor.add_process(worker.clone()).await;
-        }
-
-        // 4. Register with limiter coordinator
+        // 2. Register with limiter coordinator
         // Register process with the limiter coordinator.
         self.limiter_coordinator
             .register_process(
@@ -331,6 +314,23 @@ impl PodManager {
             .map_err(|e| PodManagementError::RegistrationFailed {
                 message: e.to_string(),
             })?;
+
+        // 3. Set up shared memory handle
+        let shared_memory_handle =
+            Arc::new(SharedMemoryHandle::open(&pod_identifier).map_err(|e| {
+                PodManagementError::SharedMemoryError {
+                    message: format!("Failed to open shared memory for {pod_identifier}: {e}"),
+                }
+            })?);
+
+        self.pod_state_store
+            .set_shared_memory_handle(&pod_identifier, shared_memory_handle)?;
+
+        // 4. Add worker to hypervisor
+        if !self.hypervisor.process_exists(host_pid).await {
+            info!("Adding new worker to hypervisor: {}", worker.name());
+            self.hypervisor.add_process(worker.clone()).await;
+        }
 
         info!(
             "Successfully registered process {host_pid} for pod {pod_identifier} container {container_name}"

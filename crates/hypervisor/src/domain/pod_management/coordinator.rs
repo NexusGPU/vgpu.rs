@@ -579,7 +579,6 @@ impl LimiterCoordinator {
                                 Ok(())
                                 })
                                 .await
-                                .context("Failed to update heartbeat for pod")
                             {
                                 tracing::warn!(
                                     pod_identifier = %pod_identifier,
