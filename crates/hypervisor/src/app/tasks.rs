@@ -1,14 +1,11 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::api::server::ApiServer;
 use crate::app::core::Application;
-use crate::core::types::PodManagerType;
-use crate::infrastructure::k8s::WorkerUpdate;
 use crate::infrastructure::metrics;
 
 /// Task manager, responsible for starting and managing all background tasks
@@ -55,16 +52,9 @@ impl Tasks {
 
         // Set Kubernetes related tasks
         if cli.enable_k8s {
-            let (k8s_update_sender, k8s_update_receiver) = mpsc::channel::<WorkerUpdate>(32);
-
             // Start Kubernetes pod observer task
-            let k8s_task = self.spawn_k8s_watcher_task(app, k8s_update_sender);
+            let k8s_task = self.spawn_k8s_watcher_task(app);
             self.tasks.push(k8s_task);
-
-            // Start Kubernetes update processor task
-            let k8s_processor_task = self
-                .spawn_k8s_processor_task(k8s_update_receiver, app.services().pod_manager.clone());
-            self.tasks.push(k8s_processor_task);
 
             if cli.detect_in_used_gpus {
                 // Start GPU device state watcher task
@@ -189,16 +179,12 @@ impl Tasks {
         })
     }
 
-    fn spawn_k8s_watcher_task(
-        &self,
-        app: &Application,
-        k8s_update_sender: mpsc::Sender<WorkerUpdate>,
-    ) -> JoinHandle<()> {
+    fn spawn_k8s_watcher_task(&self, app: &Application) -> JoinHandle<()> {
         let token = self.cancellation_token.clone();
-        let pod_watcher = app.services().pod_watcher.clone();
+        let pod_info_cache = app.services().pod_info_cache.clone();
         tokio::spawn(async move {
             tracing::info!("Starting Kubernetes pod watcher task");
-            if let Err(e) = pod_watcher.run(k8s_update_sender, token).await {
+            if let Err(e) = pod_info_cache.run(token).await {
                 tracing::error!("Kubernetes pod watcher failed: {e:?}");
             } else {
                 tracing::info!("Kubernetes pod watcher completed");
@@ -226,7 +212,6 @@ impl Tasks {
         let cli = app.daemon_args();
         let pod_manager = app.services().pod_manager.clone();
         let listen_addr = cli.api_listen_addr.clone();
-        let gpu_observer = app.services().gpu_observer.clone();
         let command_dispatcher = app.services().command_dispatcher.clone();
         let hypervisor = app.services().hypervisor.clone();
         let token = self.cancellation_token.clone();
@@ -239,13 +224,12 @@ impl Tasks {
                 public_key: "default-public-key".to_string(),
             };
 
-            let api_server = crate::api::server::ApiServer::new(
+            let api_server = ApiServer::new(
                 pod_manager,
                 listen_addr,
                 jwt_config,
                 hypervisor,
                 command_dispatcher,
-                gpu_observer,
             );
 
             if let Err(e) = api_server.run(token).await {
@@ -284,87 +268,9 @@ impl Tasks {
         tokio::spawn(async move {
             tracing::info!("Starting worker manager resource monitoring task");
             // Start monitoring with 30 second interval and cancellation token
-            let monitor_handle = pod_manager.start_resource_monitor(Duration::from_secs(30), token);
-
-            // Wait for the monitoring task to complete
-            if let Err(e) = monitor_handle.await {
-                tracing::error!("Worker manager resource monitoring task failed: {}", e);
-            } else {
-                tracing::info!("Worker manager resource monitoring task completed");
-            }
-        })
-    }
-
-    fn spawn_k8s_processor_task(
-        &self,
-        mut k8s_update_receiver: mpsc::Receiver<WorkerUpdate>,
-        pod_manager: Arc<PodManagerType>,
-    ) -> JoinHandle<()> {
-        let token = self.cancellation_token.clone();
-
-        tokio::spawn(async move {
-            tracing::info!("Starting Kubernetes update processor task");
-            loop {
-                tokio::select! {
-                    update = k8s_update_receiver.recv() => {
-                        match update {
-                            Some(update) => {
-                                match update {
-                                    WorkerUpdate::PodCreated { pod_info } => {
-                                        tracing::info!(
-                                            "Pod created with annotations: {:?}",
-                                            pod_info
-                                        );
-                                        if let Err(e) = pod_manager.handle_pod_created(pod_info).await {
-                                            tracing::error!("Failed to handle pod creation: {e}");
-                                        }
-                                    }
-                                    WorkerUpdate::PodUpdated {
-                                        pod_name,
-                                        namespace,
-                                        pod_info,
-                                        node_name,
-                                    } => {
-                                        tracing::info!(
-                                            "Pod updated: {}/{} with annotations: {:?}, node: {:?}",
-                                            namespace,
-                                            pod_name,
-                                            pod_info,
-                                            node_name
-                                        );
-                                        if let Err(e) = pod_manager
-                                            .handle_pod_updated(&pod_name, &namespace, pod_info, node_name)
-                                            .await
-                                        {
-                                            tracing::error!("Failed to handle pod update: {e}");
-                                        }
-                                    }
-                                    WorkerUpdate::PodDeleted {
-                                        pod_name,
-                                        namespace,
-                                    } => {
-                                        tracing::info!("Pod deleted: {}/{}", namespace, pod_name);
-                                        if let Err(e) = pod_manager
-                                            .handle_pod_deleted(&pod_name, &namespace)
-                                            .await
-                                        {
-                                            tracing::error!("Failed to handle pod deletion: {e}");
-                                        }
-                                    }
-                                }
-                            }
-                            None => {
-                                tracing::info!("Kubernetes update receiver closed");
-                                break;
-                            }
-                        }
-                    }
-                    _ = token.cancelled() => {
-                        tracing::info!("Kubernetes update processor task cancelled");
-                        break;
-                    }
-                }
-            }
+            pod_manager
+                .start_resource_monitor(Duration::from_secs(30), token)
+                .await;
         })
     }
 }

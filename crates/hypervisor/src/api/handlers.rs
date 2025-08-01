@@ -15,7 +15,6 @@ use super::types::PodInfo;
 use super::types::PodInfoResponse;
 use super::types::ProcessInfo;
 use super::types::ProcessInitResponse;
-use crate::gpu_observer::GpuObserver;
 
 use crate::pod_management::PodManager;
 
@@ -67,12 +66,12 @@ pub async fn get_pod_info(
     };
 
     let pod_info = PodInfo {
-        pod_name: pod_entry.info.pod_name.clone(),
-        namespace: pod_entry.info.namespace.clone(),
-        gpu_uuids: pod_entry.info.gpu_uuids.clone().unwrap_or_default(),
-        tflops_limit: pod_entry.info.tflops_limit,
-        vram_limit: pod_entry.info.vram_limit,
-        qos_level: pod_entry.info.qos_level,
+        pod_name: pod_entry.pod_name.clone(),
+        namespace: pod_entry.namespace.clone(),
+        gpu_uuids: pod_entry.gpu_uuids.clone().unwrap_or_default(),
+        tflops_limit: pod_entry.tflops_limit,
+        vram_limit: pod_entry.vram_limit,
+        qos_level: pod_entry.qos_level,
     };
 
     Ok(poem::web::Json(PodInfoResponse {
@@ -88,7 +87,6 @@ pub async fn process_init(
     req: &Request,
     query: Query<ProcessInitQuery>,
     pod_manager: Data<&Arc<PodManager>>,
-    gpu_observer: Data<&Arc<GpuObserver>>,
 ) -> poem::Result<poem::web::Json<ProcessInitResponse>> {
     // Extract JWT payload from request extensions
     let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
@@ -115,13 +113,7 @@ pub async fn process_init(
     let discovery_timeout = Duration::from_secs(5);
     let process_result = match timeout(
         discovery_timeout,
-        pod_manager.initialize_process(
-            pod_name,
-            namespace,
-            container_name,
-            container_pid,
-            gpu_observer.clone(),
-        ),
+        pod_manager.initialize_process(pod_name, namespace, container_name, container_pid),
     )
     .await
     {

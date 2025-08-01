@@ -1,43 +1,14 @@
 //! Worker and pod registration logic
 
-use super::coordinator::LimiterCoordinator;
 use crate::config::GPU_CAPACITY_MAP;
-use crate::process::worker::TensorFusionWorker;
-use crate::process::GpuProcess;
 use anyhow::Result;
 use cudarc::driver::sys::CUdevice_attribute;
 use cudarc::driver::CudaContext;
 use nvml_wrapper::Nvml;
-use std::sync::Arc;
 use utils::shared_memory::DeviceConfig;
 
 // Configuration constant for CUDA cores calculation
 const FACTOR: u32 = 64;
-
-/// Registers a worker process with the limiter coordinator.
-pub async fn register_worker_to_limiter_coordinator(
-    pod_identifier: &str,
-    limiter_coordinator: &LimiterCoordinator,
-    worker: &Arc<TensorFusionWorker>,
-    container_name: &str,
-    container_pid: u32,
-    host_pid: u32,
-) -> Result<()> {
-    // Register process with the limiter coordinator.
-    limiter_coordinator
-        .register_process(pod_identifier, container_name, container_pid, host_pid)
-        .await?;
-
-    tracing::info!(
-        "Registered worker {} (container_name: {}, container_pid: {}, host_pid: {}) to limiter coordinator",
-        worker.name(),
-        container_name,
-        container_pid,
-        host_pid
-    );
-
-    Ok(())
-}
 
 /// Creates device configs from WorkerInfo (pod metadata) for pod-level registration
 pub async fn create_device_configs_from_worker_info(

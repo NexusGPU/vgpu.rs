@@ -10,9 +10,9 @@
 
 // pub(crate) mod device_plugin;
 pub mod pod_info;
-pub mod pod_watcher;
+pub mod pod_info_cache;
 pub mod types;
 
 pub use pod_info::TensorFusionPodInfo;
-pub use pod_watcher::PodWatcher;
+pub use pod_info_cache::PodInfoCache;
 pub use types::WorkerUpdate;
