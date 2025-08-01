@@ -14,7 +14,6 @@ use utils::shared_memory::handle::SharedMemoryHandle;
 use utils::shared_memory::DeviceConfig;
 
 use super::types::{PodManagementError, PodStatus, Result, SystemStats};
-use crate::process::worker::TensorFusionWorker;
 
 // Re-export unified types for backward compatibility
 use super::types::{PodState, ProcessState};
@@ -89,7 +88,6 @@ impl PodStateStore {
         host_pid: u32,
         container_pid: u32,
         container_name: String,
-        worker: Arc<TensorFusionWorker>,
     ) -> Result<()> {
         let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
             PodManagementError::PodIdentifierNotFound {
@@ -97,7 +95,7 @@ impl PodStateStore {
             }
         })?;
 
-        let process_state = ProcessState::new(host_pid, container_pid, container_name, worker);
+        let process_state = ProcessState::new(host_pid, container_pid, container_name);
 
         pod_ref.add_process(process_state);
         self.pid_to_pod.insert(host_pid, pod_identifier.to_string());
@@ -266,11 +264,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use api_types::QosLevel;
-    use nvml_wrapper::Nvml;
     use utils::shared_memory::DeviceConfig;
 
     use super::*;
-    use crate::{gpu_observer::GpuObserver, limiter_comm::CommandDispatcher};
 
     fn create_test_worker_info(pod_name: &str) -> WorkerInfo {
         WorkerInfo {
@@ -302,18 +298,6 @@ mod tests {
         }
     }
 
-    fn create_test_worker() -> Arc<TensorFusionWorker> {
-        Arc::new(TensorFusionWorker::new(
-            1234,
-            QosLevel::Medium,
-            vec!["GPU-12345".to_string()],
-            GpuObserver::create(Arc::new(Nvml::init().unwrap())),
-            "default".to_string(),
-            "test-pod".to_string(),
-            Arc::new(CommandDispatcher::new()),
-        ))
-    }
-
     #[test]
     fn test_pod_state_store_operations() {
         let store = PodStateStore::new();
@@ -328,10 +312,8 @@ mod tests {
         assert!(store.contains_pod("pod-1"));
         assert_eq!(store.get_pod("pod-1").unwrap().info.pod_name, "test-pod");
 
-        // Test process registration
-        let worker = create_test_worker();
         store
-            .register_process("pod-1", 1234, 5678, "main".to_string(), worker)
+            .register_process("pod-1", 1234, 5678, "main".to_string())
             .unwrap();
 
         assert_eq!(store.get_pod_by_pid(1234), Some("pod-1".to_string()));
@@ -386,10 +368,8 @@ mod tests {
         assert_eq!(stats.total_pods, 1);
         assert_eq!(stats.total_processes, 0);
 
-        // Add process
-        let worker = create_test_worker();
         store
-            .register_process("pod-1", 1234, 5678, "main".to_string(), worker)
+            .register_process("pod-1", 1234, 5678, "main".to_string())
             .unwrap();
 
         let stats = store.stats();

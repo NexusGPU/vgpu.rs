@@ -298,7 +298,6 @@ impl PodManager {
             host_pid,
             container_pid,
             container_name.to_string(),
-            worker.clone(),
         )?;
 
         // 2. Set up shared memory handle

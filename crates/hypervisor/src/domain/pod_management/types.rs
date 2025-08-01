@@ -10,11 +10,8 @@ use api_types::WorkerInfo;
 use utils::shared_memory::handle::SharedMemoryHandle;
 use utils::shared_memory::DeviceConfig;
 
-use crate::process::worker::TensorFusionWorker;
-use thiserror::Error;
-
 /// Unified error type for pod management operations
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum PodManagementError {
     #[error("Pod not found: {namespace}/{pod_name}")]
     PodNotFound { namespace: String, pod_name: String },
@@ -85,8 +82,6 @@ pub struct ProcessState {
     pub container_pid: u32,
     /// Container name this process belongs to
     pub container_name: String,
-    /// Worker instance for this process
-    pub worker: Arc<TensorFusionWorker>,
 }
 
 /// Device usage information for compatibility with existing components
@@ -197,17 +192,11 @@ impl std::fmt::Debug for PodState {
 
 impl ProcessState {
     /// Create a new process state
-    pub fn new(
-        host_pid: u32,
-        container_pid: u32,
-        container_name: String,
-        worker: Arc<TensorFusionWorker>,
-    ) -> Self {
+    pub fn new(host_pid: u32, container_pid: u32, container_name: String) -> Self {
         Self {
             host_pid,
             container_pid,
             container_name,
-            worker,
         }
     }
 }
@@ -280,13 +269,11 @@ where
 #[cfg(test)]
 mod tests {
     use api_types::QosLevel;
-    use nvml_wrapper::Nvml;
     use std::collections::BTreeMap;
 
     use utils::shared_memory::DeviceConfig;
 
     use super::*;
-    use crate::{gpu_observer::GpuObserver, limiter_comm::CommandDispatcher};
 
     fn create_test_worker_info(pod_name: &str) -> WorkerInfo {
         WorkerInfo {
@@ -318,18 +305,6 @@ mod tests {
         }
     }
 
-    fn create_test_worker() -> Arc<TensorFusionWorker> {
-        Arc::new(TensorFusionWorker::new(
-            1234,
-            QosLevel::Medium,
-            vec!["GPU-12345".to_string()],
-            GpuObserver::create(Arc::new(Nvml::init().unwrap())),
-            "default".to_string(),
-            "test-pod".to_string(),
-            Arc::new(CommandDispatcher::new()),
-        ))
-    }
-
     #[test]
     fn test_unified_pod_state_creation() {
         let info = create_test_worker_info("test-pod");
@@ -345,8 +320,7 @@ mod tests {
 
     #[test]
     fn test_unified_process_state_creation() {
-        let worker = create_test_worker();
-        let process_state = ProcessState::new(1234, 5678, "main".to_string(), worker);
+        let process_state = ProcessState::new(1234, 5678, "main".to_string());
 
         assert_eq!(process_state.host_pid, 1234);
         assert_eq!(process_state.container_pid, 5678);
@@ -360,8 +334,7 @@ mod tests {
         let mut pod_state = PodState::new(info, device_configs);
 
         // Add process
-        let worker = create_test_worker();
-        let process_state = ProcessState::new(1234, 5678, "main".to_string(), worker);
+        let process_state = ProcessState::new(1234, 5678, "main".to_string());
         pod_state.add_process(process_state);
 
         assert!(pod_state.has_processes());
@@ -380,8 +353,7 @@ mod tests {
         let device_configs = vec![create_test_device_config()];
         let mut pod_state = PodState::new(info, device_configs);
 
-        let worker = create_test_worker();
-        let process_state = ProcessState::new(1234, 5678, "main".to_string(), worker);
+        let process_state = ProcessState::new(1234, 5678, "main".to_string());
         pod_state.add_process(process_state);
 
         let device_usage = pod_state.to_device_usage();
@@ -406,17 +378,8 @@ mod tests {
         let device_configs = vec![create_test_device_config()];
         let mut pod_state = PodState::new(info, device_configs);
 
-        // Add processes to different containers
-        let worker1 = create_test_worker();
-        let worker2 = create_test_worker();
-
-        pod_state.add_process(ProcessState::new(1234, 5678, "main".to_string(), worker1));
-        pod_state.add_process(ProcessState::new(
-            1235,
-            5679,
-            "sidecar".to_string(),
-            worker2,
-        ));
+        pod_state.add_process(ProcessState::new(1234, 5678, "main".to_string()));
+        pod_state.add_process(ProcessState::new(1235, 5679, "sidecar".to_string()));
 
         let containers = pod_state.get_processes_by_container();
         assert_eq!(containers.len(), 2);
