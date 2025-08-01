@@ -204,7 +204,15 @@ pub(crate) async fn run_metrics(
                             let pod_registry = pod_mgr.registry().read().await;
                             for (gpu_uuid, pod_metrics) in &worker_acc {
                                 for (pod_identifier, acc) in pod_metrics {
-                                    let pod_entry = pod_registry.get(pod_identifier).unwrap();
+                                    let Some(pod_entry) = pod_registry.get(pod_identifier) else {
+                                        tracing::warn!(
+                                            target: "metrics",
+                                            msg = "Failed to find pod",
+                                            pod_identifier = %pod_identifier,
+                                        );
+                                        continue;
+                                    };
+
                                     let labels = &pod_entry.info.labels;
 
                                     if acc.count > 0 {
