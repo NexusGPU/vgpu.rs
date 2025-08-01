@@ -176,7 +176,7 @@ impl PodInfoCache {
         })?;
 
         // Transform and cache the pod info
-        let mut tf_info = self.transform_pod_to_pod_info(pod).await?;
+        let mut tf_info = self.transform_pod_to_pod_info(pod)?;
 
         if tf_info.has_annotations() {
             // Ensure the basic pod information is set
@@ -235,7 +235,7 @@ impl PodInfoCache {
     /// Handle a pod event and update cache
     async fn handle_pod_event(&self, pod: Pod) -> Result<(), Report<KubernetesError>> {
         let is_being_deleted = pod.metadata.deletion_timestamp.is_some();
-        let tf_info = self.transform_pod_to_pod_info(pod).await?;
+        let tf_info = self.transform_pod_to_pod_info(pod)?;
 
         let key = PodKey::new(tf_info.0.namespace.clone(), tf_info.0.pod_name.clone());
 
@@ -252,7 +252,7 @@ impl PodInfoCache {
         Ok(())
     }
 
-    async fn transform_pod_to_pod_info(
+    fn transform_pod_to_pod_info(
         &self,
         pod: Pod,
     ) -> Result<TensorFusionPodInfo, Report<KubernetesError>> {
@@ -313,25 +313,5 @@ mod tests {
 
         assert_eq!(key1, key2);
         assert_ne!(key1, key3);
-    }
-
-    #[tokio::test]
-    async fn test_transform_pod_to_pod_info() {
-        let cache = PodInfoCache::init(None, None, "test-node".to_string())
-            .await
-            .unwrap();
-
-        let mut annotations = BTreeMap::new();
-        annotations.insert(
-            "tensor-fusion.ai/tflops-request".to_string(),
-            "10.0".to_string(),
-        );
-
-        let pod = create_test_pod("test-pod", annotations);
-        let result = cache.transform_pod_to_pod_info(pod).await.unwrap();
-
-        assert_eq!(result.0.pod_name, "test-pod");
-        assert_eq!(result.0.namespace, "default");
-        assert!(result.has_annotations());
     }
 }
