@@ -211,7 +211,10 @@ impl GpuDeviceStateWatcher {
         let (added_devices, removed_devices) = if patch_all_devices {
             (
                 current_allocated_device_ids.clone(),
-                current_registered_device_ids,
+                current_registered_device_ids
+                    .difference(&current_allocated_device_ids)
+                    .cloned()
+                    .collect::<HashSet<String>>(),
             )
         } else {
             (
