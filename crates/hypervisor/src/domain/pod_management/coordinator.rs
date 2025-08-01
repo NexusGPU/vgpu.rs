@@ -521,7 +521,7 @@ impl LimiterCoordinator {
             loop {
                 tokio::select! {
                     _ = cleanup_interval.tick() => {
-                        tracing::debug!("Running periodic cleanup of unused shared memory segments");
+                        tracing::info!("Running periodic cleanup of unused shared memory segments");
 
                         if let Err(e) = shared_memory_manager.cleanup_orphaned_files(&shared_memory_glob_pattern) {
                             tracing::warn!("Failed to cleanup orphaned shared memory files: {}", e);
