@@ -108,13 +108,6 @@ impl PodInfoCache {
         self.cache.contains_key(&key)
     }
 
-    /// Get cache statistics
-    pub fn cache_stats(&self) -> CacheStats {
-        CacheStats {
-            total_pods: self.cache.len(),
-        }
-    }
-
     /// Remove pod from cache
     pub fn remove_pod(&self, namespace: &str, pod_name: &str) -> Option<TensorFusionPodInfo> {
         let key = PodKey::new(namespace.to_string(), pod_name.to_string());
@@ -273,45 +266,5 @@ impl PodInfoCache {
         tf_info.0.pod_name = pod_name;
 
         Ok(tf_info)
-    }
-}
-
-/// Cache statistics
-#[derive(Debug, Clone)]
-pub struct CacheStats {
-    pub total_pods: usize,
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use k8s_openapi::api::core::v1::Pod;
-    use k8s_openapi::api::core::v1::PodSpec;
-    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-
-    use super::*;
-
-    fn create_test_pod(name: &str, annotations: BTreeMap<String, String>) -> Pod {
-        Pod {
-            metadata: ObjectMeta {
-                name: Some(name.to_string()),
-                namespace: Some("default".to_string()),
-                annotations: Some(annotations),
-                ..Default::default()
-            },
-            spec: Some(PodSpec::default()),
-            status: None,
-        }
-    }
-
-    #[test]
-    fn test_pod_key() {
-        let key1 = PodKey::new("default".to_string(), "pod1".to_string());
-        let key2 = PodKey::new("default".to_string(), "pod1".to_string());
-        let key3 = PodKey::new("default".to_string(), "pod2".to_string());
-
-        assert_eq!(key1, key2);
-        assert_ne!(key1, key3);
     }
 }
