@@ -236,6 +236,7 @@ pub fn create_trap_server<H: TrapHandler + Send + Sync + Clone + 'static>(
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::net::TcpListener as StdTcpListener;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -265,7 +266,7 @@ mod tests {
         fn process_task(
             &self,
             task: &HttpTrapRequest,
-        ) -> Result<HttpTrapResponse, Box<dyn std::error::Error + Send + Sync>> {
+        ) -> Result<HttpTrapResponse, Box<dyn Error + Send + Sync>> {
             // Extract trap ID as u64 for the handler
             let trap_id = task.trap_id.parse::<u64>().unwrap_or(0);
 

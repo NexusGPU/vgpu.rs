@@ -17,6 +17,7 @@ use tf_macro::hook_fn;
 use trap::dummy::DummyTrap;
 use trap::http::BlockingHttpTrap;
 use trap::http::HttpTrapConfig;
+use trap::{Trap, TrapAction, TrapError, TrapFrame};
 use utils::hooks::HookManager;
 use utils::logging;
 use utils::replace_symbol;
@@ -301,11 +302,8 @@ enum TrapImpl {
     Http(Arc<BlockingHttpTrap>),
 }
 
-impl trap::Trap for TrapImpl {
-    fn enter_trap_and_wait(
-        &self,
-        frame: trap::TrapFrame,
-    ) -> Result<trap::TrapAction, trap::TrapError> {
+impl Trap for TrapImpl {
+    fn enter_trap_and_wait(&self, frame: TrapFrame) -> Result<TrapAction, TrapError> {
         match self {
             TrapImpl::Dummy(t) => t.enter_trap_and_wait(frame),
             TrapImpl::Http(t) => t.enter_trap_and_wait(frame),
@@ -322,7 +320,7 @@ impl Clone for TrapImpl {
     }
 }
 
-pub fn global_trap() -> impl trap::Trap {
+pub fn global_trap() -> impl Trap {
     static GLOBAL_TRAP: OnceLock<Mutex<TrapImpl>> = OnceLock::new();
 
     let trap = GLOBAL_TRAP.get_or_init(|| {

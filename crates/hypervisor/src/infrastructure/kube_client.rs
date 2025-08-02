@@ -5,6 +5,7 @@ use error_stack::ResultExt;
 use kube::config::KubeConfigOptions;
 use kube::config::Kubeconfig;
 use kube::Client;
+use kube::Config;
 
 use crate::infrastructure::k8s::types::KubernetesError;
 
@@ -23,15 +24,14 @@ pub async fn init_kube_client(
                 },
             )?;
 
-            let config =
-                kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default())
-                    .await
-                    .change_context(KubernetesError::ConnectionFailed {
-                        message: format!(
-                            "Failed to create config from kubeconfig: {}",
-                            kubeconfig_path.display()
-                        ),
-                    })?;
+            let config = Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default())
+                .await
+                .change_context(KubernetesError::ConnectionFailed {
+                    message: format!(
+                        "Failed to create config from kubeconfig: {}",
+                        kubeconfig_path.display()
+                    ),
+                })?;
 
             Client::try_from(config).change_context(KubernetesError::ConnectionFailed {
                 message: "Failed to create Kubernetes client from custom kubeconfig".to_string(),

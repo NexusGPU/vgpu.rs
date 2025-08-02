@@ -7,6 +7,7 @@ pub mod version;
 
 use std::borrow::Cow;
 
+use frida_gum::Error as FridaError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -18,11 +19,11 @@ pub enum Error {
     NoSymbolName(Cow<'static, str>),
 
     #[error("Frida failed with `{0}`")]
-    Frida(frida_gum::Error),
+    Frida(FridaError),
 }
 
-impl From<frida_gum::Error> for Error {
-    fn from(err: frida_gum::Error) -> Self {
+impl From<FridaError> for Error {
+    fn from(err: FridaError) -> Self {
         Error::Frida(err)
     }
 }

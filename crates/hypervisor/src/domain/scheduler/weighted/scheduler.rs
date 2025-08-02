@@ -11,6 +11,7 @@ use super::types::{Trap, WithTraps};
 use super::weight_calculator::Weight;
 use crate::metrics::{current_time, BytesWrapper};
 use crate::process::GpuProcess;
+use trap::{TrapFrame, Waker};
 
 /// Weighted scheduler implementation with modular architecture
 pub struct WeightedScheduler<Proc> {
@@ -155,8 +156,8 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
         &mut self,
         process_id: u32,
         _trap_id: u64,
-        frame: &trap::TrapFrame,
-        waker: Box<dyn trap::Waker>,
+        frame: &TrapFrame,
+        waker: Box<dyn Waker>,
     ) {
         if let Some(process) = self.processes.get_mut(&process_id) {
             process.traps.push(Trap {

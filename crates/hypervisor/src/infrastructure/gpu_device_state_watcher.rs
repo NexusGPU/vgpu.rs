@@ -28,6 +28,7 @@ use tracing::warn;
 
 use crate::k8s::types::KubernetesError;
 use crate::kube_client;
+use kube::api::{ObjectMeta, Patch};
 
 pub struct GpuDeviceStateWatcher {
     kubelet_device_state_path: PathBuf,
@@ -446,7 +447,7 @@ impl GpuDeviceStateWatcher {
             .patch_status(
                 device_id,
                 &kube::api::PatchParams::default(),
-                &kube::api::Patch::Merge(&current_resource),
+                &Patch::Merge(&current_resource),
             )
             .await
             .change_context(KubernetesError::WatchFailed {
@@ -543,7 +544,7 @@ struct GpuResourceStatus {
 #[allow(clippy::upper_case_acronyms)]
 struct GPU {
     #[serde(flatten)]
-    pub metadata: kube::api::ObjectMeta,
+    pub metadata: ObjectMeta,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec: Option<GpuResourceSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -571,11 +572,11 @@ impl kube::Resource for GPU {
         "gpus".into()
     }
 
-    fn meta(&self) -> &kube::api::ObjectMeta {
+    fn meta(&self) -> &ObjectMeta {
         &self.metadata
     }
 
-    fn meta_mut(&mut self) -> &mut kube::api::ObjectMeta {
+    fn meta_mut(&mut self) -> &mut ObjectMeta {
         &mut self.metadata
     }
 }

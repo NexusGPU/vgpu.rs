@@ -12,7 +12,9 @@ use tracing_appender::rolling::RollingFileAppender;
 use tracing_appender::rolling::Rotation;
 use tracing_subscriber::filter::FilterExt;
 use tracing_subscriber::filter::{self};
+use tracing_subscriber::fmt::format;
 use tracing_subscriber::fmt::layer;
+use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::fmt::FormatEvent;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry;
@@ -41,8 +43,8 @@ where
 {
     fn format_event(
         &self,
-        _ctx: &tracing_subscriber::fmt::FmtContext<'_, S, N>,
-        mut writer: tracing_subscriber::fmt::format::Writer<'_>,
+        _ctx: &FmtContext<'_, S, N>,
+        mut writer: format::Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
         let mut visitor = FieldVisitor { msg: String::new() };
@@ -85,7 +87,7 @@ pub(crate) fn init<P: AsRef<Path>>(
 
     let metrics_layer = layer()
         .event_format(InfluxDBFormatter {})
-        .fmt_fields(tracing_subscriber::fmt::format::DefaultFields::new())
+        .fmt_fields(format::DefaultFields::new())
         .with_writer(file_writer)
         .with_ansi(false)
         .with_filter(filter::filter_fn(|metadata| {

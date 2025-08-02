@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use nvml_wrapper::Nvml;
 
+use crate::config::load_gpu_info;
 use crate::config::DaemonArgs;
 
 /// GPU system information structure
@@ -73,7 +74,7 @@ async fn load_gpu_config(
         .clone()
         .unwrap_or_else(|| PathBuf::from("./gpu-info.yaml"));
 
-    if let Err(e) = crate::config::load_gpu_info(gpu_uuid_to_name_map, gpu_info_path).await {
+    if let Err(e) = load_gpu_info(gpu_uuid_to_name_map, gpu_info_path).await {
         tracing::warn!("Failed to load GPU information: {}", e);
     } else {
         tracing::info!("GPU configuration loaded successfully");

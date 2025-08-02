@@ -2,8 +2,7 @@ use std::env;
 use std::fs;
 
 use anyhow::Result;
-use api_types::PodInfoResponse;
-use api_types::ProcessInitResponse;
+use api_types::{PodInfoResponse, ProcessInitResponse};
 use error_stack::Report;
 use error_stack::ResultExt;
 use reqwest::blocking::Client;

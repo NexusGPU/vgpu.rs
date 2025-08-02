@@ -5,6 +5,7 @@ use super::types::{Trap, WithTraps};
 use crate::process::GpuProcess;
 use priority_queue::PriorityQueue;
 use std::collections::HashMap;
+use trap::{TrapAction, TrapError, Waker};
 
 /// Engine for making scheduling decisions based on process states and priorities
 pub struct DecisionEngine;
@@ -31,7 +32,7 @@ impl DecisionEngine {
                         decisions.push(SchedulingDecision::Wake(
                             dummy_waker,
                             0, // trap_id would come from the trap
-                            trap::TrapAction::Resume,
+                            TrapAction::Resume,
                         ));
                         break;
                     }
@@ -93,8 +94,8 @@ impl DecisionEngine {
 struct DummyWaker;
 
 #[async_trait::async_trait]
-impl trap::Waker for DummyWaker {
-    async fn send(&self, _trap_id: u64, _action: trap::TrapAction) -> Result<(), trap::TrapError> {
+impl Waker for DummyWaker {
+    async fn send(&self, _trap_id: u64, _action: TrapAction) -> Result<(), TrapError> {
         Ok(())
     }
 }

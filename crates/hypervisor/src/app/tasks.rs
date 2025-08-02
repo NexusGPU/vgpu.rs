@@ -220,7 +220,7 @@ impl Tasks {
             tracing::info!("Starting API server on {}", listen_addr);
 
             // Create default JWT config - you may want to make this configurable
-            let jwt_config = crate::api::types::JwtAuthConfig {
+            let jwt_config = crate::api::JwtAuthConfig {
                 public_key: "default-public-key".to_string(),
             };
 

@@ -18,7 +18,7 @@ pub struct TensorFusionWorker {
     state: RwLock<ProcessState>,
     gpu_uuids: Vec<String>,
     gpu_observer: Arc<GpuObserver>,
-    qos_level: api_types::QosLevel,
+    qos_level: QosLevel,
     /// Worker name, formatted as "namespace/pod_name"
     pub(crate) name: String,
     /// Kubernetes pod name

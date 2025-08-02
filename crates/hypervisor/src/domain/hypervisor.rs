@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::process::GpuProcess;
 use crate::scheduler::GpuScheduler;
 use crate::scheduler::SchedulingDecision;
+use trap::{TrapFrame, TrapHandler, Waker};
 
 pub struct Hypervisor<Proc: GpuProcess, Sched: GpuScheduler<Proc>> {
     scheduler: Arc<Mutex<Sched>>,
@@ -118,16 +119,10 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
 }
 
 #[async_trait::async_trait]
-impl<Proc: GpuProcess, Sched: GpuScheduler<Proc> + Send + 'static> trap::TrapHandler
+impl<Proc: GpuProcess, Sched: GpuScheduler<Proc> + Send + 'static> TrapHandler
     for Hypervisor<Proc, Sched>
 {
-    async fn handle_trap(
-        &self,
-        pid: u32,
-        trap_id: u64,
-        frame: &trap::TrapFrame,
-        waker: Box<dyn trap::Waker>,
-    ) {
+    async fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Box<dyn Waker>) {
         // Handle the trap event - spawn async task for lock acquisition
         // Clone frame to avoid lifetime issues
         let frame_clone = frame.clone();

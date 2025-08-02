@@ -7,8 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use api_types::WorkerInfo;
-use utils::shared_memory::handle::SharedMemoryHandle;
-use utils::shared_memory::DeviceConfig;
+use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig};
 
 /// Unified error type for pod management operations
 #[derive(Debug, thiserror::Error)]

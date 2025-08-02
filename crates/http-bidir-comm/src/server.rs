@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use error_stack::bail;
 use serde::Deserialize;
 use serde::Serialize;
@@ -58,7 +58,7 @@ where
     /// Completed tasks history
     completed: VecDeque<TaskResult<R>>,
     /// Last activity timestamp
-    last_activity: chrono::DateTime<Utc>,
+    last_activity: DateTime<Utc>,
 }
 
 impl<T, R> ClientQueue<T, R>
