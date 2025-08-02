@@ -25,7 +25,6 @@ use super::errors::ApiError;
 use super::types::JwtAuthConfig;
 use crate::api::handlers::get_pod_info;
 use crate::api::handlers::process_init;
-use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
 use crate::pod_management::PodManager;
 
@@ -36,7 +35,6 @@ pub struct ApiServer {
     jwt_config: JwtAuthConfig,
     trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
     command_dispatcher: Arc<CommandDispatcher>,
-    gpu_observer: Arc<GpuObserver>,
 }
 
 impl ApiServer {
@@ -47,7 +45,6 @@ impl ApiServer {
         jwt_config: JwtAuthConfig,
         trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
         command_dispatcher: Arc<CommandDispatcher>,
-        gpu_observer: Arc<GpuObserver>,
     ) -> Self {
         Self {
             pod_manager,
@@ -55,7 +52,6 @@ impl ApiServer {
             jwt_config,
             trap_handler,
             command_dispatcher,
-            gpu_observer,
         }
     }
 
@@ -86,7 +82,6 @@ impl ApiServer {
             .nest("/api/v1/limiter", limiter_routes)
             .data(self.pod_manager.clone())
             .data(self.command_dispatcher.clone())
-            .data(self.gpu_observer.clone())
             .with(Tracing);
 
         let listener = TcpListener::bind(&self.listen_addr);

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde::Serialize;
-use thiserror::Error; // Use alias to avoid potential confusion
+use thiserror::Error;
 
 /// TrapFrame: context of a trap
 #[derive(Debug, Serialize, Deserialize, Clone)]

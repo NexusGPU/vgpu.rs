@@ -1,7 +1,8 @@
 use std::ffi::c_int;
 use std::ffi::c_uint;
 use std::ffi::c_void;
-use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use cudarc::driver::sys::CUfunction;
 use cudarc::driver::sys::CUresult;
@@ -303,58 +304,75 @@ pub(crate) unsafe extern "C" fn cu_func_set_block_shape_detour(
 
 #[hook_fn]
 pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
-    // Ensure worker initialization happens only once
-    static WORKER_INIT: Once = Once::new();
+    // Track worker initialization state - allow retry if init_worker fails
+    static WORKER_INITIALIZED: AtomicBool = AtomicBool::new(false);
+    static WORKER_INIT_MUTEX: Mutex<()> = Mutex::new(());
 
-    WORKER_INIT.call_once(|| {
-        // Try to initialize worker with hypervisor - using guard clauses for cleaner code
-        let Some((hypervisor_ip, hypervisor_port)) = config::get_hypervisor_config() else {
-            tracing::debug!("Hypervisor config not available, skipping worker initialization");
-            return;
-        };
+    // Check if already initialized successfully
+    if !WORKER_INITIALIZED.load(Ordering::Acquire) {
+        // Use mutex to ensure only one thread attempts initialization at a time
+        if let Ok(_guard) = WORKER_INIT_MUTEX.lock() {
+            // Double-check pattern to avoid race conditions
+            if !WORKER_INITIALIZED.load(Ordering::Acquire) {
+                // Try to initialize worker with hypervisor - using guard clauses for cleaner code
+                let Some((hypervisor_ip, hypervisor_port)) = config::get_hypervisor_config() else {
+                    tracing::debug!(
+                        "Hypervisor config not available, skipping worker initialization"
+                    );
+                    return FN_CU_INIT(flags);
+                };
 
-        let Some(container_name) = config::get_container_name() else {
-            tracing::warn!("Container name not available, skipping worker initialization");
-            return;
-        };
+                let Some(container_name) = config::get_container_name() else {
+                    tracing::warn!("Container name not available, skipping worker initialization");
+                    return FN_CU_INIT(flags);
+                };
 
-        let result = match config::init_worker(&hypervisor_ip, &hypervisor_port, &container_name) {
-            Ok(result) => {
-                tracing::info!(
-                    "Worker initialized successfully via cu_init_detour: host_pid={}, gpu_uuids={:?}",
-                    result.host_pid,
-                    result.gpu_uuids
-                );
-                result
-            }
-            Err(e) => {
-                tracing::error!("Failed to initialize worker via cu_init_detour: {}", e);
-                return;
-            }
-        };
+                let result = match config::init_worker(
+                    &hypervisor_ip,
+                    &hypervisor_port,
+                    &container_name,
+                ) {
+                    Ok(result) => {
+                        tracing::info!(
+                            "Worker initialized successfully via cu_init_detour: host_pid={}, gpu_uuids={:?}",
+                            result.host_pid,
+                            result.gpu_uuids
+                        );
+                        result
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to initialize worker via cu_init_detour: {}, will retry on next call", e);
+                        return FN_CU_INIT(flags);
+                    }
+                };
 
-        // Load tensor-fusion/ngpu.so
-        if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
-            tracing::debug!("loading ngpu.so from: {ngpu_path}");
+                // Load tensor-fusion/ngpu.so
+                if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
+                    tracing::debug!("loading ngpu.so from: {ngpu_path}");
 
-            match unsafe { libloading::Library::new(ngpu_path.as_str()) } {
-                Ok(lib) => {
-                    GLOBAL_NGPU_LIBRARY
-                        .set(lib)
-                        .expect("set GLOBAL_NGPU_LIBRARY");
-                    tracing::debug!("loaded ngpu.so");
+                    match unsafe { libloading::Library::new(ngpu_path.as_str()) } {
+                        Ok(lib) => {
+                            GLOBAL_NGPU_LIBRARY
+                                .set(lib)
+                                .expect("set GLOBAL_NGPU_LIBRARY");
+                            tracing::debug!("loaded ngpu.so");
+                        }
+                        Err(e) => {
+                            tracing::error!("failed to load ngpu.so: {e}, path: {ngpu_path}");
+                        }
+                    }
+                    command_handler::start_background_handler(
+                        &hypervisor_ip,
+                        &hypervisor_port,
+                        result.host_pid,
+                    );
                 }
-                Err(e) => {
-                    tracing::error!("failed to load ngpu.so: {e}, path: {ngpu_path}");
-                }
+
+                // Mark as successfully initialized only after everything succeeds
+                WORKER_INITIALIZED.store(true, Ordering::Release);
             }
-            command_handler::start_background_handler(
-                &hypervisor_ip,
-                &hypervisor_port,
-                result.host_pid,
-            );
         }
-    });
+    }
 
     let result = FN_CU_INIT(flags);
 

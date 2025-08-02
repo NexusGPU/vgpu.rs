@@ -12,9 +12,9 @@ use crate::gpu_init::GpuSystem;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
 use crate::hypervisor::Hypervisor;
-use crate::k8s::PodWatcher;
+use crate::k8s::PodInfoCache;
 use crate::limiter_comm::CommandDispatcher;
-use crate::pod_management::{LimiterCoordinator, PodManager};
+use crate::pod_management::{LimiterCoordinator, PodManager, PodStateStore};
 use crate::scheduler::weighted::WeightedScheduler;
 
 /// Application builder
@@ -50,7 +50,7 @@ impl ApplicationBuilder {
             command_dispatcher: components.command_dispatcher,
             limiter_coordinator: components.limiter_coordinator,
             gpu_device_state_watcher: components.gpu_device_state_watcher,
-            pod_watcher: components.pod_watcher,
+            pod_info_cache: components.pod_info_cache,
         };
 
         Ok(Application::new(services, self.daemon_args))
@@ -73,11 +73,15 @@ impl ApplicationBuilder {
         // Create command dispatcher
         let command_dispatcher = Arc::new(CommandDispatcher::new());
 
+        // Create pod state store
+        let pod_state_store = Arc::new(PodStateStore::new());
+
         // Create limiter coordinator
         let limiter_coordinator = Arc::new(LimiterCoordinator::new(
             Duration::from_millis(100),
             gpu_system.device_count,
             self.daemon_args.shared_memory_glob_pattern.clone(),
+            pod_state_store.clone(),
         ));
 
         // create a GPU device state watcher
@@ -85,12 +89,16 @@ impl ApplicationBuilder {
             self.daemon_args.kubelet_device_state_path.clone(),
         ));
 
-        // create a pod watcher
-        let pod_watcher = Arc::new(PodWatcher::new(
-            self.daemon_args.kubeconfig.clone(),
-            self.daemon_args.k8s_namespace.clone(),
-            self.daemon_args.node_name.clone(),
-        ));
+        // create a pod info cache
+        let pod_info_cache = Arc::new(
+            PodInfoCache::init(
+                self.daemon_args.kubeconfig.clone(),
+                self.daemon_args.k8s_namespace.clone(),
+                self.daemon_args.node_name.clone(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize pod info cache: {:?}", e))?,
+        );
 
         Ok(CoreComponents {
             hypervisor,
@@ -99,7 +107,8 @@ impl ApplicationBuilder {
             command_dispatcher,
             limiter_coordinator,
             gpu_device_state_watcher,
-            pod_watcher,
+            pod_info_cache,
+            pod_state_store,
         })
     }
 
@@ -116,7 +125,9 @@ impl ApplicationBuilder {
             components.hypervisor.clone(),
             components.limiter_coordinator.clone(),
             gpu_system.nvml.clone(),
-            components.pod_watcher.clone(),
+            components.pod_info_cache.clone(),
+            components.pod_state_store.clone(),
+            components.gpu_observer.clone(),
         ));
 
         Ok(pod_manager)
@@ -131,5 +142,6 @@ struct CoreComponents {
     command_dispatcher: Arc<CommandDispatcher>,
     limiter_coordinator: Arc<LimiterCoordinator>,
     gpu_device_state_watcher: Arc<GpuDeviceStateWatcher>,
-    pod_watcher: Arc<PodWatcher>,
+    pod_info_cache: Arc<PodInfoCache>,
+    pod_state_store: Arc<PodStateStore>,
 }

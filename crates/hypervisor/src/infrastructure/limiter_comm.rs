@@ -3,6 +3,7 @@
 //! This module demonstrates how to replace the existing limiter_comm implementation
 //! with the new generic HTTP bidirectional communication library.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use error_stack::Report;
@@ -67,9 +68,7 @@ impl CommandDispatcher {
 
     /// Get statistics for all limiter clients.
     #[allow(dead_code)]
-    pub async fn get_all_stats(
-        &self,
-    ) -> std::collections::HashMap<String, http_bidir_comm::ClientStats> {
+    pub async fn get_all_stats(&self) -> HashMap<String, http_bidir_comm::ClientStats> {
         self.server.get_all_stats().await
     }
 

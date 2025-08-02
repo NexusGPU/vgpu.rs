@@ -20,23 +20,6 @@
 - Add `attach_printable()` or `attach_printable_lazy()` to include relevant debug information
 - When reporting errors to users, provide actionable guidance where possible
 
-## Error Definition
-
-- Use `derive_more` for error traits, not thiserror:
-
-  ```rust
-  #[derive(Debug, derive_more::Display)]
-  #[display("Operation failed: {_variant}")]
-  pub enum MyCustomError {
-      #[display("Resource `{id}` not found")]
-      NotFound { id: String },
-      #[display("Operation timed out after {seconds}s")]
-      Timeout { seconds: u64 },
-  }
-
-  impl Error for MyCustomError {}
-  ```
-
 ## Specialized Error Handling
 
 ### Streaming Decoders

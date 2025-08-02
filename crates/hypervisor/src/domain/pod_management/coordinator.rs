@@ -20,21 +20,16 @@ use utils::shared_memory::handle::SharedMemoryHandle;
 use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
 use utils::shared_memory::DeviceConfig;
 
-use super::registry::PodDeviceUsage;
+use super::pod_state_store::PodStateStore;
+use super::types::DeviceUsage;
 use super::utilization::{codec_normalize, DeviceSnapshot, ProcessUtilization};
 
-/// State information when detecting/restoring shared memory
-struct SharedMemoryState {
-    existed: bool,
-    restored_pids: Vec<usize>,
-}
-
-/// Limiter coordinator.
+/// Limiter coordinator - now focused on coordination rather than state management.
 pub struct LimiterCoordinator {
     /// Shared memory manager.
     shared_memory_manager: Arc<ThreadSafeSharedMemoryManager>,
-    /// Active pod device usage: pod_identifier -> PodDeviceUsage
-    active_pods: Arc<RwLock<HashMap<String, PodDeviceUsage>>>,
+    /// Reference to pod state store for querying pod information
+    pod_state_store: Arc<PodStateStore>,
     /// Monitoring task handles for each device: device_idx -> JoinHandle
     device_watcher_tasks: RwLock<HashMap<u32, JoinHandle<()>>>,
     /// Heartbeat task handle
@@ -52,10 +47,11 @@ impl LimiterCoordinator {
         watch_interval: Duration,
         device_count: u32,
         shared_memory_glob_pattern: String,
+        pod_state_store: Arc<PodStateStore>,
     ) -> Self {
         Self {
             shared_memory_manager: Arc::new(ThreadSafeSharedMemoryManager::new()),
-            active_pods: Arc::new(RwLock::new(HashMap::new())),
+            pod_state_store,
             device_watcher_tasks: RwLock::new(HashMap::new()),
             heartbeat_task: RwLock::new(None),
             watch_interval,
@@ -113,13 +109,13 @@ impl LimiterCoordinator {
 
     /// Starts a monitoring task for each GPU device with cancellation support
     async fn start_watcher_with_cancellation(&self, cancellation_token: CancellationToken) {
-        let active_pods = self.active_pods.clone();
+        let pod_state_store = self.pod_state_store.clone();
 
         for device_idx in 0..self.device_count {
             let task = self.create_device_watcher_task(
                 device_idx,
                 self.watch_interval,
-                active_pods.clone(),
+                pod_state_store.clone(),
                 cancellation_token.clone(),
             );
 
@@ -138,7 +134,7 @@ impl LimiterCoordinator {
         &self,
         device_idx: u32,
         watch_interval: Duration,
-        active_pods: Arc<RwLock<HashMap<String, PodDeviceUsage>>>,
+        pod_state_store: Arc<PodStateStore>,
         cancellation_token: CancellationToken,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
@@ -161,7 +157,7 @@ impl LimiterCoordinator {
 
                 if let Err(e) = Self::run_device_monitoring_cycle(
                     device_idx,
-                    &active_pods,
+                    &pod_state_store,
                     &mut last_seen_timestamp,
                 )
                 .await
@@ -177,10 +173,10 @@ impl LimiterCoordinator {
     /// Run one cycle of device monitoring
     async fn run_device_monitoring_cycle(
         device_idx: u32,
-        active_pods: &Arc<RwLock<HashMap<String, PodDeviceUsage>>>,
+        pod_state_store: &Arc<PodStateStore>,
         last_seen_timestamp: &mut u64,
     ) -> Result<()> {
-        let pods_for_device = Self::get_pods_using_device(device_idx, active_pods).await;
+        let pods_for_device = pod_state_store.get_pods_using_device(device_idx);
 
         if pods_for_device.is_empty() {
             debug!(device_idx = device_idx, "No pods using this device");
@@ -199,7 +195,10 @@ impl LimiterCoordinator {
                 }
             };
 
-        for (pod_identifier, pod_usage) in pods_for_device {
+        for (pod_identifier, pod_state) in pods_for_device {
+            // Convert PodState to DeviceUsage using the unified type
+            let pod_usage = pod_state.to_device_usage();
+
             if let Err(e) = Self::process_pod_utilization_update(
                 &pod_identifier,
                 &pod_usage,
@@ -220,27 +219,10 @@ impl LimiterCoordinator {
         Ok(())
     }
 
-    /// Get pods that are using a specific device
-    async fn get_pods_using_device(
-        device_idx: u32,
-        active_pods: &Arc<RwLock<HashMap<String, PodDeviceUsage>>>,
-    ) -> Vec<(String, PodDeviceUsage)> {
-        let pods = active_pods.read().await;
-        pods.iter()
-            .filter(|(_, usage)| {
-                usage
-                    .device_configs
-                    .iter()
-                    .any(|config| config.device_idx == device_idx)
-            })
-            .map(|(name, usage)| (name.clone(), usage.clone()))
-            .collect()
-    }
-
     /// Process utilization update for a single pod
     async fn process_pod_utilization_update(
         pod_identifier: &str,
-        pod_usage: &PodDeviceUsage,
+        pod_usage: &DeviceUsage,
         device_idx: u32,
         device_snapshot: &DeviceSnapshot,
     ) -> Result<()> {
@@ -281,108 +263,52 @@ impl LimiterCoordinator {
     }
 
     /// Ensures a pod is registered with device configurations (idempotent operation)
-    pub async fn ensure_pod_registered(
+    async fn ensure_pod_registered(
         &self,
         pod_identifier: &str,
         configs: Vec<DeviceConfig>,
     ) -> Result<()> {
-        let shared_memory_state = self.detect_existing_shared_memory(pod_identifier, &configs)?;
-        self.finalize_pod_registration(pod_identifier, configs, shared_memory_state)
-            .await
-    }
-
-    /// Detect and handle existing shared memory, returning restoration state
-    fn detect_existing_shared_memory(
-        &self,
-        pod_identifier: &str,
-        configs: &[DeviceConfig],
-    ) -> Result<SharedMemoryState> {
-        match SharedMemoryHandle::open(pod_identifier) {
+        let (restored_pids, existed) = match SharedMemoryHandle::open(pod_identifier) {
             Ok(handle) => {
                 debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
-                self.restore_pod_from_shared_memory(pod_identifier, handle)
+                let restored_pids = handle.get_state().get_all_pids();
+
+                if !restored_pids.is_empty() {
+                    debug!(
+                        pod_identifier = %pod_identifier,
+                        pids = ?restored_pids,
+                        "Found {} existing PIDs in shared memory",
+                        restored_pids.len()
+                    );
+                }
+
+                self.shared_memory_manager
+                    .register_existing_handle(pod_identifier, handle)?;
+
+                (restored_pids, true)
             }
             Err(_) => {
                 debug!(pod_identifier = %pod_identifier, "Creating new shared memory for pod");
-                self.create_new_pod_shared_memory(pod_identifier, configs)
+                self.shared_memory_manager
+                    .create_or_get_shared_memory(pod_identifier, &configs)?;
+                (Vec::new(), false)
             }
-        }
-    }
-
-    /// Restore pod state from existing shared memory
-    fn restore_pod_from_shared_memory(
-        &self,
-        pod_identifier: &str,
-        handle: SharedMemoryHandle,
-    ) -> Result<SharedMemoryState> {
-        let restored_pids = handle.get_state().get_all_pids();
-
-        if !restored_pids.is_empty() {
-            debug!(
-                pod_identifier = %pod_identifier,
-                pids = ?restored_pids,
-                "Found {} existing PIDs in shared memory",
-                restored_pids.len()
-            );
-        }
-
-        self.shared_memory_manager
-            .register_existing_handle(pod_identifier, handle)?;
-
-        Ok(SharedMemoryState {
-            existed: true,
-            restored_pids,
-        })
-    }
-
-    /// Create new shared memory for pod
-    fn create_new_pod_shared_memory(
-        &self,
-        pod_identifier: &str,
-        configs: &[DeviceConfig],
-    ) -> Result<SharedMemoryState> {
-        self.shared_memory_manager
-            .create_or_get_shared_memory(pod_identifier, configs)?;
-
-        Ok(SharedMemoryState {
-            existed: false,
-            restored_pids: Vec::new(),
-        })
-    }
-
-    /// Finalize pod registration with device usage and logging
-    async fn finalize_pod_registration(
-        &self,
-        pod_identifier: &str,
-        configs: Vec<DeviceConfig>,
-        shared_memory_state: SharedMemoryState,
-    ) -> Result<()> {
-        let mut pod_usage = PodDeviceUsage::new(configs.clone());
-
-        // Restore PIDs if any were found in existing shared memory
-        for pid in &shared_memory_state.restored_pids {
-            pod_usage.add_process(*pid as u32);
-        }
-
-        {
-            let mut active_pods = self.active_pods.write().await;
-            active_pods.insert(pod_identifier.to_string(), pod_usage);
-        }
+        };
 
         info!(
             pod_identifier = %pod_identifier,
             device_count = configs.len(),
-            restored_processes = shared_memory_state.restored_pids.len(),
-            shared_memory_existed = shared_memory_state.existed,
+            restored_processes = restored_pids.len(),
+            shared_memory_existed = existed,
             "Pod registered successfully"
         );
 
-        if !shared_memory_state.restored_pids.is_empty() {
+        if !restored_pids.is_empty() {
             info!(
                 pod_identifier = %pod_identifier,
-                restored_pid_count = shared_memory_state.restored_pids.len(),
+                restored_pid_count = restored_pids.len(),
                 "Restored {} processes from existing shared memory",
-                shared_memory_state.restored_pids.len()
+                restored_pids.len()
             );
         }
 
@@ -396,22 +322,15 @@ impl LimiterCoordinator {
         container_name: &str,
         container_pid: u32,
         host_pid: u32,
+        device_configs: Vec<DeviceConfig>,
     ) -> Result<()> {
-        let pod_identifier = pod_identifier.to_string();
+        self.ensure_pod_registered(pod_identifier, device_configs)
+            .await?;
 
-        {
-            let mut active_pods = self.active_pods.write().await;
-            let Some(pod_usage) = active_pods.get_mut(&pod_identifier) else {
-                return Err(anyhow::anyhow!(
-                    "Pod not found: {pod_identifier}. Must register pod first."
-                ));
-            };
-
-            pod_usage.add_process(host_pid);
-            let _ = self
-                .shared_memory_manager
-                .add_pid(&pod_identifier, host_pid as usize);
-        }
+        // Add PID to shared memory
+        self.shared_memory_manager
+            .add_pid(pod_identifier, host_pid as usize)
+            .context("Failed to add PID to shared memory")?;
 
         info!(
             pod_identifier = %pod_identifier,
@@ -426,19 +345,10 @@ impl LimiterCoordinator {
 
     /// Unregisters a single process from the coordinator.
     pub async fn unregister_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
-        let pod_identifier = pod_identifier.to_string();
-
-        let mut active_pods = self.active_pods.write().await;
-        if let Some(pod_usage) = active_pods.get_mut(&pod_identifier) {
-            if pod_usage.remove_process(host_pid) {
-                // process is empty, remove the pod
-                active_pods.remove(&pod_identifier);
-            }
-        }
-
-        let _ = self
-            .shared_memory_manager
-            .remove_pid(&pod_identifier, host_pid as usize);
+        // Remove PID from shared memory
+        self.shared_memory_manager
+            .remove_pid(pod_identifier, host_pid as usize)
+            .context("Failed to remove PID from shared memory")?;
 
         info!(
             pod_identifier = %pod_identifier,
@@ -446,16 +356,6 @@ impl LimiterCoordinator {
             "Unregistered process from coordinator"
         );
 
-        Ok(())
-    }
-
-    /// Unregisters a pod from the coordinator.
-    pub async fn unregister_pod(&self, pod_identifier: &str) -> Result<()> {
-        self.shared_memory_manager.cleanup(pod_identifier)?;
-        self.active_pods
-            .write()
-            .await
-            .remove(&pod_identifier.to_string());
         Ok(())
     }
 
@@ -559,8 +459,8 @@ impl LimiterCoordinator {
                     .running_compute_processes()
                     .context("Failed to get running compute processes")?;
 
-                let mut process_utilizations = std::collections::HashMap::new();
-                let mut process_memories = std::collections::HashMap::new();
+                let mut process_utilizations = HashMap::new();
+                let mut process_memories = HashMap::new();
                 let mut newest_timestamp = last_seen_timestamp;
 
                 // Process utilization data
@@ -621,7 +521,7 @@ impl LimiterCoordinator {
             loop {
                 tokio::select! {
                     _ = cleanup_interval.tick() => {
-                        tracing::debug!("Running periodic cleanup of unused shared memory segments");
+                        tracing::info!("Running periodic cleanup of unused shared memory segments");
 
                         if let Err(e) = shared_memory_manager.cleanup_orphaned_files(&shared_memory_glob_pattern) {
                             tracing::warn!("Failed to cleanup orphaned shared memory files: {}", e);
@@ -655,7 +555,7 @@ impl LimiterCoordinator {
 
     /// Starts the heartbeat task that updates heartbeat every 0.5 seconds
     pub async fn start_heartbeat_task(&self, cancellation_token: CancellationToken) {
-        let active_pods = self.active_pods.clone();
+        let pod_state_store = self.pod_state_store.clone();
         let heartbeat_interval = Duration::from_millis(500);
 
         let task = tokio::spawn(async move {
@@ -669,16 +569,22 @@ impl LimiterCoordinator {
                             .unwrap()
                             .as_secs();
 
-                        // Get all active pods
-                        let pods = {
-                            let active_pods_guard = active_pods.read().await;
-                            active_pods_guard.keys().cloned().collect::<Vec<String>>()
-                        };
+                        // Get all pod identifiers from state store
+                        let pod_identifiers = pod_state_store.list_pod_identifiers();
 
                         // Update heartbeat for each pod
-                        for pod_identifier in pods {
-                            if let Err(e) = Self::update_heartbeat_only(&pod_identifier, timestamp).await {
-                                debug!("Failed to update heartbeat for pod {}: {}", pod_identifier, e);
+                        for pod_identifier in pod_identifiers {
+                            if let Err(e) = Self::with_shared_memory_handle(&pod_identifier, move |state| {
+                                state.update_heartbeat(timestamp);
+                                Ok(())
+                                })
+                                .await
+                            {
+                                tracing::warn!(
+                                    pod_identifier = %pod_identifier,
+                                    error = %e,
+                                    "Failed to update heartbeat for pod"
+                                );
                             }
                         }
                     }
@@ -697,16 +603,6 @@ impl LimiterCoordinator {
         }
 
         info!("Started heartbeat task");
-    }
-
-    /// Updates only the heartbeat timestamp for a pod without modifying other state
-    async fn update_heartbeat_only(pod_identifier: &str, timestamp: u64) -> Result<()> {
-        let pod_identifier = pod_identifier.to_string();
-        Self::with_shared_memory_handle(&pod_identifier, move |state| {
-            state.update_heartbeat(timestamp);
-            Ok(())
-        })
-        .await
     }
 }
 

@@ -3,7 +3,6 @@
 ## Project-Specific Patterns
 
 - Use the 2024 edition of Rust
-- Prefer `derive_more` over manual trait implementations
 - Feature flags in this codebase use the `#[cfg(feature = "...")]` pattern
 - Invoke `cargo clippy` with `--all-features`, `--all-targets`, and `--no-deps` from the root
 - Use `cargo doc --no-deps --all-features` for checking documentation

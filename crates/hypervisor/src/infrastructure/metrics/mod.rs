@@ -153,16 +153,15 @@ pub(crate) async fn run_metrics(
                         for (gpu_uuid, process_metrics) in process_metrics_snapshot {
                             let worker_acc = worker_acc.entry(gpu_uuid.clone()).or_default();
                             for (pid, resources) in process_metrics.iter() {
-                                let pod_entry = pod_mgr.find_pod_by_worker_pid(*pid).await;
-                                if pod_entry.is_none() {
+                                let pod_identifier = pod_mgr.find_pod_by_worker_pid(*pid);
+                                if pod_identifier.is_none() {
                                     tracing::debug!(
                                         msg = "Failed to find worker, GPU may used by unknown process not managed by TensorFusion",
                                         pid = *pid,
                                     );
                                     continue;
                                 }
-                                let pod_entry = pod_entry.unwrap();
-                                let pod_identifier = pod_mgr.generate_pod_identifier_for_info(&pod_entry.info);
+                                let pod_identifier = pod_identifier.unwrap();
                                 let acc = worker_acc.entry(pod_identifier).or_default();
                                 acc.memory_bytes += resources.memory_bytes;
                                 acc.compute_percentage += resources.compute_percentage as f64;
@@ -201,10 +200,9 @@ pub(crate) async fn run_metrics(
                             }
 
                             // Output averaged worker metrics
-                            let pod_registry = pod_mgr.registry().read().await;
                             for (gpu_uuid, pod_metrics) in &worker_acc {
                                 for (pod_identifier, acc) in pod_metrics {
-                                    let Some(pod_entry) = pod_registry.get(pod_identifier) else {
+                                    let Some(pod_state) = pod_mgr.pod_state_store().get_pod(pod_identifier) else {
                                         tracing::warn!(
                                             target: "metrics",
                                             msg = "Failed to find pod",
@@ -213,7 +211,7 @@ pub(crate) async fn run_metrics(
                                         continue;
                                     };
 
-                                    let labels = &pod_entry.info.labels;
+                                    let labels = &pod_state.info.labels;
 
                                     if acc.count > 0 {
                                         let mut extra_labels = HashMap::new();
@@ -234,8 +232,8 @@ pub(crate) async fn run_metrics(
                                             node_name,
                                             gpu_pool,
                                             pod_identifier,
-                                                                                    &pod_entry.info.namespace,
-                                        pod_entry
+                                                                                    &pod_state.info.namespace,
+                                        pod_state
                                                 .info
                                                 .workload_name
                                                 .as_deref()
@@ -244,7 +242,7 @@ pub(crate) async fn run_metrics(
                                             acc.compute_percentage / acc.count as f64,
                                             acc.compute_tflops / acc.count as f64,
                                             (acc.memory_bytes as f64 / acc.count as f64)
-                                                / pod_entry.info.vram_limit.unwrap_or(0) as f64,
+                                                / pod_state.info.vram_limit.unwrap_or(0) as f64,
                                             timestamp,
                                             &extra_labels,
                                         );
