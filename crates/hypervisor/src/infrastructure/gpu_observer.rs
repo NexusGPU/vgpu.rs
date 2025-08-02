@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use anyhow::Result;
+use nvml_wrapper::enum_wrappers::device::Clock;
 use nvml_wrapper::enum_wrappers::device::PcieUtilCounter;
 use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
 use nvml_wrapper::enums::device::UsedGpuMemory;
@@ -28,6 +29,12 @@ pub struct GpuMetrics {
     pub tx: u32,
 
     pub temperature: u32,
+
+    // Clock frequencies in MHz
+    pub graphics_clock_mhz: u32,
+    pub sm_clock_mhz: u32,
+    pub memory_clock_mhz: u32,
+    pub video_clock_mhz: u32,
 
     pub resources: GpuResources,
 }
@@ -234,12 +241,22 @@ impl GpuObserver {
             // Get GPU utilization info
             let utilization = device.utilization_rates()?;
 
+            // Get GPU clock frequencies
+            let graphics_clock = device.clock_info(Clock::Graphics)?;
+            let sm_clock = device.clock_info(Clock::SM)?;
+            let memory_clock = device.clock_info(Clock::Memory)?;
+            let video_clock = device.clock_info(Clock::Video)?;
+
             gpu_metrics.insert(
                 gpu_uuid.clone(),
                 GpuMetrics {
                     rx,
                     tx,
                     temperature,
+                    graphics_clock_mhz: graphics_clock,
+                    sm_clock_mhz: sm_clock,
+                    memory_clock_mhz: memory_clock,
+                    video_clock_mhz: video_clock,
                     resources: GpuResources {
                         memory_bytes: memory_info.used,
                         compute_percentage: utilization.gpu,
