@@ -46,6 +46,10 @@ struct AccumulatedGpuMetrics {
     rx: f64,
     tx: f64,
     temperature: f64,
+    graphics_clock_mhz: f64,
+    sm_clock_mhz: f64,
+    memory_clock_mhz: f64,
+    video_clock_mhz: f64,
     memory_bytes: u64,
     compute_percentage: f64,
     compute_tflops: f64,
@@ -113,6 +117,10 @@ pub(crate) async fn run_metrics(
                             acc.rx += gpu.rx as f64;
                             acc.tx += gpu.tx as f64;
                             acc.temperature += gpu.temperature as f64;
+                            acc.graphics_clock_mhz += gpu.graphics_clock_mhz as f64;
+                            acc.sm_clock_mhz += gpu.sm_clock_mhz as f64;
+                            acc.memory_clock_mhz += gpu.memory_clock_mhz as f64;
+                            acc.video_clock_mhz += gpu.video_clock_mhz as f64;
                             acc.memory_bytes += gpu.resources.memory_bytes;
                             acc.compute_percentage += gpu.resources.compute_percentage as f64;
 
@@ -184,6 +192,10 @@ pub(crate) async fn run_metrics(
                                         acc.rx / acc.count as f64,
                                         acc.tx / acc.count as f64,
                                         acc.temperature / acc.count as f64,
+                                        acc.graphics_clock_mhz / acc.count as f64,
+                                        acc.sm_clock_mhz / acc.count as f64,
+                                        acc.memory_clock_mhz / acc.count as f64,
+                                        acc.video_clock_mhz / acc.count as f64,
                                         acc.memory_bytes / acc.count as u64,
                                         acc.compute_percentage / acc.count as f64,
                                         acc.compute_tflops / acc.count as f64,

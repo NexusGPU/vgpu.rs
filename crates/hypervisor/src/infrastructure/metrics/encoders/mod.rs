@@ -12,6 +12,10 @@ pub struct GpuMetricsParams<'a> {
     pub rx: f64,
     pub tx: f64,
     pub temperature: f64,
+    pub graphics_clock_mhz: f64,
+    pub sm_clock_mhz: f64,
+    pub memory_clock_mhz: f64,
+    pub video_clock_mhz: f64,
     pub memory_bytes: u64,
     pub compute_percentage: f64,
     pub compute_tflops: f64,
@@ -103,6 +107,16 @@ pub trait MetricsEncoder: Send + Sync {
         fields.insert("rx".to_string(), params.rx.into());
         fields.insert("tx".to_string(), params.tx.into());
         fields.insert("temperature".to_string(), params.temperature.into());
+        fields.insert(
+            "graphics_clock_mhz".to_string(),
+            params.graphics_clock_mhz.into(),
+        );
+        fields.insert("sm_clock_mhz".to_string(), params.sm_clock_mhz.into());
+        fields.insert(
+            "memory_clock_mhz".to_string(),
+            params.memory_clock_mhz.into(),
+        );
+        fields.insert("video_clock_mhz".to_string(), params.video_clock_mhz.into());
         fields.insert("memory_bytes".to_string(), params.memory_bytes.into());
         fields.insert(
             "compute_percentage".to_string(),
@@ -123,6 +137,10 @@ pub trait MetricsEncoder: Send + Sync {
         rx: f64,
         tx: f64,
         temperature: f64,
+        graphics_clock_mhz: f64,
+        sm_clock_mhz: f64,
+        memory_clock_mhz: f64,
+        video_clock_mhz: f64,
         memory_bytes: u64,
         compute_percentage: f64,
         compute_tflops: f64,
@@ -135,6 +153,10 @@ pub trait MetricsEncoder: Send + Sync {
             rx,
             tx,
             temperature,
+            graphics_clock_mhz,
+            sm_clock_mhz,
+            memory_clock_mhz,
+            video_clock_mhz,
             memory_bytes,
             compute_percentage,
             compute_tflops,
@@ -333,6 +355,10 @@ mod tests {
             100.5,
             200.5,
             75.0,
+            1200.0,
+            1100.0,
+            2000.0,
+            800.0,
             1024000000,
             85.5,
             12.5,
@@ -389,6 +415,10 @@ mod tests {
             150.0,
             250.0,
             80.0,
+            1300.0,
+            1150.0,
+            2100.0,
+            850.0,
             4096000000,
             95.0,
             20.0,
