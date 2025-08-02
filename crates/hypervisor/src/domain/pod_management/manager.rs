@@ -6,8 +6,7 @@ use std::time::Duration;
 use api_types::{QosLevel, WorkerInfo};
 use nvml_wrapper::Nvml;
 use tracing::{info, warn};
-use utils::shared_memory::handle::SharedMemoryHandle;
-use utils::shared_memory::DeviceConfig;
+use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig};
 
 use crate::core::types::HypervisorType;
 use crate::gpu_observer::GpuObserver;

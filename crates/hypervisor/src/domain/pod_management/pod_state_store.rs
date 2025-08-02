@@ -10,8 +10,7 @@ use api_types::WorkerInfo;
 use dashmap::DashMap;
 use tracing::debug;
 use tracing::info;
-use utils::shared_memory::handle::SharedMemoryHandle;
-use utils::shared_memory::DeviceConfig;
+use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig};
 
 use super::types::{PodManagementError, PodStatus, Result, SystemStats};
 

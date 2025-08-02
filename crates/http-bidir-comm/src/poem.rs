@@ -48,6 +48,7 @@ use poem::web::FromRequest;
 use poem::web::Path;
 use poem::IntoResponse;
 pub use poem::Route;
+use poem::{Request, Response};
 
 use crate::server::HttpServer;
 use crate::types::TaskResult;
@@ -72,7 +73,7 @@ where
 {
     // SSE events endpoint
     let srv_events = Arc::clone(&server);
-    let events_ep = make(move |req: poem::Request| {
+    let events_ep = make(move |req: Request| {
         let server = Arc::clone(&srv_events);
         async move {
             // Extract client_id from path
@@ -101,13 +102,13 @@ where
             let response = SSE::new(sse_stream)
                 .keep_alive(Duration::from_secs(15))
                 .into_response();
-            Ok::<poem::Response, poem::Error>(response)
+            Ok::<Response, poem::Error>(response)
         }
     });
 
     // Result submission endpoint
     let srv_submit = Arc::clone(&server);
-    let result_ep = make(move |req: poem::Request| {
+    let result_ep = make(move |req: Request| {
         let server = Arc::clone(&srv_submit);
         async move {
             // Extract body as bytes
@@ -116,9 +117,7 @@ where
             let result: TaskResult<R> = match serde_json::from_slice(&bytes) {
                 Ok(r) => r,
                 Err(_) => {
-                    return Ok::<poem::Response, poem::Error>(
-                        StatusCode::BAD_REQUEST.into_response(),
-                    );
+                    return Ok::<Response, poem::Error>(StatusCode::BAD_REQUEST.into_response());
                 }
             };
 
@@ -126,7 +125,7 @@ where
                 Ok(_) => StatusCode::OK,
                 Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
             };
-            Ok::<poem::Response, poem::Error>(status.into_response())
+            Ok::<Response, poem::Error>(status.into_response())
         }
     });
 

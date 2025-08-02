@@ -2,6 +2,7 @@
 
 use crate::config::GPU_CAPACITY_MAP;
 use anyhow::Result;
+use api_types::WorkerInfo;
 use cudarc::driver::sys::CUdevice_attribute;
 use cudarc::driver::CudaContext;
 use nvml_wrapper::Nvml;
@@ -12,7 +13,7 @@ const FACTOR: u32 = 64;
 
 /// Creates device configs from WorkerInfo (pod metadata) for pod-level registration
 pub async fn create_device_configs_from_worker_info(
-    worker_info: &api_types::WorkerInfo,
+    worker_info: &WorkerInfo,
     nvml: &Nvml,
 ) -> Result<Vec<DeviceConfig>> {
     let gpu_uuids = worker_info.gpu_uuids.as_deref().unwrap_or(&[]);

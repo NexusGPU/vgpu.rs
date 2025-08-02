@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use serde_json::json;
+use serde_json::{json, Map, Value};
 
 use super::FieldValue;
 use super::MetricsEncoder;
@@ -29,21 +29,17 @@ impl MetricsEncoder for JsonEncoder {
         timestamp: i64,
     ) -> String {
         // Convert FieldValue enum to proper JSON values without intermediate collection
-        let json_fields: serde_json::Map<String, serde_json::Value> = fields
+        let json_fields: Map<String, Value> = fields
             .iter()
             .map(|(k, v)| {
                 let json_value = match v {
-                    FieldValue::String(s) => serde_json::Value::String(s.clone()),
-                    FieldValue::Integer(i) => {
-                        serde_json::Value::Number(serde_json::Number::from(*i))
-                    }
-                    FieldValue::UnsignedInteger(u) => {
-                        serde_json::Value::Number(serde_json::Number::from(*u))
-                    }
-                    FieldValue::Float(f) => serde_json::Value::Number(
+                    FieldValue::String(s) => Value::String(s.clone()),
+                    FieldValue::Integer(i) => Value::Number(serde_json::Number::from(*i)),
+                    FieldValue::UnsignedInteger(u) => Value::Number(serde_json::Number::from(*u)),
+                    FieldValue::Float(f) => Value::Number(
                         serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0)),
                     ),
-                    FieldValue::Boolean(b) => serde_json::Value::Bool(*b),
+                    FieldValue::Boolean(b) => Value::Bool(*b),
                 };
                 (k.clone(), json_value)
             })

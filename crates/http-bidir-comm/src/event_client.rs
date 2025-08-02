@@ -12,6 +12,7 @@ use std::thread::sleep;
 use error_stack::ResultExt;
 use eventsource::reqwest::Client as EsClient;
 use reqwest::blocking::Client as BlockingClient;
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 use tracing::info;
 use tracing::trace;
@@ -35,8 +36,8 @@ pub struct BlockingSseClient<T, R> {
 
 impl<T, R> BlockingSseClient<T, R>
 where
-    T: for<'de> serde::Deserialize<'de> + serde::Serialize + Debug + Clone + 'static,
-    R: serde::Serialize + for<'de> serde::Deserialize<'de> + Debug + Clone + 'static,
+    T: for<'de> Deserialize<'de> + Serialize + Debug + Clone + 'static,
+    R: Serialize + for<'de> Deserialize<'de> + Debug + Clone + 'static,
 {
     /// create client
     pub fn new(config: ClientConfig) -> CommResult<Self> {

@@ -16,9 +16,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use utils::shared_memory::handle::SharedMemoryHandle;
-use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
-use utils::shared_memory::DeviceConfig;
+use utils::shared_memory::{
+    handle::SharedMemoryHandle, manager::ThreadSafeSharedMemoryManager, DeviceConfig,
+    SharedDeviceState,
+};
 
 use super::pod_state_store::PodStateStore;
 use super::types::DeviceUsage;
@@ -419,7 +420,7 @@ impl LimiterCoordinator {
     /// Helper method to safely access shared memory handles with consistent error handling
     async fn with_shared_memory_handle<T, F>(pod_identifier: &str, f: F) -> Result<T>
     where
-        F: FnOnce(&utils::shared_memory::SharedDeviceState) -> Result<T> + Send + 'static,
+        F: FnOnce(&SharedDeviceState) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
         let pod_identifier = pod_identifier.to_string();

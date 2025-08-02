@@ -10,8 +10,7 @@ use cudarc::driver::sys::CUresult;
 use cudarc::driver::sys::CUDA_ARRAY3D_DESCRIPTOR;
 use cudarc::driver::sys::CUDA_ARRAY_DESCRIPTOR;
 use tf_macro::hook_fn;
-use trap::Trap;
-use trap::TrapFrame;
+use trap::{Trap, TrapFrame};
 use utils::hooks::HookManager;
 use utils::replace_symbol;
 

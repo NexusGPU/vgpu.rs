@@ -12,6 +12,7 @@ use api_types::LimiterCommandType;
 use error_stack::Report;
 use http_bidir_comm::BlockingHttpClient;
 use http_bidir_comm::ClientConfig;
+use http_bidir_comm::CommError;
 use http_bidir_comm::TaskProcessor;
 use tracing::error;
 use tracing::info;
@@ -126,7 +127,7 @@ impl CommandHandler {
     /// # Errors
     ///
     /// Returns an error if the HTTP client cannot be created
-    pub fn new(config: CommandHandlerConfig) -> Result<Self, Report<http_bidir_comm::CommError>> {
+    pub fn new(config: CommandHandlerConfig) -> Result<Self, Report<CommError>> {
         info!(
             server_url = %config.client_config.server_url,
             limiter_id = %config.limiter_id,
@@ -148,7 +149,7 @@ impl CommandHandler {
     ///
     /// Returns an error if the handler encounters a fatal error that prevents it from continuing
     #[instrument(skip(self))]
-    pub fn start(&self) -> Result<(), Report<http_bidir_comm::CommError>> {
+    pub fn start(&self) -> Result<(), Report<CommError>> {
         info!("Starting command handler");
 
         // Use the same API path as the dispatcher

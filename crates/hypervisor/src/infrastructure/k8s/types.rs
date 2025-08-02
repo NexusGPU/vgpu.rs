@@ -1,6 +1,6 @@
 use core::error::Error;
 
-use crate::infrastructure::k8s::TensorFusionPodInfo;
+use super::pod_info::TensorFusionPodInfo;
 
 /// Represents updates to workers based on Kubernetes pod events.
 #[derive(Debug, Clone)]

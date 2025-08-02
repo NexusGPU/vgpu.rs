@@ -18,6 +18,7 @@ use trap::http::HttpTrapRequest;
 use trap::http::HttpTrapResponse;
 use trap::TrapAction;
 use trap::TrapError;
+use trap::TrapHandler;
 use trap::Waker;
 
 use super::auth::JwtAuthMiddleware;
@@ -33,7 +34,7 @@ pub struct ApiServer {
     pod_manager: Arc<PodManager>,
     listen_addr: String,
     jwt_config: JwtAuthConfig,
-    trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
+    trap_handler: Arc<dyn TrapHandler + Send + Sync + 'static>,
     command_dispatcher: Arc<CommandDispatcher>,
 }
 
@@ -43,7 +44,7 @@ impl ApiServer {
         pod_manager: Arc<PodManager>,
         listen_addr: String,
         jwt_config: JwtAuthConfig,
-        trap_handler: Arc<dyn trap::TrapHandler + Send + Sync + 'static>,
+        trap_handler: Arc<dyn TrapHandler + Send + Sync + 'static>,
         command_dispatcher: Arc<CommandDispatcher>,
     ) -> Self {
         Self {
@@ -141,7 +142,7 @@ impl Waker for SimpleWaker {
 #[poem::handler]
 async fn trap_endpoint(
     Json(req): Json<HttpTrapRequest>,
-    Data(handler): Data<&Arc<dyn trap::TrapHandler + Send + Sync + 'static>>,
+    Data(handler): Data<&Arc<dyn TrapHandler + Send + Sync + 'static>>,
 ) -> Json<HttpTrapResponse> {
     let waker = SimpleWaker::new();
     handler

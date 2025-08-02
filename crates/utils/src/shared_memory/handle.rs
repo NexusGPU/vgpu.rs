@@ -8,10 +8,12 @@ use shared_memory::ShmemConf;
 use shared_memory::ShmemError;
 use tracing::info;
 
+use super::{DeviceConfig, SharedDeviceState};
+
 /// Safely access shared memory, automatically handling the segment's lifecycle.
 pub struct SharedMemoryHandle {
     shmem: RefCell<Shmem>,
-    ptr: *mut super::SharedDeviceState,
+    ptr: *mut SharedDeviceState,
     identifier: String,
 }
 
@@ -19,12 +21,12 @@ impl SharedMemoryHandle {
     /// Opens an existing shared memory segment.
     pub fn open(identifier: &str) -> Result<Self> {
         let shmem = ShmemConf::new()
-            .size(std::mem::size_of::<super::SharedDeviceState>())
+            .size(std::mem::size_of::<SharedDeviceState>())
             .os_id(identifier)
             .open()
             .context("Failed to open shared memory")?;
 
-        let ptr = shmem.as_ptr() as *mut super::SharedDeviceState;
+        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
 
         Ok(Self {
             shmem: RefCell::new(shmem),
@@ -34,11 +36,11 @@ impl SharedMemoryHandle {
     }
 
     /// Creates a new shared memory segment.
-    pub fn create(identifier: &str, configs: &[super::DeviceConfig]) -> Result<Self> {
+    pub fn create(identifier: &str, configs: &[DeviceConfig]) -> Result<Self> {
         let old_umask = unsafe { libc::umask(0) };
 
         let shmem = match ShmemConf::new()
-            .size(std::mem::size_of::<super::SharedDeviceState>())
+            .size(std::mem::size_of::<SharedDeviceState>())
             .os_id(identifier)
             .mode(
                 Mode::S_IRUSR
@@ -54,7 +56,7 @@ impl SharedMemoryHandle {
             Err(ShmemError::LinkExists) => {
                 // If it already exists, try to open it.
                 ShmemConf::new()
-                    .size(std::mem::size_of::<super::SharedDeviceState>())
+                    .size(std::mem::size_of::<SharedDeviceState>())
                     .os_id(identifier)
                     .open()
                     .context("Failed to open existing shared memory")?
@@ -66,11 +68,11 @@ impl SharedMemoryHandle {
             libc::umask(old_umask);
         }
 
-        let ptr = shmem.as_ptr() as *mut super::SharedDeviceState;
+        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
 
         // Initialize the shared memory data.
         unsafe {
-            ptr.write(super::SharedDeviceState::new(configs));
+            ptr.write(SharedDeviceState::new(configs));
         }
 
         info!(
@@ -86,7 +88,7 @@ impl SharedMemoryHandle {
     }
 
     /// Gets a pointer to the shared device state.
-    pub fn get_ptr(&self) -> *mut super::SharedDeviceState {
+    pub fn get_ptr(&self) -> *mut SharedDeviceState {
         self.ptr
     }
 
@@ -95,7 +97,7 @@ impl SharedMemoryHandle {
     }
 
     /// Gets a reference to the shared device state.
-    pub fn get_state(&self) -> &super::SharedDeviceState {
+    pub fn get_state(&self) -> &SharedDeviceState {
         unsafe { &*self.ptr }
     }
 

@@ -4,6 +4,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
+use std::error::Error;
 use uuid::Uuid;
 
 /// Unique identifier for tasks.
@@ -129,5 +130,5 @@ pub trait TaskProcessor<T, R> {
     /// # Errors
     ///
     /// Returns an error if the task cannot be processed
-    fn process_task(&self, task: &T) -> Result<R, Box<dyn std::error::Error + Send + Sync>>;
+    fn process_task(&self, task: &T) -> Result<R, Box<dyn Error + Send + Sync>>;
 }

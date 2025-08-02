@@ -1,5 +1,6 @@
-use crate::shared_memory::bitmap::Bitmap;
 use std::mem::MaybeUninit;
+
+use crate::shared_memory::bitmap::Bitmap;
 
 /// A fixed-capacity indexed set that uses a bitmap to track occupied slots.
 /// This is more like a slot map or object pool than a traditional set.

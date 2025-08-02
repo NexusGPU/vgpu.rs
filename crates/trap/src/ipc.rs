@@ -11,11 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::TrapError;
-use ipc_channel::ipc;
-use ipc_channel::ipc::IpcOneShotServer;
-use ipc_channel::ipc::IpcReceiver;
-use ipc_channel::ipc::IpcReceiverSet;
-use ipc_channel::ipc::IpcSender;
+use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcReceiverSet, IpcSender};
 
 use crate::Trap;
 use crate::TrapAction;

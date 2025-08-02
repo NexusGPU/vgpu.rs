@@ -9,8 +9,7 @@ use tracing_appender::rolling::Rotation;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::Registry;
+use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 const DEFAULT_LOG_PREFIX: &str = "tf.log";
 const ENABLE_LOG_ENV_VAR: &str = "TF_ENABLE_LOG";
@@ -19,9 +18,7 @@ const LOG_LEVEL_ENV_VAR: &str = "TF_LOG_LEVEL";
 const LOG_OFF: &str = "off";
 
 /// initiate the global tracing subscriber
-pub fn get_fmt_layer(
-    log_path: Option<String>,
-) -> Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync> {
+pub fn get_fmt_layer(log_path: Option<String>) -> Box<dyn Layer<Registry> + Send + Sync> {
     let filter = match env::var(ENABLE_LOG_ENV_VAR).as_deref() {
         Ok(LOG_OFF) | Ok("0") | Ok("false") => EnvFilter::new(LOG_OFF),
         _ => EnvFilter::builder()

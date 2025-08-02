@@ -8,8 +8,7 @@ use std::sync::Arc;
 
 use error_stack::Report;
 use http_bidir_comm::poem;
-use http_bidir_comm::HttpServer;
-use http_bidir_comm::ServerConfig;
+use http_bidir_comm::{ClientStats, CommError, HttpServer, ServerConfig};
 use tracing::info;
 use tracing::instrument;
 
@@ -53,7 +52,7 @@ impl CommandDispatcher {
         &self,
         limiter_id: &str,
         kind: LimiterCommandType,
-    ) -> Result<u64, Report<http_bidir_comm::CommError>> {
+    ) -> Result<u64, Report<CommError>> {
         // Create a command with a unique ID
         let id = generate_command_id();
         let cmd = LimiterCommand { id, kind };
@@ -68,13 +67,13 @@ impl CommandDispatcher {
 
     /// Get statistics for all limiter clients.
     #[allow(dead_code)]
-    pub async fn get_all_stats(&self) -> HashMap<String, http_bidir_comm::ClientStats> {
+    pub async fn get_all_stats(&self) -> HashMap<String, ClientStats> {
         self.server.get_all_stats().await
     }
 
     /// Get statistics for a specific limiter client.
     #[allow(dead_code)]
-    pub async fn get_client_stats(&self, limiter_id: &str) -> Option<http_bidir_comm::ClientStats> {
+    pub async fn get_client_stats(&self, limiter_id: &str) -> Option<ClientStats> {
         self.server.get_client_stats(limiter_id).await
     }
 

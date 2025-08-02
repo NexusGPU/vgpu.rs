@@ -9,10 +9,12 @@ use spin::RwLock;
 use tracing::info;
 use tracing::warn;
 
+use super::{handle::SharedMemoryHandle, DeviceConfig, SharedDeviceState};
+
 /// A thread-safe shared memory manager.
 pub struct ThreadSafeSharedMemoryManager {
     /// Active shared memory segments: identifier -> Shmem
-    active_memories: RwLock<HashMap<String, super::handle::SharedMemoryHandle>>,
+    active_memories: RwLock<HashMap<String, SharedMemoryHandle>>,
 }
 
 impl Default for ThreadSafeSharedMemoryManager {
@@ -33,7 +35,7 @@ impl ThreadSafeSharedMemoryManager {
     pub fn create_or_get_shared_memory(
         &self,
         identifier: &str,
-        configs: &[super::DeviceConfig],
+        configs: &[DeviceConfig],
     ) -> Result<()> {
         let mut memories = self.active_memories.write();
 
@@ -42,7 +44,7 @@ impl ThreadSafeSharedMemoryManager {
             return Ok(());
         }
         // Create a new shared memory segment.
-        let shmem = super::handle::SharedMemoryHandle::create(identifier, configs)?;
+        let shmem = SharedMemoryHandle::create(identifier, configs)?;
 
         // Store the Shmem object and configuration.
         memories.insert(identifier.to_string(), shmem);
@@ -55,7 +57,7 @@ impl ThreadSafeSharedMemoryManager {
     pub fn register_existing_handle(
         &self,
         identifier: &str,
-        handle: super::handle::SharedMemoryHandle,
+        handle: SharedMemoryHandle,
     ) -> Result<()> {
         let mut memories = self.active_memories.write();
 
@@ -68,7 +70,7 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Gets a pointer to the shared memory by its identifier.
-    pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut super::SharedDeviceState> {
+    pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut SharedDeviceState> {
         self.with_memory_handle(identifier, |shmem| Ok(shmem.get_ptr()))
     }
 
@@ -91,7 +93,7 @@ impl ThreadSafeSharedMemoryManager {
     /// Helper method to safely access shared memory handles with error handling
     fn with_memory_handle<T, F>(&self, identifier: &str, f: F) -> Result<T>
     where
-        F: FnOnce(&super::handle::SharedMemoryHandle) -> Result<T>,
+        F: FnOnce(&SharedMemoryHandle) -> Result<T>,
     {
         let memories = self.active_memories.read();
         let shmem = memories
@@ -170,12 +172,12 @@ impl ThreadSafeSharedMemoryManager {
     /// Check if a shared memory segment is orphaned
     fn is_shared_memory_orphaned(&self, identifier: &str) -> Result<bool> {
         match ShmemConf::new()
-            .size(std::mem::size_of::<super::SharedDeviceState>())
+            .size(std::mem::size_of::<SharedDeviceState>())
             .os_id(identifier)
             .open()
         {
             Ok(shmem) => {
-                let ptr = shmem.as_ptr() as *const super::SharedDeviceState;
+                let ptr = shmem.as_ptr() as *const SharedDeviceState;
                 let is_orphaned = unsafe {
                     let state = &*ptr;
                     // Clean up orphaned locks before accessing shared data
