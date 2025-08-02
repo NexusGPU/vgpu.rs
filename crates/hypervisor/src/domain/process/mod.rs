@@ -15,15 +15,6 @@ pub struct GpuResources {
     pub(crate) memory_bytes: u64,
     /// GPU compute resource requirement (percentage 0-100)
     pub(crate) compute_percentage: u32,
-    /// Requested TFLOPS for the workload (from Kubernetes annotations)
-    #[allow(dead_code)]
-    pub(crate) tflops_request: Option<f64>,
-    /// Maximum TFLOPS limit for the workload (from Kubernetes annotations)
-    #[allow(dead_code)]
-    pub(crate) tflops_limit: Option<f64>,
-    /// Maximum memory limit in bytes (from Kubernetes annotations)
-    #[allow(dead_code)]
-    pub(crate) memory_limit: Option<u64>,
 }
 
 /// Process state

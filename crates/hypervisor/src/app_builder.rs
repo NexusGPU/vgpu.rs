@@ -64,17 +64,17 @@ impl ApplicationBuilder {
         // Create hypervisor, set 1 second scheduling interval
         let hypervisor = Arc::new(Hypervisor::new(scheduler, Duration::from_secs(1)));
 
+        // Create pod state store
+        let pod_state_store = Arc::new(PodStateStore::new());
+
         // Create GPU observer
-        let gpu_observer = GpuObserver::create(gpu_system.nvml.clone());
+        let gpu_observer = GpuObserver::create(gpu_system.nvml.clone(), pod_state_store.clone());
 
         // Create host PID probe
         let host_pid_probe = Arc::new(HostPidProbe::new(Duration::from_secs(1)));
 
         // Create command dispatcher
         let command_dispatcher = Arc::new(CommandDispatcher::new());
-
-        // Create pod state store
-        let pod_state_store = Arc::new(PodStateStore::new());
 
         // Create limiter coordinator
         let limiter_coordinator = Arc::new(LimiterCoordinator::new(
