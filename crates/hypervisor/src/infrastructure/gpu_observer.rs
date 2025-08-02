@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,6 +13,7 @@ use nvml_wrapper::Nvml;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::pod_management::PodStateStore;
 use crate::process::GpuResources;
 
 type ProcessId = u32;
@@ -42,6 +44,7 @@ pub struct GpuObserver {
     nvml: Arc<Nvml>,
     pub metrics: RwLock<Metrics>,
     senders: RwLock<Vec<mpsc::Sender<()>>>,
+    pod_state_store: Arc<PodStateStore>,
 }
 
 // Explicitly implement Send and Sync for GpuObserver
@@ -49,11 +52,12 @@ unsafe impl Send for GpuObserver {}
 unsafe impl Sync for GpuObserver {}
 
 impl GpuObserver {
-    pub(crate) fn create(nvml: Arc<Nvml>) -> Arc<Self> {
+    pub(crate) fn create(nvml: Arc<Nvml>, pod_state_store: Arc<PodStateStore>) -> Arc<Self> {
         Arc::new(Self {
             nvml,
             metrics: Default::default(),
             senders: Default::default(),
+            pod_state_store,
         })
     }
 
@@ -161,7 +165,7 @@ impl GpuObserver {
 
             let running_compute_processes = device.running_compute_processes()?;
 
-            for process_info in running_compute_processes {
+            for process_info in running_compute_processes.iter() {
                 if let UsedGpuMemory::Used(used) = process_info.used_gpu_memory {
                     process_metrics.insert(
                         process_info.pid,
@@ -193,12 +197,31 @@ impl GpuObserver {
                                 }
                                 _ => 0,
                             },
-                            tflops_request: None,
-                            tflops_limit: None,
-                            memory_limit: None,
                         },
                     );
                 }
+            }
+
+            let nvml_pids = running_compute_processes
+                .iter()
+                .map(|p| p.pid)
+                .collect::<HashSet<_>>();
+            let mut all_pids = HashSet::new();
+            for pod_identifier in self.pod_state_store.list_pod_identifiers() {
+                let pod_processes = self.pod_state_store.get_pod_processes(&pod_identifier);
+                all_pids.extend(pod_processes.iter().map(|p| p.host_pid));
+            }
+
+            let idle_pids = all_pids.difference(&nvml_pids);
+
+            for pid in idle_pids {
+                process_metrics.insert(
+                    *pid,
+                    GpuResources {
+                        memory_bytes: 0,
+                        compute_percentage: 0,
+                    },
+                );
             }
 
             let tx = device.pcie_throughput(PcieUtilCounter::Send)?;
@@ -206,7 +229,6 @@ impl GpuObserver {
 
             // Get GPU temperature
             let temperature = device.temperature(TemperatureSensor::Gpu)?;
-
             // Get GPU memory info
             let memory_info = device.memory_info()?;
             // Get GPU utilization info
@@ -221,9 +243,6 @@ impl GpuObserver {
                     resources: GpuResources {
                         memory_bytes: memory_info.used,
                         compute_percentage: utilization.gpu,
-                        tflops_request: None,
-                        tflops_limit: None,
-                        memory_limit: None,
                     },
                 },
             );

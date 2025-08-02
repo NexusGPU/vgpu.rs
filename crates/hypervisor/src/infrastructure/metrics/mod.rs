@@ -28,10 +28,7 @@ impl fmt::Display for BytesWrapper {
         match std::str::from_utf8(&self.0) {
             Ok(s) => write!(f, "{s}"),
             Err(_) => {
-                tracing::error!(
-                    target: "metrics",
-                    msg = "Failed to convert bytes to string",
-                );
+                tracing::error!(msg = "Failed to convert bytes to string",);
                 Err(fmt::Error)
             }
         }
@@ -204,7 +201,6 @@ pub(crate) async fn run_metrics(
                                 for (pod_identifier, acc) in pod_metrics {
                                     let Some(pod_state) = pod_mgr.pod_state_store().get_pod(pod_identifier) else {
                                         tracing::warn!(
-                                            target: "metrics",
                                             msg = "Failed to find pod",
                                             pod_identifier = %pod_identifier,
                                         );
@@ -232,8 +228,8 @@ pub(crate) async fn run_metrics(
                                             node_name,
                                             gpu_pool,
                                             pod_identifier,
-                                                                                    &pod_state.info.namespace,
-                                        pod_state
+                                            &pod_state.info.namespace,
+                                            pod_state
                                                 .info
                                                 .workload_name
                                                 .as_deref()
