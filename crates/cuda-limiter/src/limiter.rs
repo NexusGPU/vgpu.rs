@@ -4,10 +4,8 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use anyhow::Context;
 use cudarc::driver::sys::CUdevice;
 use dashmap::DashMap;
-use nvml_wrapper::error::nvml_try;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
@@ -105,8 +103,12 @@ impl Limiter {
     /// Get or initialize the shared memory handle (lazy initialization)
     fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
         self.shared_memory_handle.get_or_try_init(|| {
-            let pod_identifier = get_pod_identifier()?;
-            SharedMemoryHandle::open(&pod_identifier).map_err(Error::SharedMemory)
+            if crate::is_mock_mode() {
+                Ok(SharedMemoryHandle::mock(self.gpu_idx_uuids.clone()))
+            } else {
+                let pod_identifier = get_pod_identifier()?;
+                SharedMemoryHandle::open(&pod_identifier).map_err(Error::SharedMemory)
+            }
         })
     }
 
@@ -171,8 +173,10 @@ impl Limiter {
         if !state.has_device(raw_device_index) {
             return Err(Error::DeviceNotConfigured(raw_device_index));
         }
-        if !state.is_healthy(Duration::from_secs(2)) {
-            return Err(Error::DeviceNotHealthy(raw_device_index));
+        if !crate::is_mock_mode() {
+            if !state.is_healthy(Duration::from_secs(2)) {
+                return Err(Error::DeviceNotHealthy(raw_device_index));
+            }
         }
 
         // Exponential backoff parameters
@@ -217,8 +221,10 @@ impl Limiter {
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
 
-        if !state.is_healthy(Duration::from_secs(2)) {
-            return Err(Error::DeviceNotHealthy(raw_device_index));
+        if !crate::is_mock_mode() {
+            if !state.is_healthy(Duration::from_secs(2)) {
+                return Err(Error::DeviceNotHealthy(raw_device_index));
+            }
         }
 
         if let Some((used, limit)) = state.with_device(raw_device_index, |device| {
