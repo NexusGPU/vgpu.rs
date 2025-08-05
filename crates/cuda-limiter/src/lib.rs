@@ -139,7 +139,7 @@ fn init_ngpu_library() {
         // after limiter initialized, remove CUDA_VISIBLE_DEVICES to avoid confusion with nvml index related hook
         // after hooks installed, only specific devices will be visible, no need to set CUDA_VISIBLE_DEVICES
         // std::env::remove_var("CUDA_VISIBLE_DEVICES");
-        GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
+        // GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
     });
 }
 
