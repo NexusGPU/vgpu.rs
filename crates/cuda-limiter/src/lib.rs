@@ -237,18 +237,18 @@ fn init_hooks() {
     }
 
     // Install dlsym hook to catch dynamic library loading
-    static DLSYM_HOOK_ONCE: Once = Once::new();
-    DLSYM_HOOK_ONCE.call_once(|| unsafe {
-        replace_symbol!(
-            &mut hook_manager,
-            None,
-            "dlsym",
-            dlsym_detour,
-            FnDlsym,
-            FN_DLSYM
-        );
-    });
-    tracing::debug!("Hook initialization completed");
+    // static DLSYM_HOOK_ONCE: Once = Once::new();
+    // DLSYM_HOOK_ONCE.call_once(|| unsafe {
+    //     replace_symbol!(
+    //         &mut hook_manager,
+    //         None,
+    //         "dlsym",
+    //         dlsym_detour,
+    //         FnDlsym,
+    //         FN_DLSYM
+    //     );
+    // });
+    // tracing::debug!("Hook initialization completed");
 }
 
 thread_local! {
