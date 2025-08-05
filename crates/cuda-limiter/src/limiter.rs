@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -110,7 +111,13 @@ impl Limiter {
             Ok(dev_idx_uuid.0)
         } else {
             let uuid = culib::device_uuid(cu_device).map_err(Error::Cuda)?;
-            let device = self.nvml.device_by_uuid(uuid.as_str())?;
+            let nvml = Nvml::builder()
+            .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
+                    OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
+                ))
+                .init()
+                .unwrap();
+            let device = nvml.device_by_uuid(uuid.as_str())?;
             let index = device.index()?;
             self.cu_device_mapping
                 .insert(cu_device, (index as usize, uuid));
