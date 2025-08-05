@@ -78,10 +78,9 @@ impl Limiter {
         let mut uuid_mapping = HashMap::new();
 
         for i in 0..gpu_uuids.len() {
-            let (cu_uuid, cu_device) = culib::device_info(i as i32).unwrap();
+            let res = unsafe { culib::cu_init(0) };
 
-            tracing::info!("Device {i} UUID: {}", cu_uuid);
-            tracing::info!("Device {i} device: {}", cu_device);
+            tracing::info!("Device {i} init: {:?}", res);
 
             // if gpu_uuids.contains(&cu_uuid) {
             //     let device = nvml.device_by_uuid(cu_uuid.as_str())?;
@@ -91,6 +90,7 @@ impl Limiter {
             //     cu_device_mapping.insert(cu_device, (index, cu_uuid.clone()));
             // }
         }
+
 
         detour::GLOBAL_DEVICE_UUIDS
             .set(uuid_mapping)
