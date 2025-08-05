@@ -12,6 +12,8 @@ use once_cell::sync::OnceCell;
 use trap::TrapError;
 use utils::shared_memory::handle::SharedMemoryHandle;
 
+use crate::culib;
+
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
     #[error("Trap error: `{0}`")]
@@ -104,10 +106,16 @@ impl Limiter {
     }
 
     pub(crate) fn device_index_by_cu_device(&self, cu_device: CUdevice) -> Result<usize, Error> {
-        self.cu_device_mapping
-            .get(&cu_device)
-            .ok_or(Error::InvalidCuDevice(cu_device))
-            .map(|dev_idx_uuid| dev_idx_uuid.0)
+        if let Some(dev_idx_uuid) = self.cu_device_mapping.get(&cu_device) {
+            Ok(dev_idx_uuid.0)
+        } else {
+            let uuid = culib::device_uuid(cu_device).map_err(Error::Cuda)?;
+            let device = self.nvml.device_by_uuid(uuid.as_str())?;
+            let index = device.index()?;
+            self.cu_device_mapping
+                .insert(cu_device, (index as usize, uuid));
+            Ok(index as usize)
+        }
     }
 
     /// Rate limiter that waits for available CUDA cores with exponential backoff
@@ -188,12 +196,8 @@ impl Limiter {
 
     /// Get the memory limit for a specific device
     pub(crate) fn get_pod_memory_usage_cu(&self, cu_device: CUdevice) -> Result<(u64, u64), Error> {
-        let dev_idx_uuid = self
-            .cu_device_mapping
-            .get(&cu_device)
-            .ok_or(Error::InvalidCuDevice(cu_device))?;
-
-        self.get_pod_memory_usage(dev_idx_uuid.0)
+        let dev_idx = self.device_index_by_cu_device(cu_device)?;
+        self.get_pod_memory_usage(dev_idx)
     }
 
     /// Get the NVML device handle for a specific device
