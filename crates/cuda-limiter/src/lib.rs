@@ -156,6 +156,10 @@ fn try_install_nvml_hooks() {
 }
 
 fn init_hooks() {
+    unsafe {
+        // Load CUDA library to ensure it's loaded before hooks are installed
+        let _ = culib::culib();
+    }
     init_ngpu_library();
 
     // Try to install hooks immediately if libraries are already loaded

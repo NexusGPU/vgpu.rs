@@ -3,8 +3,6 @@ use cudarc::driver::sys::CUresult;
 use cudarc::driver::sys::CUuuid;
 use cudarc::driver::sys::Lib;
 use libloading::Library;
-use std::ffi::c_int;
-use std::ffi::c_uint;
 
 pub unsafe fn culib() -> &'static Lib {
     let lib_path = std::env::var("TF_CUDA_LIB_PATH")
