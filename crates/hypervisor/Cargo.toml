@@ -36,7 +36,7 @@ tokio-stream = "0.1.15"
 tower = { workspace = true }
 hyper-util = { version = "0.1", features = ["tokio"] }
 schemars = { workspace = true }
-notify = "8.1"
+notify = "8.2"
 cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
 libc = { workspace = true }
 ratatui = "0.29"
