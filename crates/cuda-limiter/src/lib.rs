@@ -126,7 +126,7 @@ fn init_ngpu_library() {
             }
         }
 
-        let limiter = match Limiter::new(nvml, &config.gpu_uuids) {
+        let _ = match Limiter::new(nvml, &config.gpu_uuids) {
             Ok(limiter) => limiter,
             Err(err) => {
                 tracing::error!("failed to init limiter, err: {err}, skip hooks");
@@ -140,7 +140,7 @@ fn init_ngpu_library() {
         // after hooks installed, only specific devices will be visible, no need to set CUDA_VISIBLE_DEVICES
         std::env::remove_var("CUDA_VISIBLE_DEVICES");
         std::env::remove_var("NVIDIA_VISIBLE_DEVICES");
-        GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
+        // GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
     });
 }
 
