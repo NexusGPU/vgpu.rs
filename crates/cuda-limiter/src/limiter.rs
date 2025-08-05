@@ -73,25 +73,24 @@ impl std::fmt::Debug for Limiter {
 
 impl Limiter {
     /// Creates a new Limiter instance
-    pub(crate) fn new(nvml: Nvml, _gpu_uuids: &[String]) -> Result<Self, Error> {
-        let cu_device_mapping = BTreeMap::new();
-        let uuid_mapping = HashMap::new();
+    pub(crate) fn new(nvml: Nvml, gpu_uuids: &[String]) -> Result<Self, Error> {
+        let mut cu_device_mapping = BTreeMap::new();
+        let mut uuid_mapping = HashMap::new();
 
-        let lib = unsafe { culib::culib() };
+        for i in 0..gpu_uuids.len() {
+            let (cu_uuid, cu_device) = culib::device_info(i as i32).unwrap();
 
-        tracing::info!("CUDA library addr: {:?}", lib as *const _ as usize);
+            tracing::info!("Device {i} UUID: {}", cu_uuid);
+            tracing::info!("Device {i} device: {}", cu_device);
 
-        // for i in 0..gpu_uuids.len() {
-        //     let (cu_uuid, cu_device) = culib::device_info(i as i32).unwrap();
-
-        //     if gpu_uuids.contains(&cu_uuid) {
-        //         let device = nvml.device_by_uuid(cu_uuid.as_str())?;
-        //         let index = device.index()?;
-        //         uuid_mapping.insert(i as i32, cu_uuid.clone());
-        //         tracing::info!("Device {i} UUID: {}", cu_uuid);
-        //         cu_device_mapping.insert(cu_device, (index, cu_uuid.clone()));
-        //     }
-        // }
+            // if gpu_uuids.contains(&cu_uuid) {
+            //     let device = nvml.device_by_uuid(cu_uuid.as_str())?;
+            //     let index = device.index()?;
+            //     uuid_mapping.insert(i as i32, cu_uuid.clone());
+            //     tracing::info!("Device {i} UUID: {}", cu_uuid);
+            //     cu_device_mapping.insert(cu_device, (index, cu_uuid.clone()));
+            // }
+        }
 
         detour::GLOBAL_DEVICE_UUIDS
             .set(uuid_mapping)
