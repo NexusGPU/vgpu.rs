@@ -10,12 +10,14 @@ use dashmap::DashMap;
 use nvml_wrapper::error::nvml_try;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
+use nvml_wrapper_sys::bindings::nvmlDevice_st;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
 use once_cell::sync::OnceCell;
 use trap::TrapError;
 use utils::shared_memory::handle::SharedMemoryHandle;
 
 use crate::culib;
+use crate::detour::nvml::FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2;
 use crate::detour::nvml::FN_NVML_DEVICE_GET_INDEX;
 
 #[derive(thiserror::Error, Debug)]
@@ -262,19 +264,20 @@ impl Limiter {
         &self,
         device_handle: nvmlDevice_t,
     ) -> Result<Option<usize>, NvmlError> {
-        for dev_idx_uuid in self.cu_device_mapping.iter() {
-            let dev = self.nvml.device_by_index(dev_idx_uuid.0 as u32);
-            match dev {
-                Ok(dev) => {
-                    let handle = unsafe { dev.handle() };
-                    if handle == device_handle {
-                        return Ok(self.raw_index_to_ordinal(dev_idx_uuid.0));
+        for (idx, uuid) in self.gpu_idx_uuids.iter() {
+            let mut raw_dev = device_handle.clone();
+            match nvml_try(unsafe {
+                FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(*idx as u32, &mut raw_dev)
+            }) {
+                Ok(_) => {
+                    if raw_dev == device_handle {
+                        return Ok(self.raw_index_to_ordinal(*idx));
                     }
                 }
                 Err(e) => {
                     tracing::warn!(
                         "Failed to get device by uuid {}: {}, skipped",
-                        dev_idx_uuid.1,
+                        uuid,
                         e
                     );
                     continue;
