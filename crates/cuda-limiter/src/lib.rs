@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CStr;
@@ -66,6 +67,10 @@ fn are_hooks_enabled() -> (bool, bool) {
     (enable_nvml_hooks, enable_cuda_hooks)
 }
 
+fn is_mock_mode() -> bool {
+    std::env::var("CUDA_LIMITER_MOCK_MODE").is_ok()
+}
+
 fn init_ngpu_library() {
     static NGPU_INITIALIZED: Once = Once::new();
     NGPU_INITIALIZED.call_once(|| {
@@ -83,20 +88,32 @@ fn init_ngpu_library() {
                 }
             };
 
-        let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
-            Some((ip, port)) => (ip, port),
-            None => {
-                tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
-                return;
-            }
-        };
+        let config = if !is_mock_mode() {
+            let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
+                Some((ip, port)) => (ip, port),
+                None => {
+                    tracing::info!(
+                        "HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler"
+                    );
+                    return;
+                }
+            };
 
-        // Get device indices from environment variable
-        let config = match config::get_worker_config(&hypervisor_ip, &hypervisor_port) {
-            Ok(config) => config,
-            Err(err) => {
-                tracing::error!("failed to get device configs: {err}");
-                return;
+            // Get device indices from environment variable
+            let config = match config::get_worker_config(&hypervisor_ip, &hypervisor_port) {
+                Ok(config) => config,
+                Err(err) => {
+                    tracing::error!("failed to get device configs: {err}");
+                    return;
+                }
+            };
+            config
+        } else {
+            let dev = nvml.device_by_index(1).unwrap();
+            let uuid = dev.uuid().unwrap().to_string();
+            config::DeviceConfigResult {
+                gpu_uuids: vec![uuid],
+                host_pid: 0,
             }
         };
 

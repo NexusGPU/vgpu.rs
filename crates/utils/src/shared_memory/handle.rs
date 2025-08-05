@@ -18,6 +18,49 @@ pub struct SharedMemoryHandle {
 }
 
 impl SharedMemoryHandle {
+    /// Creates a mock SharedMemoryHandle with predefined test data.
+    /// This function is useful for testing without requiring actual shared memory.
+    pub fn mock(gpu_idx_uuids: Vec<(usize, String)>) -> Self {
+        // Create mock configs for testing
+        let mock_configs: Vec<_> = gpu_idx_uuids
+            .iter()
+            .map(|(idx, uuid)| {
+                DeviceConfig {
+                    device_idx: *idx as u32,
+                    device_uuid: uuid.clone(),
+                    up_limit: 80,
+                    mem_limit: 8 * 1024 * 1024 * 1024, // 8GB
+                    sm_count: 82,
+                    max_thread_per_sm: 1536,
+                    total_cuda_cores: 2048,
+                }
+            })
+            .collect();
+
+        // Create a temporary shared memory segment for the mock
+        let mock_identifier = format!("mock_shm_{}", std::process::id());
+
+        // Create actual shared memory to get a valid pointer
+        let shmem = ShmemConf::new()
+            .size(std::mem::size_of::<SharedDeviceState>())
+            .os_id(&mock_identifier)
+            .create()
+            .expect("Failed to create mock shared memory");
+
+        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
+
+        // Initialize with mock data
+        unsafe {
+            ptr.write(SharedDeviceState::new(&mock_configs));
+        }
+
+        Self {
+            shmem: RefCell::new(shmem),
+            ptr,
+            identifier: mock_identifier,
+        }
+    }
+
     /// Opens an existing shared memory segment.
     pub fn open(identifier: &str) -> Result<Self> {
         let shmem = ShmemConf::new()
