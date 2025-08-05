@@ -82,6 +82,7 @@ fn init_ngpu_library() {
                     return;
                 }
             };
+        tracing::info!("NVML initialized, device count: {}", nvml.device_count().unwrap());
         GLOBAL_LIMITER
             .set(Limiter::new(nvml))
             .expect("set GLOBAL_LIMITER");
