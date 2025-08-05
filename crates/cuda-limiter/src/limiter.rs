@@ -77,6 +77,10 @@ impl Limiter {
         let cu_device_mapping = BTreeMap::new();
         let uuid_mapping = HashMap::new();
 
+        let lib = unsafe { culib::culib() };
+
+        tracing::info!("CUDA library addr: {:?}", lib as *const _ as usize);
+
         // for i in 0..gpu_uuids.len() {
         //     let (cu_uuid, cu_device) = culib::device_info(i as i32).unwrap();
 
