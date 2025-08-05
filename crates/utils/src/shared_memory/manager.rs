@@ -198,7 +198,8 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Remove an orphaned shared memory file
-    fn remove_orphaned_file(&self, file_path: &std::path::Path, _identifier: &str) -> Result<()> {
+    fn remove_orphaned_file(&self, file_path: &std::path::Path, identifier: &str) -> Result<()> {
+        self.active_memories.write().remove(identifier);
         std::fs::remove_file(file_path)
             .context(format!("Failed to remove file {}", file_path.display()))?;
         info!(

@@ -399,7 +399,6 @@ impl LimiterCoordinator {
             state.update_heartbeat(timestamp);
             Ok(())
         })
-        .await
     }
 
     /// Gets available cores for a device efficiently
@@ -414,24 +413,19 @@ impl LimiterCoordinator {
                     "Device {device_uuid} not found in shared memory for pod {pod_id_clone}. This indicates a system state inconsistency."
                 ))
         })
-        .await
     }
 
     /// Helper method to safely access shared memory handles with consistent error handling
-    async fn with_shared_memory_handle<T, F>(pod_identifier: &str, f: F) -> Result<T>
+    fn with_shared_memory_handle<T, F>(pod_identifier: &str, f: F) -> Result<T>
     where
         F: FnOnce(&SharedDeviceState) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
         let pod_identifier = pod_identifier.to_string();
-        tokio::task::spawn_blocking(move || {
-            let handle = SharedMemoryHandle::open(&pod_identifier)
-                .context("Failed to open shared memory")?;
-            let state = handle.get_state();
-            f(state)
-        })
-        .await
-        .context("Blocking task failed")?
+        let handle =
+            SharedMemoryHandle::open(&pod_identifier).context("Failed to open shared memory")?;
+        let state = handle.get_state();
+        f(state)
     }
 
     /// Gets a complete snapshot of device state (utilization + memory)
@@ -578,8 +572,7 @@ impl LimiterCoordinator {
                             if let Err(e) = Self::with_shared_memory_handle(&pod_identifier, move |state| {
                                 state.update_heartbeat(timestamp);
                                 Ok(())
-                                })
-                                .await
+                            })
                             {
                                 tracing::warn!(
                                     pod_identifier = %pod_identifier,
