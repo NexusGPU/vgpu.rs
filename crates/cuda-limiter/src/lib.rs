@@ -121,20 +121,20 @@ fn init_ngpu_library() {
                     "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
                     &visible_devices
                 );
-                std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
-                std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+                // std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
+                // std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
             }
         }
 
-        let limiter = match Limiter::new(nvml, &config.gpu_uuids) {
-            Ok(limiter) => limiter,
-            Err(err) => {
-                tracing::error!("failed to init limiter, err: {err}, skip hooks");
-                HOOKS_INITIALIZED.0.store(true, Ordering::Release);
-                HOOKS_INITIALIZED.1.store(true, Ordering::Release);
-                return;
-            }
-        };
+        // let limiter = match Limiter::new(nvml, &config.gpu_uuids) {
+        //     Ok(limiter) => limiter,
+        //     Err(err) => {
+        //         tracing::error!("failed to init limiter, err: {err}, skip hooks");
+        //         HOOKS_INITIALIZED.0.store(true, Ordering::Release);
+        //         HOOKS_INITIALIZED.1.store(true, Ordering::Release);
+        //         return;
+        //     }
+        // };
 
         // after limiter initialized, remove CUDA_VISIBLE_DEVICES to avoid confusion with nvml index related hook
         // after hooks installed, only specific devices will be visible, no need to set CUDA_VISIBLE_DEVICES
