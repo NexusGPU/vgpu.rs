@@ -102,8 +102,8 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
     tracing::info!("Device UUIDs: {:?}", device_uuids);
 
     // Try to check if the shared memory is healthy
-    let is_healthy = state.is_healthy(Duration::from_secs(60)); // 60 seconds timeout
-    tracing::info!("Shared memory health status (60s timeout): {}", is_healthy);
+    let is_healthy = state.is_healthy(Duration::from_secs(2)); // 60 seconds timeout
+    tracing::info!("Shared memory health status (2s timeout): {}", is_healthy);
 
     // Print version information
     let version = state.get_version();

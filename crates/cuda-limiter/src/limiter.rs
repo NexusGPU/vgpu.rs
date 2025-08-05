@@ -126,7 +126,7 @@ impl Limiter {
         if !state.has_device(device_uuid) {
             return Err(Error::DeviceNotConfigured(device_uuid.to_string()));
         }
-        if !state.is_healthy(Duration::from_secs(1)) {
+        if !state.is_healthy(Duration::from_secs(2)) {
             return Err(Error::DeviceNotHealthy(device_uuid.to_string()));
         }
 
@@ -167,7 +167,7 @@ impl Limiter {
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
 
-        if !state.is_healthy(Duration::from_secs(1)) {
+        if !state.is_healthy(Duration::from_secs(2)) {
             return Err(Error::DeviceNotHealthy(device_uuid.to_string()));
         }
 

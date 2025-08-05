@@ -363,10 +363,15 @@ impl SharedDeviceState {
 impl SharedDeviceStateV1 {
     /// Creates a new SharedDeviceStateV1 instance.
     pub fn new(configs: &[DeviceConfig]) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         let state = Self {
             devices: std::array::from_fn(|_| DeviceEntry::new()),
             device_count: AtomicU32::new(0),
-            last_heartbeat: AtomicU64::new(0),
+            last_heartbeat: AtomicU64::new(now),
             pids: ShmMutex::new(Set::new()),
         };
 
