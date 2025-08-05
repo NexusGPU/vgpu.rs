@@ -3,6 +3,7 @@ use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::OsStr;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -99,6 +100,33 @@ fn init_ngpu_library() {
                 return;
             }
         };
+
+        if !config.gpu_uuids.is_empty() {
+            let lower_case_uuids: HashSet<_> =
+                config.gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
+            let device_count = nvml.device_count().expect("failed to get device count");
+
+            let mut device_indices = Vec::new();
+            for i in 0..device_count {
+                let device = nvml
+                    .device_by_index(i)
+                    .expect("failed to get device by index");
+                let uuid = device.uuid().expect("failed to get device uuid");
+                if lower_case_uuids.contains(&uuid.to_lowercase()) {
+                    device_indices.push(i.to_string());
+                }
+            }
+
+            if !device_indices.is_empty() {
+                let visible_devices = device_indices.join(",");
+                tracing::info!(
+                    "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
+                    &visible_devices
+                );
+                std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
+                std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+            }
+        }
 
         let limiter = Limiter::new(nvml, config.gpu_uuids).expect("failed to initialize Limiter");
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
