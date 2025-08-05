@@ -18,7 +18,7 @@ macro_rules! with_device {
                 .get()
                 .expect("Limiter not initialized");
 
-            let device_index = limiter.device_index_by_cu_device(device);
+            let device_index = limiter.device_raw_index_by_cu_device(device);
 
             if let Err(e) = device_index {
                 panic!("Failed to get device index: {}", e);

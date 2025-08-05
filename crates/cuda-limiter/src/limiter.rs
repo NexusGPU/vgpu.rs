@@ -4,8 +4,10 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use anyhow::Context;
 use cudarc::driver::sys::CUdevice;
 use dashmap::DashMap;
+use nvml_wrapper::error::nvml_try;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
@@ -14,6 +16,7 @@ use trap::TrapError;
 use utils::shared_memory::handle::SharedMemoryHandle;
 
 use crate::culib;
+use crate::detour::nvml::FN_NVML_DEVICE_GET_INDEX;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
@@ -64,6 +67,8 @@ pub(crate) struct Limiter {
     current_devices_dim: HashMap<usize, DeviceDim>,
     /// CUDA device mapping (CUdevice -> (device_index, device_uuid))
     cu_device_mapping: DashMap<CUdevice, (usize, String)>,
+    /// GPU UUIDs
+    gpu_idx_uuids: Vec<(usize, String)>,
 }
 
 impl std::fmt::Debug for Limiter {
@@ -74,13 +79,40 @@ impl std::fmt::Debug for Limiter {
 
 impl Limiter {
     /// Creates a new Limiter instance
-    pub(crate) fn new(nvml: Nvml) -> Self {
-        Self {
+    pub(crate) fn new(nvml: Nvml, mut gpu_uuids: Vec<String>) -> Result<Self, Error> {
+        gpu_uuids.sort();
+        gpu_uuids.dedup();
+
+        let mut gpu_idx_uuids = Vec::new();
+        for uuid in gpu_uuids.into_iter() {
+            let device = nvml.device_by_uuid(uuid.as_str())?;
+            let index = device.index()?;
+            gpu_idx_uuids.push((index as usize, uuid));
+        }
+        tracing::info!(
+            "Limiter initialized with GPU UUIDs and indices: {:?}",
+            gpu_idx_uuids
+        );
+
+        Ok(Self {
             shared_memory_handle: OnceCell::new(),
             current_devices_dim: HashMap::new(),
             nvml,
             cu_device_mapping: DashMap::new(),
-        }
+            gpu_idx_uuids,
+        })
+    }
+
+    pub(crate) fn ordinal_to_index(&self, ordinal: usize) -> Option<usize> {
+        self.gpu_idx_uuids.get(ordinal).map(|(index, _)| *index)
+    }
+
+    fn index_to_ordinal(&self, index: usize) -> Option<usize> {
+        self.gpu_idx_uuids
+            .iter()
+            .enumerate()
+            .find(|(_, (idx, _))| *idx == index)
+            .map(|(ordinal, _)| ordinal)
     }
 
     /// Get or initialize the shared memory handle (lazy initialization)
@@ -98,27 +130,42 @@ impl Limiter {
     ) -> Result<(), Error> {
         if !self.cu_device_mapping.contains_key(&cu_device) {
             let device_uuid = f()?;
-            let device = self.nvml.device_by_uuid(device_uuid.as_str())?;
-            let index = device.index()?;
+            let nvml = Nvml::builder()
+                .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
+                    OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
+                ))
+                .init()
+                .unwrap();
+
+            let device = nvml.device_by_uuid(device_uuid.as_str())?;
+            let mut raw_index = 0;
+            nvml_try(unsafe { FN_NVML_DEVICE_GET_INDEX(device.handle(), &mut raw_index) })
+                .context("get index in insert_cu_device_if_not_exists")?;
             self.cu_device_mapping
-                .insert(cu_device, (index as usize, device_uuid));
+                .insert(cu_device, (raw_index as usize, device_uuid));
         }
         Ok(())
     }
 
-    pub(crate) fn device_index_by_cu_device(&self, cu_device: CUdevice) -> Result<usize, Error> {
+    pub(crate) fn device_raw_index_by_cu_device(
+        &self,
+        cu_device: CUdevice,
+    ) -> Result<usize, Error> {
         if let Some(dev_idx_uuid) = self.cu_device_mapping.get(&cu_device) {
             Ok(dev_idx_uuid.0)
         } else {
             let uuid = culib::device_uuid(cu_device).map_err(Error::Cuda)?;
             let nvml = Nvml::builder()
-            .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
+                .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
                     OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
                 ))
                 .init()
                 .unwrap();
             let device = nvml.device_by_uuid(uuid.as_str())?;
-            let index = device.index()?;
+            let mut raw_index = 0;
+            nvml_try(unsafe { FN_NVML_DEVICE_GET_INDEX(device.handle(), &mut raw_index) })
+                .context("get index in device_raw_index_by_cu_device")?;
+            let index = raw_index as usize;
             self.cu_device_mapping
                 .insert(cu_device, (index as usize, uuid));
             Ok(index as usize)
@@ -128,7 +175,7 @@ impl Limiter {
     /// Rate limiter that waits for available CUDA cores with exponential backoff
     pub(crate) fn rate_limiter(
         &self,
-        device_index: usize,
+        raw_device_index: usize,
         grids: u32,
         _blocks: u32,
     ) -> Result<(), Error> {
@@ -139,11 +186,11 @@ impl Limiter {
         let state = handle.get_state();
 
         // Check if device exists, return error instead of panic
-        if !state.has_device(device_index) {
-            return Err(Error::DeviceNotConfigured(device_index));
+        if !state.has_device(raw_device_index) {
+            return Err(Error::DeviceNotConfigured(raw_device_index));
         }
         if !state.is_healthy(Duration::from_secs(2)) {
-            return Err(Error::DeviceNotHealthy(device_index));
+            return Err(Error::DeviceNotHealthy(raw_device_index));
         }
 
         // Exponential backoff parameters
@@ -153,18 +200,18 @@ impl Limiter {
 
         loop {
             let available = state
-                .with_device(device_index, |device| {
+                .with_device(raw_device_index, |device| {
                     device.device_info.get_available_cores()
                 })
-                .ok_or_else(|| Error::DeviceNotConfigured(device_index))?;
+                .ok_or_else(|| Error::DeviceNotConfigured(raw_device_index))?;
 
             if available >= kernel_size {
                 // Successfully reserved cores
                 state
-                    .with_device(device_index, |device| {
+                    .with_device(raw_device_index, |device| {
                         device.device_info.fetch_sub_available_cores(kernel_size)
                     })
-                    .ok_or_else(|| Error::DeviceNotConfigured(device_index))?;
+                    .ok_or_else(|| Error::DeviceNotConfigured(raw_device_index))?;
                 break;
             }
 
@@ -177,19 +224,22 @@ impl Limiter {
     }
 
     pub(crate) fn get_device_count(&self) -> u32 {
-        self.cu_device_mapping.len() as u32
+        self.gpu_idx_uuids.len() as u32
     }
 
     /// Get pod memory usage from shared memory
-    pub(crate) fn get_pod_memory_usage(&self, device_index: usize) -> Result<(u64, u64), Error> {
+    pub(crate) fn get_pod_memory_usage(
+        &self,
+        raw_device_index: usize,
+    ) -> Result<(u64, u64), Error> {
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
 
         if !state.is_healthy(Duration::from_secs(2)) {
-            return Err(Error::DeviceNotHealthy(device_index));
+            return Err(Error::DeviceNotHealthy(raw_device_index));
         }
 
-        if let Some((used, limit)) = state.with_device(device_index, |device| {
+        if let Some((used, limit)) = state.with_device(raw_device_index, |device| {
             (
                 device.device_info.get_pod_memory_used(),
                 device.device_info.get_mem_limit(),
@@ -197,13 +247,13 @@ impl Limiter {
         }) {
             Ok((used, limit))
         } else {
-            Err(Error::DeviceNotConfigured(device_index))
+            Err(Error::DeviceNotConfigured(raw_device_index))
         }
     }
 
     /// Get the memory limit for a specific device
     pub(crate) fn get_pod_memory_usage_cu(&self, cu_device: CUdevice) -> Result<(u64, u64), Error> {
-        let dev_idx = self.device_index_by_cu_device(cu_device)?;
+        let dev_idx = self.device_raw_index_by_cu_device(cu_device)?;
         self.get_pod_memory_usage(dev_idx)
     }
 
@@ -218,7 +268,7 @@ impl Limiter {
                 Ok(dev) => {
                     let handle = unsafe { dev.handle() };
                     if handle == device_handle {
-                        return Ok(Some(dev_idx_uuid.0));
+                        return Ok(self.index_to_ordinal(dev_idx_uuid.0));
                     }
                 }
                 Err(e) => {
@@ -235,11 +285,14 @@ impl Limiter {
     }
 
     /// Get block dimensions for a device
-    pub(crate) fn get_block_dimensions(&self, device_idx: usize) -> Result<(u32, u32, u32), Error> {
+    pub(crate) fn get_block_dimensions(
+        &self,
+        raw_device_idx: usize,
+    ) -> Result<(u32, u32, u32), Error> {
         let device = self
             .current_devices_dim
-            .get(&device_idx)
-            .ok_or_else(|| Error::DeviceDimNotConfigured(device_idx))?;
+            .get(&raw_device_idx)
+            .ok_or_else(|| Error::DeviceDimNotConfigured(raw_device_idx))?;
         Ok((
             device.block_x.load(Ordering::Acquire),
             device.block_y.load(Ordering::Acquire),
@@ -250,15 +303,15 @@ impl Limiter {
     /// Set block dimensions for a device
     pub(crate) fn set_block_dimensions(
         &self,
-        device_idx: usize,
+        raw_device_idx: usize,
         x: u32,
         y: u32,
         z: u32,
     ) -> Result<(), Error> {
         let device = self
             .current_devices_dim
-            .get(&device_idx)
-            .ok_or_else(|| Error::DeviceDimNotConfigured(device_idx))?;
+            .get(&raw_device_idx)
+            .ok_or_else(|| Error::DeviceDimNotConfigured(raw_device_idx))?;
 
         device.block_x.store(x, Ordering::Release);
         device.block_y.store(y, Ordering::Release);

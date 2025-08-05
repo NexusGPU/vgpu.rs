@@ -32,18 +32,19 @@ use crate::GLOBAL_LIMITER;
 /// Returns a CUDA result code
 macro_rules! check_and_alloc {
     ($request_size:expr, $alloc_name:expr, $alloc_fn:expr) => {{
-        let result = with_device!(|limiter: &crate::limiter::Limiter, device_idx: usize| {
-            limiter.get_pod_memory_usage(device_idx)
+        let (result, device_idx) = with_device!(|limiter: &crate::limiter::Limiter, device_idx: usize| {
+            (limiter.get_pod_memory_usage(device_idx), device_idx)
         });
 
         match result {
             Ok((used, mem_limit)) if used.saturating_add($request_size) > mem_limit => {
                 tracing::warn!(
-                    "Allocation denied by limiter ({}): used ({}) + request ({}) > limit ({})",
+                    "Allocation denied by limiter ({}): used ({}) + request ({}) > limit ({}) device_idx: {}",
                     $alloc_name,
                     used,
                     $request_size,
-                    mem_limit
+                    mem_limit,
+                    device_idx
                 );
                 CUresult::CUDA_ERROR_OUT_OF_MEMORY
             }

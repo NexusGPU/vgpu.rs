@@ -82,10 +82,26 @@ fn init_ngpu_library() {
                     return;
                 }
             };
-        tracing::info!("NVML initialized, device count: {}", nvml.device_count().unwrap());
-        GLOBAL_LIMITER
-            .set(Limiter::new(nvml))
-            .expect("set GLOBAL_LIMITER");
+
+        let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
+            Some((ip, port)) => (ip, port),
+            None => {
+                tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
+                return;
+            }
+        };
+
+        // Get device indices from environment variable
+        let config = match config::get_worker_config(&hypervisor_ip, &hypervisor_port) {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::error!("failed to get device configs: {err}");
+                return;
+            }
+        };
+
+        let limiter = Limiter::new(nvml, config.gpu_uuids).expect("failed to initialize Limiter");
+        GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
     });
 }
 

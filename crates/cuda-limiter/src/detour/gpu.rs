@@ -378,7 +378,14 @@ pub(crate) unsafe extern "C" fn cu_device_get_detour(
     device: *mut CUdevice,
     ordinal: ::core::ffi::c_int,
 ) -> CUresult {
-    let result = FN_CU_DEVICE_GET(device, ordinal);
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let result = match limiter.ordinal_to_index(ordinal as usize) {
+        Some(index) => FN_CU_DEVICE_GET(device, index as c_int),
+        None => {
+            tracing::error!("Invalid ordinal: {}", ordinal);
+            CUresult::CUDA_ERROR_INVALID_VALUE
+        }
+    };
 
     if result == CUresult::CUDA_SUCCESS {
         tracing::debug!(
@@ -387,7 +394,6 @@ pub(crate) unsafe extern "C" fn cu_device_get_detour(
             device
         );
 
-        let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
         if let Err(e) = limiter.insert_cu_device_if_not_exists(*device, || {
             let uuid = unsafe { culib::device_uuid(*device).map_err(|e| Error::Cuda(e))? };
             Ok(uuid)
@@ -397,6 +403,13 @@ pub(crate) unsafe extern "C" fn cu_device_get_detour(
     }
 
     result
+}
+
+#[hook_fn]
+pub(crate) unsafe extern "C" fn cu_device_get_count_detour(count: *mut c_int) -> CUresult {
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    *count = limiter.get_device_count() as c_int;
+    CUresult::CUDA_SUCCESS
 }
 
 pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
@@ -488,5 +501,14 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_device_get_detour,
         FnCu_device_get,
         FN_CU_DEVICE_GET
+    );
+
+    replace_symbol!(
+        hook_manager,
+        Some("libcuda."),
+        "cuDeviceGetCount",
+        cu_device_get_count_detour,
+        FnCu_device_get_count,
+        FN_CU_DEVICE_GET_COUNT
     );
 }

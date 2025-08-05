@@ -95,28 +95,64 @@ pub(crate) unsafe fn nvml_device_get_count_v2_detour(device_count: *mut c_uint) 
 
 #[hook_fn]
 pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
-    index: c_uint,
+    idx: c_uint,
     device: *mut nvmlDevice_t,
 ) -> nvmlReturn_t {
-    FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(index, device)
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let index = limiter.ordinal_to_index(idx as usize);
+    if let Some(index) = index {
+        let result = FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(index as c_uint, device);
+        if result == nvmlReturn_enum_NVML_SUCCESS {
+            return result;
+        }
+    }
+    tracing::error!(
+        "nvml_device_get_handle_by_index_v2_detour Invalid idx: {}, index: {:?}",
+        idx,
+        index
+    );
+    nvmlReturn_enum_NVML_ERROR_UNKNOWN
 }
 
 #[hook_fn]
 pub(crate) unsafe fn nvml_device_get_handle_by_index_detour(
-    index: c_uint,
+    idx: c_uint,
     device: *mut nvmlDevice_t,
 ) -> nvmlReturn_t {
-    FN_NVML_DEVICE_GET_HANDLE_BY_INDEX(index, device)
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let index = limiter.ordinal_to_index(idx as usize);
+    if let Some(index) = index {
+        let result = FN_NVML_DEVICE_GET_HANDLE_BY_INDEX(index as c_uint, device);
+        if result == nvmlReturn_enum_NVML_SUCCESS {
+            return result;
+        }
+    }
+    tracing::error!(
+        "nvml_device_get_handle_by_index_detour Invalid idx: {}, index: {:?}",
+        idx,
+        index
+    );
+    nvmlReturn_enum_NVML_ERROR_UNKNOWN
 }
 
 #[hook_fn]
 pub(crate) unsafe fn nvml_device_get_index_detour(
     device: nvmlDevice_t,
-    index: *mut c_uint,
+    idx: *mut c_uint,
 ) -> nvmlReturn_t {
-    let index_ref = &mut *index;
-    let result = FN_NVML_DEVICE_GET_INDEX(device, index_ref);
-    result
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let index = match limiter.device_index_by_nvml_handle(device) {
+        Ok(Some(index)) => index,
+        Ok(None) => {
+            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
+        }
+        Err(e) => {
+            tracing::error!("Failed to get device UUID: {e}, falling back to original function");
+            return nvmlReturn_enum_NVML_ERROR_UNKNOWN;
+        }
+    };
+    *idx = index as c_uint;
+    nvmlReturn_enum_NVML_SUCCESS
 }
 
 #[hook_fn]
@@ -147,38 +183,38 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         FnNvml_device_get_memory_info_v2,
         FN_NVML_DEVICE_GET_MEMORY_INFO_V2
     );
-    // replace_symbol!(
-    //     hook_manager,
-    //     Some("libnvidia-ml."),
-    //     "nvmlDeviceGetCount_v2",
-    //     nvml_device_get_count_v2_detour,
-    //     FnNvml_device_get_count_v2,
-    //     FN_NVML_DEVICE_GET_COUNT_V2
-    // );
-    // replace_symbol!(
-    //     hook_manager,
-    //     Some("libnvidia-ml."),
-    //     "nvmlDeviceGetHandleByIndex_v2",
-    //     nvml_device_get_handle_by_index_v2_detour,
-    //     FnNvml_device_get_handle_by_index_v2,
-    //     FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
-    // );
-    // replace_symbol!(
-    //     hook_manager,
-    //     Some("libnvidia-ml."),
-    //     "nvmlDeviceGetHandleByIndex",
-    //     nvml_device_get_handle_by_index_detour,
-    //     FnNvml_device_get_handle_by_index,
-    //     FN_NVML_DEVICE_GET_HANDLE_BY_INDEX
-    // );
-    // replace_symbol!(
-    //     hook_manager,
-    //     Some("libnvidia-ml."),
-    //     "nvmlDeviceGetIndex",
-    //     nvml_device_get_index_detour,
-    //     FnNvml_device_get_index,
-    //     FN_NVML_DEVICE_GET_INDEX
-    // );
+    replace_symbol!(
+        hook_manager,
+        Some("libnvidia-ml."),
+        "nvmlDeviceGetCount_v2",
+        nvml_device_get_count_v2_detour,
+        FnNvml_device_get_count_v2,
+        FN_NVML_DEVICE_GET_COUNT_V2
+    );
+    replace_symbol!(
+        hook_manager,
+        Some("libnvidia-ml."),
+        "nvmlDeviceGetHandleByIndex_v2",
+        nvml_device_get_handle_by_index_v2_detour,
+        FnNvml_device_get_handle_by_index_v2,
+        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
+    );
+    replace_symbol!(
+        hook_manager,
+        Some("libnvidia-ml."),
+        "nvmlDeviceGetHandleByIndex",
+        nvml_device_get_handle_by_index_detour,
+        FnNvml_device_get_handle_by_index,
+        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX
+    );
+    replace_symbol!(
+        hook_manager,
+        Some("libnvidia-ml."),
+        "nvmlDeviceGetIndex",
+        nvml_device_get_index_detour,
+        FnNvml_device_get_index,
+        FN_NVML_DEVICE_GET_INDEX
+    );
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),
