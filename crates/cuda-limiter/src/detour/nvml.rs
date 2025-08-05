@@ -102,16 +102,23 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
     let index = limiter.ordinal_to_index(idx as usize);
     if let Some(index) = index {
         let result = FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(index as c_uint, device);
-        if result == nvmlReturn_enum_NVML_SUCCESS {
-            return result;
+        if result != nvmlReturn_enum_NVML_SUCCESS {
+            tracing::error!(
+                "failed to get handle by index v2: idx: {}, raw_index: {:?}, result: {:?}",
+                idx,
+                index,
+                result
+            );
         }
+        result
+    } else {
+        tracing::error!(
+            "nvml_device_get_handle_by_index_v2_detour Invalid idx: {}, raw_index: {:?}",
+            idx,
+            index
+        );
+        nvmlReturn_enum_NVML_ERROR_UNKNOWN
     }
-    tracing::error!(
-        "nvml_device_get_handle_by_index_v2_detour Invalid idx: {}, index: {:?}",
-        idx,
-        index
-    );
-    nvmlReturn_enum_NVML_ERROR_UNKNOWN
 }
 
 #[hook_fn]
@@ -122,17 +129,24 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_detour(
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
     let index = limiter.ordinal_to_index(idx as usize);
     if let Some(index) = index {
-        let result = FN_NVML_DEVICE_GET_HANDLE_BY_INDEX(index as c_uint, device);
-        if result == nvmlReturn_enum_NVML_SUCCESS {
-            return result;
+        let result = FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(index as c_uint, device);
+        if result != nvmlReturn_enum_NVML_SUCCESS {
+            tracing::error!(
+                "failed to get handle by index: idx: {}, raw_index: {:?}, result: {:?}",
+                idx,
+                index,
+                result
+            );
         }
+        result
+    } else {
+        tracing::error!(
+            "nvml_device_get_handle_by_index_detour Invalid idx: {}, raw_index: {:?}",
+            idx,
+            index
+        );
+        nvmlReturn_enum_NVML_ERROR_UNKNOWN
     }
-    tracing::error!(
-        "nvml_device_get_handle_by_index_detour Invalid idx: {}, index: {:?}",
-        idx,
-        index
-    );
-    nvmlReturn_enum_NVML_ERROR_UNKNOWN
 }
 
 #[hook_fn]
