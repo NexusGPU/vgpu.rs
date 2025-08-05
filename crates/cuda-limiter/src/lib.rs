@@ -69,17 +69,19 @@ fn are_hooks_enabled() -> (bool, bool) {
 fn init_ngpu_library() {
     static NGPU_INITIALIZED: Once = Once::new();
     NGPU_INITIALIZED.call_once(|| {
-        let nvml = match Nvml::init().and(
-            Nvml::builder()
-                .lib_path(OsStr::new("libnvidia-ml.so.1"))
-                .init(),
-        ) {
-            Ok(nvml) => nvml,
-            Err(e) => {
-                tracing::error!("failed to initialize NVML: {}", e);
-                return;
-            }
-        };
+        let nvml =
+            match Nvml::builder()
+                .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
+                    OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
+                ))
+                .init()
+            {
+                Ok(nvml) => nvml,
+                Err(e) => {
+                    tracing::error!("failed to initialize NVML: {}", e);
+                    return;
+                }
+            };
         GLOBAL_LIMITER
             .set(Limiter::new(nvml))
             .expect("set GLOBAL_LIMITER");
