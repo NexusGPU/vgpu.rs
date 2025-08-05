@@ -1,11 +1,6 @@
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
 pub(crate) mod gpu;
 pub(crate) mod mem;
 pub(crate) mod nvml;
-
-pub static GLOBAL_DEVICE_UUIDS: OnceLock<HashMap<i32, String>> = OnceLock::new();
 
 /// macro: get current device UUID and execute expression
 #[macro_export]
@@ -19,15 +14,17 @@ macro_rules! with_device {
                 panic!("Failed to get current CUDA device: error code {:?}", result);
             }
 
-            let device_uuid = $crate::detour::GLOBAL_DEVICE_UUIDS
+            let limiter: &crate::limiter::Limiter = $crate::GLOBAL_LIMITER
                 .get()
-                .unwrap()
-                .get(&device);
-            if device_uuid.is_none() {
-                panic!("Device UUID not found for device {}", device);
-            }
+                .expect("Limiter not initialized");
 
-            $expr(device, device_uuid.unwrap())
+            let device_index = limiter.device_index_by_cu_device(device);
+
+            if let Err(e) = device_index {
+                panic!("Failed to get device index: {}", e);
+            } else {
+                $expr(limiter, device_index.unwrap())
+            }
         }
     }};
 }

@@ -98,9 +98,6 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
     let last_heartbeat = state.get_last_heartbeat();
     tracing::info!("Last heartbeat timestamp: {}", last_heartbeat);
 
-    let device_uuids = state.get_device_uuids();
-    tracing::info!("Device UUIDs: {:?}", device_uuids);
-
     // Try to check if the shared memory is healthy
     let is_healthy = state.is_healthy(Duration::from_secs(2)); // 60 seconds timeout
     tracing::info!("Shared memory health status (2s timeout): {}", is_healthy);
@@ -110,22 +107,18 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
     tracing::info!("Shared memory state version: v{}", version);
 
     // Print device details one by one
-    for uuid in &device_uuids {
-        if let Some(info) = state.with_device_by_uuid(uuid, |device| {
-            format!("UUID: {}, Available cores: {}, Total cores: {}, Up limit: {}%, Memory limit: {} bytes, Pod memory used: {} bytes",
-                uuid,
-                device.get_available_cores(),
-                device.get_total_cores(),
-                device.get_up_limit(),
-                device.get_mem_limit(),
-                device.get_pod_memory_used()
-            )
-        }) {
-            tracing::info!("Device info: {}", info);
-        } else {
-            tracing::warn!("Failed to access device with UUID: {}", uuid);
-        }
-    }
+    state.for_each_active_device(|_, device| {
+        let info = format!("uuid: {}, Available cores: {}, Total cores: {}, Up limit: {}%, Memory limit: {} bytes, Pod memory used: {} bytes",
+            device.get_uuid(),
+            device.device_info.get_available_cores(),
+            device.device_info.get_total_cores(),
+            device.device_info.get_up_limit(),
+            device.device_info.get_mem_limit(),
+            device.device_info.get_pod_memory_used()
+        );
+
+        tracing::info!("Device info: {}", info);
+    });
 
     // Print additional state information
     let (heartbeat, pids, state_version) = state.get_detailed_state_info();

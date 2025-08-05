@@ -18,30 +18,11 @@ pub unsafe fn culib() -> &'static Lib {
     })
 }
 
-pub unsafe fn cu_device_get(ordinal: c_int) -> Result<CUdevice, CUresult> {
-    let mut device: CUdevice = 0;
-    let result = (culib().cuDeviceGet)(&mut device, ordinal);
-    if result == CUresult::CUDA_SUCCESS {
-        Ok(device)
-    } else {
-        Err(result)
-    }
-}
-
 pub unsafe fn cu_device_get_uuid(device: CUdevice) -> Result<CUuuid, CUresult> {
     let mut uuid = CUuuid { bytes: [0; 16] };
-    let result = (culib().cuDeviceGetUuid)(&mut uuid, device);
+    let result = (culib().cuDeviceGetUuid_v2)(&mut uuid, device);
     if result == CUresult::CUDA_SUCCESS {
         Ok(uuid)
-    } else {
-        Err(result)
-    }
-}
-
-pub unsafe fn cu_init(flags: c_uint) -> Result<(), CUresult> {
-    let result = (culib().cuInit)(flags);
-    if result == CUresult::CUDA_SUCCESS {
-        Ok(())
     } else {
         Err(result)
     }
@@ -71,11 +52,9 @@ pub fn uuid_to_string_formatted(uuid: &[u8; 16]) -> String {
     )
 }
 
-pub(crate) fn device_info(ordinal: i32) -> Result<(String, CUdevice), CUresult> {
+pub(crate) fn device_uuid(cu_device: CUdevice) -> Result<String, CUresult> {
     unsafe {
-        cu_init(0)?;
-        let device = cu_device_get(ordinal)?;
-        let uuid = cu_device_get_uuid(device)?;
-        Ok((uuid_to_string_formatted(&uuid.bytes), device))
+        let uuid = cu_device_get_uuid(cu_device)?;
+        Ok(uuid_to_string_formatted(&uuid.bytes))
     }
 }

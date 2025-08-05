@@ -125,22 +125,9 @@ fn init_ngpu_library() {
                 std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
             }
         }
-
-        let limiter = match Limiter::new(nvml, &config.gpu_uuids) {
-            Ok(limiter) => limiter,
-            Err(err) => {
-                tracing::error!("failed to init limiter, err: {err}, skip hooks");
-                HOOKS_INITIALIZED.0.store(true, Ordering::Release);
-                HOOKS_INITIALIZED.1.store(true, Ordering::Release);
-                return;
-            }
-        };
-
-        // after limiter initialized, remove CUDA_VISIBLE_DEVICES to avoid confusion with nvml index related hook
-        // after hooks installed, only specific devices will be visible, no need to set CUDA_VISIBLE_DEVICES
-        std::env::remove_var("CUDA_VISIBLE_DEVICES");
-        std::env::remove_var("NVIDIA_VISIBLE_DEVICES");
-        GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
+        GLOBAL_LIMITER
+            .set(Limiter::new(nvml))
+            .expect("set GLOBAL_LIMITER");
     });
 }
 
@@ -238,18 +225,18 @@ fn init_hooks() {
     }
 
     // Install dlsym hook to catch dynamic library loading
-    // static DLSYM_HOOK_ONCE: Once = Once::new();
-    // DLSYM_HOOK_ONCE.call_once(|| unsafe {
-    //     replace_symbol!(
-    //         &mut hook_manager,
-    //         None,
-    //         "dlsym",
-    //         dlsym_detour,
-    //         FnDlsym,
-    //         FN_DLSYM
-    //     );
-    // });
-    // tracing::debug!("Hook initialization completed");
+    static DLSYM_HOOK_ONCE: Once = Once::new();
+    DLSYM_HOOK_ONCE.call_once(|| unsafe {
+        replace_symbol!(
+            &mut hook_manager,
+            None,
+            "dlsym",
+            dlsym_detour,
+            FnDlsym,
+            FN_DLSYM
+        );
+    });
+    tracing::debug!("Hook initialization completed");
 }
 
 thread_local! {

@@ -22,8 +22,8 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
 ) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
-    let device_uuid = match limiter.device_uuid_by_handle(device) {
-        Ok(Some(device_uuid)) => device_uuid,
+    let device_index = match limiter.device_index_by_nvml_handle(device) {
+        Ok(Some(device_index)) => device_index,
         Ok(None) => {
             return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
         }
@@ -33,7 +33,7 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
         }
     };
 
-    match limiter.get_pod_memory_usage(&device_uuid) {
+    match limiter.get_pod_memory_usage(device_index) {
         Ok((used, mem_limit)) => {
             let memory_ref = &mut *memory;
             memory_ref.total = mem_limit;
@@ -55,8 +55,8 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
 ) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
-    let device_uuid = match limiter.device_uuid_by_handle(device) {
-        Ok(Some(device_uuid)) => device_uuid,
+    let device_index = match limiter.device_index_by_nvml_handle(device) {
+        Ok(Some(device_index)) => device_index,
         Ok(None) => {
             return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
         }
@@ -66,7 +66,7 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
         }
     };
 
-    match limiter.get_pod_memory_usage(&device_uuid) {
+    match limiter.get_pod_memory_usage(device_index) {
         Ok((used, mem_limit)) => {
             let memory_ref = &mut *memory;
             memory_ref.total = mem_limit;
@@ -98,13 +98,7 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
     index: c_uint,
     device: *mut nvmlDevice_t,
 ) -> nvmlReturn_t {
-    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let nvml_index = limiter.nvml_index_mapping(index as usize);
-    if let Ok(nvml_index) = nvml_index {
-        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(nvml_index, device)
-    } else {
-        nvmlReturn_enum_NVML_ERROR_NOT_FOUND
-    }
+    FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(index, device)
 }
 
 #[hook_fn]
@@ -112,13 +106,7 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_detour(
     index: c_uint,
     device: *mut nvmlDevice_t,
 ) -> nvmlReturn_t {
-    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let nvml_index = limiter.nvml_index_mapping(index as usize);
-    if let Ok(nvml_index) = nvml_index {
-        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX(nvml_index, device)
-    } else {
-        nvmlReturn_enum_NVML_ERROR_NOT_FOUND
-    }
+    FN_NVML_DEVICE_GET_HANDLE_BY_INDEX(index, device)
 }
 
 #[hook_fn]
@@ -128,17 +116,6 @@ pub(crate) unsafe fn nvml_device_get_index_detour(
 ) -> nvmlReturn_t {
     let index_ref = &mut *index;
     let result = FN_NVML_DEVICE_GET_INDEX(device, index_ref);
-    if result == nvmlReturn_enum_NVML_SUCCESS {
-        let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-        let virtual_index = match limiter.nvml_index_reverse_mapping(*index_ref) {
-            Ok(nvml_index) => nvml_index,
-            Err(e) => {
-                tracing::error!("Failed to get NVML index: {e}");
-                return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
-            }
-        };
-        *index_ref = virtual_index.try_into().expect("NVML index not correct");
-    }
     result
 }
 

@@ -26,6 +26,7 @@ nvml-wrapper-sys = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde", "std"] }
 once_cell = { workspace = true }
 hex = "0.4"
+dashmap = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
