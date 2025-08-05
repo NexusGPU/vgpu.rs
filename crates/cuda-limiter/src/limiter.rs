@@ -10,7 +10,6 @@ use dashmap::DashMap;
 use nvml_wrapper::error::nvml_try;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
-use nvml_wrapper_sys::bindings::nvmlDevice_st;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
 use once_cell::sync::OnceCell;
 use trap::TrapError;

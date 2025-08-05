@@ -383,7 +383,7 @@ pub(crate) unsafe extern "C" fn cu_device_get_detour(
         Some(index) => FN_CU_DEVICE_GET(device, index as c_int),
         None => {
             tracing::error!("Invalid ordinal: {}", ordinal);
-            CUresult::CUDA_ERROR_INVALID_VALUE
+            CUresult::CUDA_ERROR_INVALID_DEVICE
         }
     };
 
