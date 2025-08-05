@@ -103,11 +103,11 @@ impl Limiter {
         })
     }
 
-    pub(crate) fn ordinal_to_index(&self, ordinal: usize) -> Option<usize> {
+    pub(crate) fn ordinal_to_raw_index(&self, ordinal: usize) -> Option<usize> {
         self.gpu_idx_uuids.get(ordinal).map(|(index, _)| *index)
     }
 
-    fn index_to_ordinal(&self, index: usize) -> Option<usize> {
+    fn raw_index_to_ordinal(&self, index: usize) -> Option<usize> {
         self.gpu_idx_uuids
             .iter()
             .enumerate()
@@ -268,7 +268,7 @@ impl Limiter {
                 Ok(dev) => {
                     let handle = unsafe { dev.handle() };
                     if handle == device_handle {
-                        return Ok(self.index_to_ordinal(dev_idx_uuid.0));
+                        return Ok(self.raw_index_to_ordinal(dev_idx_uuid.0));
                     }
                 }
                 Err(e) => {

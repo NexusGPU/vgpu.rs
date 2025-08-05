@@ -99,14 +99,14 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
     device: *mut nvmlDevice_t,
 ) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let index = limiter.ordinal_to_index(idx as usize);
-    if let Some(index) = index {
-        let result = FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(index as c_uint, device);
+    let raw_index = limiter.ordinal_to_raw_index(idx as usize);
+    if let Some(raw_index) = raw_index {
+        let result = FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(raw_index as c_uint, device);
         if result != nvmlReturn_enum_NVML_SUCCESS {
             tracing::error!(
                 "failed to get handle by index v2: idx: {}, raw_index: {:?}, result: {:?}",
                 idx,
-                index,
+                raw_index,
                 result
             );
         }
@@ -115,7 +115,7 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
         tracing::error!(
             "nvml_device_get_handle_by_index_v2_detour Invalid idx: {}, raw_index: {:?}",
             idx,
-            index
+            raw_index
         );
         nvmlReturn_enum_NVML_ERROR_UNKNOWN
     }
@@ -127,14 +127,14 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_detour(
     device: *mut nvmlDevice_t,
 ) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let index = limiter.ordinal_to_index(idx as usize);
-    if let Some(index) = index {
-        let result = FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(index as c_uint, device);
+    let raw_index = limiter.ordinal_to_raw_index(idx as usize);
+    if let Some(raw_index) = raw_index {
+        let result = FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(raw_index as c_uint, device);
         if result != nvmlReturn_enum_NVML_SUCCESS {
             tracing::error!(
                 "failed to get handle by index: idx: {}, raw_index: {:?}, result: {:?}",
                 idx,
-                index,
+                raw_index,
                 result
             );
         }
@@ -143,7 +143,7 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_detour(
         tracing::error!(
             "nvml_device_get_handle_by_index_detour Invalid idx: {}, raw_index: {:?}",
             idx,
-            index
+            raw_index
         );
         nvmlReturn_enum_NVML_ERROR_UNKNOWN
     }
