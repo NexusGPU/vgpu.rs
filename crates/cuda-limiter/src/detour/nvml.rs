@@ -22,14 +22,11 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
 ) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
-    let device_index = match limiter.device_index_by_nvml_handle(device) {
-        Ok(Some(device_index)) => device_index,
-        Ok(None) => {
-            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
-        }
+    let device_index = match limiter.device_raw_index_by_nvml_handle(device) {
+        Ok(device_index) => device_index,
         Err(e) => {
-            tracing::error!("Failed to get device UUID: {e}, falling back to original function");
-            return FN_NVML_DEVICE_GET_MEMORY_INFO(device, memory);
+            tracing::error!("nvml_device_get_memory_info_detour: Failed to get device UUID: {e}");
+            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
         }
     };
 
@@ -54,15 +51,11 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     memory: *mut nvmlMemory_v2_t,
 ) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-
-    let device_index = match limiter.device_index_by_nvml_handle(device) {
-        Ok(Some(device_index)) => device_index,
-        Ok(None) => {
-            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
-        }
+    let device_index = match limiter.device_raw_index_by_nvml_handle(device) {
+        Ok(device_index) => device_index,
         Err(e) => {
-            tracing::error!("Failed to get device UUID: {e}, falling back to original function");
-            return FN_NVML_DEVICE_GET_MEMORY_INFO_V2(device, memory);
+            tracing::error!("nvml_device_get_memory_info_v2_detour: Failed to get device UUID: {e}");
+            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
         }
     };
 
@@ -161,7 +154,7 @@ pub(crate) unsafe fn nvml_device_get_index_detour(
             return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
         }
         Err(e) => {
-            tracing::error!("Failed to get device UUID: {e}, falling back to original function");
+            tracing::error!("nvml_device_get_index_detour: Failed to get device UUID: {e}");
             return nvmlReturn_enum_NVML_ERROR_UNKNOWN;
         }
     };

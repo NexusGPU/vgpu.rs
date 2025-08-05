@@ -259,11 +259,11 @@ impl Limiter {
         self.get_pod_memory_usage(dev_idx)
     }
 
-    /// Get the NVML device handle for a specific device
-    pub(crate) fn device_index_by_nvml_handle(
+
+    pub(crate) fn device_raw_index_by_nvml_handle(
         &self,
         device_handle: nvmlDevice_t,
-    ) -> Result<Option<usize>, NvmlError> {
+    ) -> Result<usize, NvmlError> {
         for (idx, uuid) in self.gpu_idx_uuids.iter() {
             let mut raw_dev = device_handle.clone();
             match nvml_try(unsafe {
@@ -271,7 +271,7 @@ impl Limiter {
             }) {
                 Ok(_) => {
                     if raw_dev == device_handle {
-                        return Ok(self.raw_index_to_ordinal(*idx));
+                        return Ok(*idx);
                     }
                 }
                 Err(e) => {
@@ -284,7 +284,17 @@ impl Limiter {
                 }
             }
         }
-        Ok(None)
+        tracing::error!("device_raw_index_by_nvml_handle: Failed to get device by handle: {:?} ", device_handle);
+        Err(NvmlError::NotFound)
+    }
+    
+    /// Get the NVML device handle for a specific device
+    pub(crate) fn device_index_by_nvml_handle(
+        &self,
+        device_handle: nvmlDevice_t,
+    ) -> Result<Option<usize>, NvmlError> {
+        self.device_raw_index_by_nvml_handle(device_handle)
+            .map(|raw_idx| self.raw_index_to_ordinal(raw_idx))
     }
 
     /// Get block dimensions for a device
