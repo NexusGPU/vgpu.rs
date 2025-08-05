@@ -16,8 +16,6 @@ use trap::TrapError;
 use utils::shared_memory::handle::SharedMemoryHandle;
 
 use crate::culib;
-use crate::detour::nvml::FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2;
-use crate::detour::nvml::FN_NVML_DEVICE_GET_INDEX;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
@@ -104,18 +102,6 @@ impl Limiter {
         })
     }
 
-    pub(crate) fn ordinal_to_raw_index(&self, ordinal: usize) -> Option<usize> {
-        self.gpu_idx_uuids.get(ordinal).map(|(index, _)| *index)
-    }
-
-    fn raw_index_to_ordinal(&self, index: usize) -> Option<usize> {
-        self.gpu_idx_uuids
-            .iter()
-            .enumerate()
-            .find(|(_, (idx, _))| *idx == index)
-            .map(|(ordinal, _)| ordinal)
-    }
-
     /// Get or initialize the shared memory handle (lazy initialization)
     fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
         self.shared_memory_handle.get_or_try_init(|| {
@@ -139,9 +125,7 @@ impl Limiter {
                 .unwrap();
 
             let device = nvml.device_by_uuid(device_uuid.as_str())?;
-            let mut raw_index = 0;
-            nvml_try(unsafe { FN_NVML_DEVICE_GET_INDEX(device.handle(), &mut raw_index) })
-                .context("get index in insert_cu_device_if_not_exists")?;
+            let raw_index = device.index()?;
             self.cu_device_mapping
                 .insert(cu_device, (raw_index as usize, device_uuid));
         }
@@ -163,10 +147,7 @@ impl Limiter {
                 .init()
                 .unwrap();
             let device = nvml.device_by_uuid(uuid.as_str())?;
-            let mut raw_index = 0;
-            nvml_try(unsafe { FN_NVML_DEVICE_GET_INDEX(device.handle(), &mut raw_index) })
-                .context("get index in device_raw_index_by_cu_device")?;
-            let index = raw_index as usize;
+            let index: u32 = device.index()?;
             self.cu_device_mapping
                 .insert(cu_device, (index as usize, uuid));
             Ok(index as usize)
@@ -263,12 +244,10 @@ impl Limiter {
         device_handle: nvmlDevice_t,
     ) -> Result<usize, NvmlError> {
         for (idx, uuid) in self.gpu_idx_uuids.iter() {
-            let mut raw_dev = device_handle.clone();
-            match nvml_try(unsafe {
-                FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(*idx as u32, &mut raw_dev)
-            }) {
-                Ok(_) => {
-                    if raw_dev == device_handle {
+            let dev = self.nvml.device_by_index(*idx as u32);
+            match dev {
+                Ok(dev) => {
+                    if unsafe { dev.handle() } == device_handle {
                         return Ok(*idx);
                     }
                 }
@@ -283,15 +262,6 @@ impl Limiter {
             device_handle
         );
         Err(NvmlError::NotFound)
-    }
-
-    /// Get the NVML device handle for a specific device
-    pub(crate) fn device_index_by_nvml_handle(
-        &self,
-        device_handle: nvmlDevice_t,
-    ) -> Result<Option<usize>, NvmlError> {
-        self.device_raw_index_by_nvml_handle(device_handle)
-            .map(|raw_idx| self.raw_index_to_ordinal(raw_idx))
     }
 
     /// Get block dimensions for a device

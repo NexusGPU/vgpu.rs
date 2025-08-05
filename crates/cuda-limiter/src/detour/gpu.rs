@@ -379,13 +379,7 @@ pub(crate) unsafe extern "C" fn cu_device_get_detour(
     ordinal: ::core::ffi::c_int,
 ) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let result = match limiter.ordinal_to_raw_index(ordinal as usize) {
-        Some(index) => FN_CU_DEVICE_GET(device, index as c_int),
-        None => {
-            tracing::error!("Invalid ordinal: {}", ordinal);
-            CUresult::CUDA_ERROR_INVALID_DEVICE
-        }
-    };
+    let result = FN_CU_DEVICE_GET(device, ordinal);
 
     if result == CUresult::CUDA_SUCCESS {
         tracing::debug!(
