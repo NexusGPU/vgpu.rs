@@ -54,7 +54,9 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     let device_index = match limiter.device_raw_index_by_nvml_handle(device) {
         Ok(device_index) => device_index,
         Err(e) => {
-            tracing::error!("nvml_device_get_memory_info_v2_detour: Failed to get device UUID: {e}");
+            tracing::error!(
+                "nvml_device_get_memory_info_v2_detour: Failed to get device UUID: {e}"
+            );
             return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
         }
     };

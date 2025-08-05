@@ -259,7 +259,6 @@ impl Limiter {
         self.get_pod_memory_usage(dev_idx)
     }
 
-
     pub(crate) fn device_raw_index_by_nvml_handle(
         &self,
         device_handle: nvmlDevice_t,
@@ -275,19 +274,18 @@ impl Limiter {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to get device by uuid {}: {}, skipped",
-                        uuid,
-                        e
-                    );
+                    tracing::warn!("Failed to get device by uuid {}: {}, skipped", uuid, e);
                     continue;
                 }
             }
         }
-        tracing::error!("device_raw_index_by_nvml_handle: Failed to get device by handle: {:?} ", device_handle);
+        tracing::error!(
+            "device_raw_index_by_nvml_handle: Failed to get device by handle: {:?} ",
+            device_handle
+        );
         Err(NvmlError::NotFound)
     }
-    
+
     /// Get the NVML device handle for a specific device
     pub(crate) fn device_index_by_nvml_handle(
         &self,
