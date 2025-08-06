@@ -25,7 +25,7 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
     let device_index = match limiter.device_raw_index_by_nvml_handle(device) {
         Ok(device_index) => device_index,
         Err(e) => {
-            tracing::error!("nvml_device_get_memory_info_detour: Failed to get device UUID: {e}");
+            tracing::error!("nvml_device_get_memory_info_detour: Failed to get device index: {e}");
             return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
         }
     };
@@ -58,6 +58,19 @@ pub(crate) unsafe fn nvml_device_get_count_v2_detour(device_count: *mut c_uint) 
 }
 
 #[hook_fn]
+pub(crate) unsafe fn nvml_device_get_count_detour(device_count: *mut c_uint) -> nvmlReturn_t {
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let device_count_ref: &mut u32 = &mut *device_count;
+    *device_count_ref = limiter.get_device_count();
+    tracing::info!(
+        "nvml_device_get_count_detour: device count: {}",
+        *device_count_ref
+    );
+    nvmlReturn_enum_NVML_SUCCESS
+}
+
+
+#[hook_fn]
 pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     device: nvmlDevice_t,
     memory: *mut nvmlMemory_v2_t,
@@ -67,7 +80,7 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
         Ok(device_index) => device_index,
         Err(e) => {
             tracing::error!(
-                "nvml_device_get_memory_info_v2_detour: Failed to get device UUID: {e}"
+                "nvml_device_get_memory_info_v2_detour: Failed to get device index: {e}"
             );
             return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
         }
@@ -138,6 +151,14 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager, is_mapping_idx
             nvml_device_get_count_v2_detour,
             FnNvml_device_get_count_v2,
             FN_NVML_DEVICE_GET_COUNT_V2
+        );
+        replace_symbol!(
+            hook_manager,
+            Some("libnvidia-ml."),
+            "nvmlDeviceGetCount",
+            nvml_device_get_count_detour,
+            FnNvml_device_get_count,
+            FN_NVML_DEVICE_GET_COUNT
         );
         replace_symbol!(
             hook_manager,

@@ -175,7 +175,7 @@ impl Limiter {
         if !state.has_device(raw_device_index) {
             return Err(Error::DeviceNotConfigured(raw_device_index));
         }
-        if !crate::is_mock_mode() && !state.is_healthy(Duration::from_secs(2)) {
+        if !state.is_healthy(Duration::from_secs(2)) {
             return Err(Error::DeviceNotHealthy(raw_device_index));
         }
 
@@ -221,8 +221,8 @@ impl Limiter {
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
 
-        if !crate::is_mock_mode() && !state.is_healthy(Duration::from_secs(2)) {
-            return Err(Error::DeviceNotHealthy(raw_device_index));
+        if !state.is_healthy(Duration::from_secs(2)) {
+            tracing::warn!("device {} is not healthy", raw_device_index);
         }
 
         if let Some((used, limit)) = state.with_device(raw_device_index, |device| {
