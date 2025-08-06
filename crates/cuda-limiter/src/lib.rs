@@ -217,6 +217,11 @@ fn try_install_nvml_hooks() {
 }
 
 fn init_hooks() {
+    if cfg!(test) {
+        tracing::debug!("Test mode detected, skipping hook initialization");
+        return;
+    }
+
     unsafe {
         // Load CUDA library to ensure it's loaded before hooks are installed
         let _ = culib::culib();
