@@ -173,30 +173,6 @@ impl DeviceEntry {
         self.is_active
             .store(if active { 1 } else { 0 }, Ordering::Release);
     }
-
-    /// Compares UUID efficiently without string allocation
-    pub fn uuid_matches(&self, uuid: &str) -> bool {
-        if !self.is_active() {
-            return false;
-        }
-        let uuid_bytes = uuid.as_bytes();
-        if uuid_bytes.len() >= MAX_UUID_LEN {
-            return false;
-        }
-
-        // Check if lengths match by finding null terminator
-        let stored_len = self
-            .uuid
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(MAX_UUID_LEN);
-        if stored_len != uuid_bytes.len() {
-            return false;
-        }
-
-        // Compare bytes directly
-        self.uuid[..stored_len] == *uuid_bytes
-    }
 }
 
 impl Default for DeviceEntry {
@@ -247,23 +223,9 @@ impl SharedDeviceState {
         }
     }
 
-    /// Delegates mutable method calls to the appropriate version
-    fn with_inner_mut<T, F>(&self, f: F) -> T
-    where
-        F: FnOnce(&SharedDeviceStateV1) -> T,
-    {
-        match self {
-            Self::V1(inner) => f(inner),
-        }
-    }
-
     // Delegate all methods to the inner version
-    pub fn has_device(&self, device_uuid: &str) -> bool {
-        self.with_inner(|inner| inner.has_device(device_uuid))
-    }
-
-    pub fn get_device_uuids(&self) -> Vec<String> {
-        self.with_inner(|inner| inner.get_device_uuids())
+    pub fn has_device(&self, index: usize) -> bool {
+        self.with_inner(|inner| inner.has_device(index))
     }
 
     pub fn device_count(&self) -> usize {
@@ -280,20 +242,6 @@ impl SharedDeviceState {
 
     pub fn is_healthy(&self, timeout: Duration) -> bool {
         self.with_inner(|inner| inner.is_healthy(timeout))
-    }
-
-    pub fn with_device_by_uuid<T, F>(&self, device_uuid: &str, f: F) -> Option<T>
-    where
-        F: FnOnce(&SharedDeviceInfo) -> T,
-    {
-        self.with_inner(|inner| inner.with_device_by_uuid(device_uuid, f))
-    }
-
-    pub fn with_device_by_uuid_mut<T, F>(&self, device_uuid: &str, f: F) -> Option<T>
-    where
-        F: FnOnce(&SharedDeviceInfo) -> T,
-    {
-        self.with_inner_mut(|inner| inner.with_device_by_uuid_mut(device_uuid, f))
     }
 
     pub fn add_pid(&self, pid: usize) {
@@ -358,24 +306,61 @@ impl SharedDeviceState {
     pub fn get_version(&self) -> u32 {
         self.version()
     }
+
+    /// Iterates over all active devices with their indices
+    pub fn iter_active_devices(&self) -> impl Iterator<Item = (usize, &DeviceEntry)> {
+        match self {
+            Self::V1(inner) => inner.iter_active_devices(),
+        }
+    }
+
+    /// Iterates over all devices (including inactive ones) with their indices
+    pub fn iter_all_devices(&self) -> impl Iterator<Item = (usize, &DeviceEntry)> {
+        match self {
+            Self::V1(inner) => inner.iter_all_devices(),
+        }
+    }
+
+    /// Executes a closure for each active device
+    pub fn for_each_active_device<F>(&self, mut f: F)
+    where
+        F: FnMut(usize, &DeviceEntry),
+    {
+        self.iter_active_devices()
+            .for_each(|(idx, device)| f(idx, device));
+    }
 }
 
 impl SharedDeviceStateV1 {
     /// Creates a new SharedDeviceStateV1 instance.
     pub fn new(configs: &[DeviceConfig]) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         let state = Self {
             devices: std::array::from_fn(|_| DeviceEntry::new()),
             device_count: AtomicU32::new(0),
-            last_heartbeat: AtomicU64::new(0),
+            last_heartbeat: AtomicU64::new(now),
             pids: ShmMutex::new(Set::new()),
         };
 
-        // Add devices from configs
-        let device_count = std::cmp::min(configs.len(), MAX_DEVICES);
-        for (i, config) in configs.iter().take(device_count).enumerate() {
-            state.devices[i].set_uuid(&config.device_uuid);
+        // Add devices from configs using device_idx
+        let mut max_device_idx = 0;
+        for config in configs {
+            let device_idx = config.device_idx as usize;
+            if device_idx >= MAX_DEVICES {
+                warn!(
+                    "Device index {} exceeds maximum devices {}, skipping",
+                    device_idx, MAX_DEVICES
+                );
+                continue;
+            }
+
+            state.devices[device_idx].set_uuid(&config.device_uuid);
             // Use atomic operations to set device info
-            let device_info = &state.devices[i].device_info;
+            let device_info = &state.devices[device_idx].device_info;
             device_info
                 .total_cuda_cores
                 .store(config.total_cuda_cores, Ordering::Relaxed);
@@ -388,46 +373,20 @@ impl SharedDeviceStateV1 {
             device_info
                 .mem_limit
                 .store(config.mem_limit, Ordering::Relaxed);
-            state.devices[i].set_active(true);
-        }
+            state.devices[device_idx].set_active(true);
 
-        if configs.len() > MAX_DEVICES {
-            warn!(
-                "Too many devices in config: {}, maximum {} supported",
-                configs.len(),
-                MAX_DEVICES
-            );
+            max_device_idx = max_device_idx.max(device_idx + 1);
         }
 
         state
             .device_count
-            .store(device_count as u32, Ordering::Release);
+            .store(max_device_idx as u32, Ordering::Release);
         state
     }
 
-    /// Finds device index by UUID efficiently
-    fn find_device_index(&self, device_uuid: &str) -> Option<usize> {
-        let current_count = self.device_count.load(Ordering::Acquire) as usize;
-
-        (0..current_count).find(|&i| self.devices[i].uuid_matches(device_uuid))
-    }
-
-    /// Checks if a device exists by UUID.
-    pub fn has_device(&self, device_uuid: &str) -> bool {
-        self.find_device_index(device_uuid).is_some()
-    }
-
-    /// Gets a list of all device UUIDs efficiently.
-    pub fn get_device_uuids(&self) -> Vec<String> {
-        let current_count = self.device_count.load(Ordering::Acquire) as usize;
-        let mut uuids = Vec::with_capacity(current_count);
-
-        for i in 0..current_count {
-            if self.devices[i].is_active() {
-                uuids.push(self.devices[i].get_uuid_owned());
-            }
-        }
-        uuids
+    /// Checks if a device exists at the given index.
+    pub fn has_device(&self, index: usize) -> bool {
+        index < MAX_DEVICES && self.devices[index].is_active()
     }
 
     /// Gets the number of devices.
@@ -460,25 +419,6 @@ impl SharedDeviceStateV1 {
         now.saturating_sub(last_heartbeat) <= timeout.as_secs()
     }
 
-    /// Executes a closure with a device by UUID efficiently.
-    pub fn with_device_by_uuid<T, F>(&self, device_uuid: &str, f: F) -> Option<T>
-    where
-        F: FnOnce(&SharedDeviceInfo) -> T,
-    {
-        self.find_device_index(device_uuid)
-            .map(|i| f(&self.devices[i].device_info))
-    }
-
-    /// Executes a closure with a mutable device by UUID efficiently.
-    pub fn with_device_by_uuid_mut<T, F>(&self, device_uuid: &str, f: F) -> Option<T>
-    where
-        F: FnOnce(&SharedDeviceInfo) -> T,
-    {
-        // Note: Since SharedDeviceInfo uses atomic operations internally,
-        // we don't actually need mutable access to modify its values
-        self.with_device_by_uuid(device_uuid, f)
-    }
-
     pub fn add_pid(&self, pid: usize) {
         self.pids.lock().insert(pid);
     }
@@ -496,6 +436,19 @@ impl SharedDeviceStateV1 {
     /// This should be called during startup to prevent deadlocks
     pub fn cleanup_orphaned_locks(&self) {
         self.pids.cleanup_orphaned_lock();
+    }
+
+    /// Iterates over all active devices with their indices
+    pub fn iter_active_devices(&self) -> impl Iterator<Item = (usize, &DeviceEntry)> {
+        self.devices
+            .iter()
+            .enumerate()
+            .filter(|(_, device)| device.is_active())
+    }
+
+    /// Iterates over all devices (including inactive ones) with their indices
+    pub fn iter_all_devices(&self) -> impl Iterator<Item = (usize, &DeviceEntry)> {
+        self.devices.iter().enumerate()
     }
 }
 
@@ -588,27 +541,32 @@ mod tests {
         // Test initial state
         assert_eq!(state.version(), 1);
         assert_eq!(state.device_count(), 1);
-        assert_eq!(state.get_last_heartbeat(), 0);
-        assert!(!state.is_healthy(Duration::from_secs(30)));
 
-        // Test device exists
-        let device_uuid = &configs[0].device_uuid;
-        assert!(state.has_device(device_uuid));
+        // Test that heartbeat is initialized to current time (should be non-zero and recent)
+        let heartbeat = state.get_last_heartbeat();
+        assert!(heartbeat > 0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(now.saturating_sub(heartbeat) < 2); // Should be within 2 seconds
 
-        // Test device UUIDs retrieval
-        let device_uuids = state.get_device_uuids();
-        assert_eq!(device_uuids.len(), 1);
-        assert_eq!(device_uuids[0], configs[0].device_uuid);
+        // Should be healthy since heartbeat was just set
+        assert!(state.is_healthy(Duration::from_secs(30)));
+
+        // Test device exists by index
+        let device_idx = configs[0].device_idx as usize;
+        assert!(state.has_device(device_idx));
     }
 
     #[test]
     fn shared_device_state_heartbeat_functionality() {
         let state = SharedDeviceState::new(&[]);
 
-        // Test initial unhealthy state
-        assert!(!state.is_healthy(Duration::from_secs(30)));
+        // Test initial healthy state (heartbeat is initialized to current time)
+        assert!(state.is_healthy(Duration::from_secs(30)));
 
-        // Test setting heartbeat
+        // Test setting heartbeat to a specific time
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -618,7 +576,7 @@ mod tests {
         assert_eq!(state.get_last_heartbeat(), now);
         assert!(state.is_healthy(Duration::from_secs(30)));
 
-        // Test old heartbeat
+        // Test old heartbeat (should be unhealthy)
         state.update_heartbeat(now - 60);
         assert!(!state.is_healthy(Duration::from_secs(30)));
     }
@@ -679,12 +637,14 @@ mod tests {
         assert_eq!(state2.device_count(), 1);
 
         // Verify they access the same memory
-        let device_uuid = &configs[0].device_uuid;
-        state1.with_device_by_uuid_mut(device_uuid, |device| {
-            device.set_available_cores(42);
+        let device_idx = configs[0].device_idx as usize;
+        state1.with_device(device_idx, |device| {
+            device.device_info.set_available_cores(42);
         });
 
-        let cores = state2.with_device_by_uuid(device_uuid, |device| device.get_available_cores());
+        let cores = state2.with_device(device_idx, |device| {
+            device.device_info.get_available_cores()
+        });
         assert_eq!(cores, Some(42));
 
         // File should still exist while handles are active
@@ -707,28 +667,27 @@ mod tests {
                 .expect("should create shared memory successfully"),
         );
 
-        let device_uuid = configs[0].device_uuid.clone();
+        let device_idx = configs[0].device_idx as usize;
         let mut handles = vec![];
 
         // Spawn multiple threads doing concurrent access
         for i in 0..5 {
             let handle_clone = Arc::clone(&handle);
-            let device_uuid_clone = device_uuid.clone();
 
             let thread_handle = thread::spawn(move || {
                 let state = handle_clone.get_state();
 
                 for j in 0..20 {
                     let value = i * 20 + j;
-                    state.with_device_by_uuid_mut(&device_uuid_clone, |device| {
-                        device.set_available_cores(value);
+                    state.with_device(device_idx, |device| {
+                        device.device_info.set_available_cores(value);
                     });
 
                     thread::sleep(Duration::from_millis(1));
 
                     let read_value = state
-                        .with_device_by_uuid(&device_uuid_clone, |device| {
-                            device.get_available_cores()
+                        .with_device(device_idx, |device| {
+                            device.device_info.get_available_cores()
                         })
                         .unwrap();
 
@@ -832,5 +791,72 @@ mod tests {
 
         // Clean up test file
         std::fs::remove_file(test_file).unwrap();
+    }
+
+    #[test]
+    fn device_iteration_methods() {
+        // Create multiple device configurations
+        let configs = vec![
+            DeviceConfig {
+                device_idx: 0,
+                device_uuid: "device-0".to_string(),
+                up_limit: 80,
+                mem_limit: 1024 * 1024 * 1024,
+                total_cuda_cores: 1024,
+                sm_count: 10,
+                max_thread_per_sm: 1024,
+            },
+            DeviceConfig {
+                device_idx: 2,
+                device_uuid: "device-2".to_string(),
+                up_limit: 70,
+                mem_limit: 2 * 1024 * 1024 * 1024,
+                total_cuda_cores: 2048,
+                sm_count: 20,
+                max_thread_per_sm: 1024,
+            },
+        ];
+
+        let state = SharedDeviceState::new(&configs);
+
+        // Test iter_active_devices
+        let active_devices: Vec<_> = state.iter_active_devices().collect();
+        assert_eq!(active_devices.len(), 2);
+
+        // Check that indices match the device_idx from configs
+        assert_eq!(active_devices[0].0, 0);
+        assert_eq!(active_devices[0].1.get_uuid(), "device-0");
+        assert_eq!(active_devices[1].0, 2);
+        assert_eq!(active_devices[1].1.get_uuid(), "device-2");
+
+        // Test iter_all_devices (should return all MAX_DEVICES entries)
+        let all_devices: Vec<_> = state.iter_all_devices().collect();
+        assert_eq!(all_devices.len(), MAX_DEVICES);
+
+        // Only the first two devices (at indices 0 and 2) should be active
+        let active_count = all_devices
+            .iter()
+            .filter(|(_, device)| device.is_active())
+            .count();
+        assert_eq!(active_count, 2);
+
+        // Test for_each_active_device
+        let mut found_devices = Vec::new();
+        state.for_each_active_device(|idx, device| {
+            found_devices.push((idx, device.get_uuid_owned()));
+        });
+
+        assert_eq!(found_devices.len(), 2);
+        assert_eq!(found_devices[0], (0, "device-0".to_string()));
+        assert_eq!(found_devices[1], (2, "device-2".to_string()));
+
+        // Test deactivating a device and checking iteration
+        let SharedDeviceState::V1(inner) = &state;
+        inner.devices[2].set_active(false);
+
+        let active_after_deactivation: Vec<_> = state.iter_active_devices().collect();
+        assert_eq!(active_after_deactivation.len(), 1);
+        assert_eq!(active_after_deactivation[0].0, 0);
+        assert_eq!(active_after_deactivation[0].1.get_uuid(), "device-0");
     }
 }

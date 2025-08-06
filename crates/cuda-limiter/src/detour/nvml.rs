@@ -22,18 +22,15 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
 ) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
 
-    let device_uuid = match limiter.device_uuid_by_handle(device) {
-        Ok(Some(device_uuid)) => device_uuid,
-        Ok(None) => {
-            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
-        }
+    let device_index = match limiter.device_raw_index_by_nvml_handle(device) {
+        Ok(device_index) => device_index,
         Err(e) => {
-            tracing::error!("Failed to get device UUID: {e}, falling back to original function");
-            return FN_NVML_DEVICE_GET_MEMORY_INFO(device, memory);
+            tracing::error!("nvml_device_get_memory_info_detour: Failed to get device UUID: {e}");
+            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
         }
     };
 
-    match limiter.get_pod_memory_usage(&device_uuid) {
+    match limiter.get_pod_memory_usage(device_index) {
         Ok((used, mem_limit)) => {
             let memory_ref = &mut *memory;
             memory_ref.total = mem_limit;
@@ -43,39 +40,6 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
         }
         Err(e) => {
             tracing::error!("Failed to get pod memory usage: {e}");
-            nvmlReturn_enum_NVML_ERROR_UNKNOWN
-        }
-    }
-}
-
-#[hook_fn]
-pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
-    device: nvmlDevice_t,
-    memory: *mut nvmlMemory_v2_t,
-) -> nvmlReturn_t {
-    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-
-    let device_uuid = match limiter.device_uuid_by_handle(device) {
-        Ok(Some(device_uuid)) => device_uuid,
-        Ok(None) => {
-            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
-        }
-        Err(e) => {
-            tracing::error!("Failed to get device UUID: {e}, falling back to original function");
-            return FN_NVML_DEVICE_GET_MEMORY_INFO_V2(device, memory);
-        }
-    };
-
-    match limiter.get_pod_memory_usage(&device_uuid) {
-        Ok((used, mem_limit)) => {
-            let memory_ref = &mut *memory;
-            memory_ref.total = mem_limit;
-            memory_ref.free = mem_limit.saturating_sub(used);
-            memory_ref.used = used;
-            nvmlReturn_enum_NVML_SUCCESS
-        }
-        Err(e) => {
-            tracing::error!("Failed to get memory limit: {e}");
             nvmlReturn_enum_NVML_ERROR_UNKNOWN
         }
     }
@@ -94,52 +58,34 @@ pub(crate) unsafe fn nvml_device_get_count_v2_detour(device_count: *mut c_uint) 
 }
 
 #[hook_fn]
-pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
-    index: c_uint,
-    device: *mut nvmlDevice_t,
-) -> nvmlReturn_t {
-    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let nvml_index = limiter.nvml_index_mapping(index as usize);
-    if let Ok(nvml_index) = nvml_index {
-        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(nvml_index, device)
-    } else {
-        nvmlReturn_enum_NVML_ERROR_NOT_FOUND
-    }
-}
-
-#[hook_fn]
-pub(crate) unsafe fn nvml_device_get_handle_by_index_detour(
-    index: c_uint,
-    device: *mut nvmlDevice_t,
-) -> nvmlReturn_t {
-    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    let nvml_index = limiter.nvml_index_mapping(index as usize);
-    if let Ok(nvml_index) = nvml_index {
-        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX(nvml_index, device)
-    } else {
-        nvmlReturn_enum_NVML_ERROR_NOT_FOUND
-    }
-}
-
-#[hook_fn]
-pub(crate) unsafe fn nvml_device_get_index_detour(
+pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     device: nvmlDevice_t,
-    index: *mut c_uint,
+    memory: *mut nvmlMemory_v2_t,
 ) -> nvmlReturn_t {
-    let index_ref = &mut *index;
-    let result = FN_NVML_DEVICE_GET_INDEX(device, index_ref);
-    if result == nvmlReturn_enum_NVML_SUCCESS {
-        let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-        let virtual_index = match limiter.nvml_index_reverse_mapping(*index_ref) {
-            Ok(nvml_index) => nvml_index,
-            Err(e) => {
-                tracing::error!("Failed to get NVML index: {e}");
-                return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
-            }
-        };
-        *index_ref = virtual_index.try_into().expect("NVML index not correct");
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let device_index = match limiter.device_raw_index_by_nvml_handle(device) {
+        Ok(device_index) => device_index,
+        Err(e) => {
+            tracing::error!(
+                "nvml_device_get_memory_info_v2_detour: Failed to get device UUID: {e}"
+            );
+            return nvmlReturn_enum_NVML_ERROR_NOT_FOUND;
+        }
+    };
+
+    match limiter.get_pod_memory_usage(device_index) {
+        Ok((used, mem_limit)) => {
+            let memory_ref = &mut *memory;
+            memory_ref.total = mem_limit;
+            memory_ref.free = mem_limit.saturating_sub(used);
+            memory_ref.used = used;
+            nvmlReturn_enum_NVML_SUCCESS
+        }
+        Err(e) => {
+            tracing::error!("Failed to get memory limit: {e}");
+            nvmlReturn_enum_NVML_ERROR_UNKNOWN
+        }
     }
-    result
 }
 
 #[hook_fn]
@@ -152,8 +98,21 @@ pub(crate) unsafe fn nvml_device_get_persistence_mode_detour(
     *mode_ref = nvmlEnableState_enum_NVML_FEATURE_DISABLED;
     nvmlReturn_enum_NVML_SUCCESS
 }
+#[hook_fn]
+pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
+    index: c_uint,
+    device: *mut nvmlDevice_t,
+) -> nvmlReturn_t {
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let nvml_index = limiter.nvml_index_mapping(index as usize);
+    if let Ok(nvml_index) = nvml_index {
+        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(nvml_index as c_uint, device)
+    } else {
+        nvmlReturn_enum_NVML_ERROR_NOT_FOUND
+    }
+}
 
-pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
+pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager, is_mapping_idx: bool) {
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),
@@ -170,44 +129,32 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         FnNvml_device_get_memory_info_v2,
         FN_NVML_DEVICE_GET_MEMORY_INFO_V2
     );
-    replace_symbol!(
-        hook_manager,
-        Some("libnvidia-ml."),
-        "nvmlDeviceGetCount_v2",
-        nvml_device_get_count_v2_detour,
-        FnNvml_device_get_count_v2,
-        FN_NVML_DEVICE_GET_COUNT_V2
-    );
-    replace_symbol!(
-        hook_manager,
-        Some("libnvidia-ml."),
-        "nvmlDeviceGetHandleByIndex_v2",
-        nvml_device_get_handle_by_index_v2_detour,
-        FnNvml_device_get_handle_by_index_v2,
-        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
-    );
-    replace_symbol!(
-        hook_manager,
-        Some("libnvidia-ml."),
-        "nvmlDeviceGetHandleByIndex",
-        nvml_device_get_handle_by_index_detour,
-        FnNvml_device_get_handle_by_index,
-        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX
-    );
-    replace_symbol!(
-        hook_manager,
-        Some("libnvidia-ml."),
-        "nvmlDeviceGetIndex",
-        nvml_device_get_index_detour,
-        FnNvml_device_get_index,
-        FN_NVML_DEVICE_GET_INDEX
-    );
-    replace_symbol!(
-        hook_manager,
-        Some("libnvidia-ml."),
-        "nvmlDeviceGetPersistenceMode",
-        nvml_device_get_persistence_mode_detour,
-        FnNvml_device_get_persistence_mode,
-        FN_NVML_DEVICE_GET_PERSISTENCE_MODE
-    );
+
+    if is_mapping_idx {
+        replace_symbol!(
+            hook_manager,
+            Some("libnvidia-ml."),
+            "nvmlDeviceGetCount_v2",
+            nvml_device_get_count_v2_detour,
+            FnNvml_device_get_count_v2,
+            FN_NVML_DEVICE_GET_COUNT_V2
+        );
+        replace_symbol!(
+            hook_manager,
+            Some("libnvidia-ml."),
+            "nvmlDeviceGetHandleByIndex_v2",
+            nvml_device_get_handle_by_index_v2_detour,
+            FnNvml_device_get_handle_by_index_v2,
+            FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
+        );
+
+        replace_symbol!(
+            hook_manager,
+            Some("libnvidia-ml."),
+            "nvmlDeviceGetPersistenceMode",
+            nvml_device_get_persistence_mode_detour,
+            FnNvml_device_get_persistence_mode,
+            FN_NVML_DEVICE_GET_PERSISTENCE_MODE
+        );
+    }
 }

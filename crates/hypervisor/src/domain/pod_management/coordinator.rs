@@ -239,9 +239,10 @@ impl LimiterCoordinator {
             .find(|config| config.device_idx == device_idx)
             .context("Device config must exist for filtered pod")?;
 
-        let current_share = Self::get_available_cores(pod_identifier, &device_config.device_uuid)
-            .await
-            .context("Failed to read current share from shared memory")?;
+        let current_share =
+            Self::get_available_cores(pod_identifier, device_config.device_idx as usize)
+                .await
+                .context("Failed to read current share from shared memory")?;
 
         let pod_utilization = device_snapshot.get_pod_utilization(&host_pids);
         let pod_memory = device_snapshot.get_pod_memory(&host_pids);
@@ -254,7 +255,7 @@ impl LimiterCoordinator {
 
         Self::update_shared_memory_state(
             pod_identifier,
-            &device_config.device_uuid,
+            device_config.device_idx as usize,
             Some(pod_memory),
             Some(new_share),
             device_snapshot.timestamp,
@@ -363,75 +364,66 @@ impl LimiterCoordinator {
     /// Updates the shared memory state efficiently without unnecessary blocking
     async fn update_shared_memory_state(
         pod_identifier: &str,
-        device_uuid: &str,
+        device_index: usize,
         memory_used: Option<u64>,
         new_share: Option<i32>,
         timestamp: u64,
     ) -> Result<()> {
         let pod_identifier = pod_identifier.to_string();
-        let device_uuid = device_uuid.to_string();
-        let pod_id_clone = pod_identifier.clone();
-        Self::with_shared_memory_handle(&pod_identifier, move |state| {
-            if !state.has_device(&device_uuid) {
+        Self::with_shared_memory_handle(&pod_identifier.clone(), move |state| {
+            if !state.has_device(device_index) {
                 anyhow::bail!(
                     "Device {} not found in shared memory for pod {}",
-                    device_uuid,
-                    pod_id_clone
+                    device_index,
+                    pod_identifier
                 );
             }
 
             if let Some(memory_used) = memory_used {
-                state.with_device_by_uuid_mut(&device_uuid, |device| {
-                    device.set_pod_memory_used(memory_used);
+                state.with_device(device_index, |device| {
+                    device.device_info.set_pod_memory_used(memory_used);
                 });
             }
 
             if let Some(new_share) = new_share {
-                state.with_device_by_uuid_mut(&device_uuid, |device| {
-                    let total_cuda_cores = device.get_total_cores() as i32;
-                    let current_cores = device.get_available_cores();
+                state.with_device(device_index, |device| {
+                    let total_cuda_cores = device.device_info.get_total_cores() as i32;
+                    let current_cores = device.device_info.get_available_cores();
                     let target_cores = new_share.max(0).min(total_cuda_cores);
                     let delta = target_cores - current_cores;
-                    device.fetch_add_available_cores(delta);
+                    device.device_info.fetch_add_available_cores(delta);
                 });
             }
 
             state.update_heartbeat(timestamp);
             Ok(())
         })
-        .await
     }
 
     /// Gets available cores for a device efficiently
-    async fn get_available_cores(pod_identifier: &str, device_uuid: &str) -> Result<i32> {
+    async fn get_available_cores(pod_identifier: &str, device_index: usize) -> Result<i32> {
         let pod_identifier = pod_identifier.to_string();
-        let device_uuid = device_uuid.to_string();
-        let pod_id_clone = pod_identifier.clone();
-        Self::with_shared_memory_handle(&pod_identifier, move |state| {
+
+        Self::with_shared_memory_handle(&pod_identifier.clone(), move |state| {
             state
-                .with_device_by_uuid(&device_uuid, |device| device.get_available_cores())
+                .with_device(device_index, |device| device.device_info.get_available_cores())
                 .context(format!(
-                    "Device {device_uuid} not found in shared memory for pod {pod_id_clone}. This indicates a system state inconsistency."
+                    "Device {device_index} not found in shared memory for pod {pod_identifier}. This indicates a system state inconsistency."
                 ))
         })
-        .await
     }
 
     /// Helper method to safely access shared memory handles with consistent error handling
-    async fn with_shared_memory_handle<T, F>(pod_identifier: &str, f: F) -> Result<T>
+    fn with_shared_memory_handle<T, F>(pod_identifier: &str, f: F) -> Result<T>
     where
         F: FnOnce(&SharedDeviceState) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
         let pod_identifier = pod_identifier.to_string();
-        tokio::task::spawn_blocking(move || {
-            let handle = SharedMemoryHandle::open(&pod_identifier)
-                .context("Failed to open shared memory")?;
-            let state = handle.get_state();
-            f(state)
-        })
-        .await
-        .context("Blocking task failed")?
+        let handle =
+            SharedMemoryHandle::open(&pod_identifier).context("Failed to open shared memory")?;
+        let state = handle.get_state();
+        f(state)
     }
 
     /// Gets a complete snapshot of device state (utilization + memory)
@@ -578,8 +570,7 @@ impl LimiterCoordinator {
                             if let Err(e) = Self::with_shared_memory_handle(&pod_identifier, move |state| {
                                 state.update_heartbeat(timestamp);
                                 Ok(())
-                                })
-                                .await
+                            })
                             {
                                 tracing::warn!(
                                     pod_identifier = %pod_identifier,

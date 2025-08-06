@@ -725,6 +725,7 @@ dependencies = [
  "api-types",
  "ctor",
  "cudarc",
+ "dashmap",
  "error-stack",
  "hex",
  "http-bidir-comm",

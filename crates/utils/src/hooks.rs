@@ -143,6 +143,10 @@ impl<T> HookFn<T> {
         self.0.set(value)
     }
 
+    pub fn is_none(&self) -> bool {
+        self.0.get().is_none()
+    }
+
     /// Until we can impl Default as const.
     pub const fn default_const() -> Self {
         Self(OnceLock::new())

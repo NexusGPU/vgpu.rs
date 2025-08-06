@@ -67,35 +67,53 @@ fn are_hooks_enabled() -> (bool, bool) {
     (enable_nvml_hooks, enable_cuda_hooks)
 }
 
+fn is_mock_mode() -> bool {
+    std::env::var("CUDA_LIMITER_MOCK_MODE").is_ok()
+}
+
 fn init_ngpu_library() {
     static NGPU_INITIALIZED: Once = Once::new();
     NGPU_INITIALIZED.call_once(|| {
-        let nvml = match Nvml::init().and(
-            Nvml::builder()
-                .lib_path(OsStr::new("libnvidia-ml.so.1"))
-                .init(),
-        ) {
-            Ok(nvml) => nvml,
-            Err(e) => {
-                tracing::error!("failed to initialize NVML: {}", e);
-                return;
-            }
-        };
+        let nvml =
+            match Nvml::builder()
+                .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
+                    OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
+                ))
+                .init()
+            {
+                Ok(nvml) => nvml,
+                Err(e) => {
+                    tracing::error!("failed to initialize NVML: {}", e);
+                    return;
+                }
+            };
 
-        let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
-            Some((ip, port)) => (ip, port),
-            None => {
-                tracing::info!("HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler");
-                return;
-            }
-        };
+        let config = if !is_mock_mode() {
+            let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
+                Some((ip, port)) => (ip, port),
+                None => {
+                    tracing::info!(
+                        "HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler"
+                    );
+                    return;
+                }
+            };
 
-        // Get device indices from environment variable
-        let config = match config::get_worker_config(&hypervisor_ip, &hypervisor_port) {
-            Ok(config) => config,
-            Err(err) => {
-                tracing::error!("failed to get device configs: {err}");
-                return;
+            // Get device indices from environment variable
+            let config = match config::get_worker_config(&hypervisor_ip, &hypervisor_port) {
+                Ok(config) => config,
+                Err(err) => {
+                    tracing::error!("failed to get device configs: {err}");
+                    return;
+                }
+            };
+            config
+        } else {
+            let dev = nvml.device_by_index(1).unwrap();
+            let uuid = dev.uuid().unwrap().to_string();
+            config::DeviceConfigResult {
+                gpu_uuids: vec![uuid],
+                host_pid: 0,
             }
         };
 
@@ -126,19 +144,7 @@ fn init_ngpu_library() {
             }
         }
 
-        let limiter = match Limiter::new(nvml, &config.gpu_uuids) {
-            Ok(limiter) => limiter,
-            Err(err) => {
-                tracing::error!("failed to init limiter, err: {err}, skip hooks");
-                HOOKS_INITIALIZED.0.store(true, Ordering::Release);
-                HOOKS_INITIALIZED.1.store(true, Ordering::Release);
-                return;
-            }
-        };
-
-        // after limiter initialized, remove CUDA_VISIBLE_DEVICES to avoid confusion with nvml index related hook
-        // after hooks installed, only specific devices will be visible, no need to set CUDA_VISIBLE_DEVICES
-        std::env::remove_var("CUDA_VISIBLE_DEVICES");
+        let limiter = Limiter::new(nvml, config.gpu_uuids).expect("failed to initialize Limiter");
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
     });
 }
@@ -196,7 +202,7 @@ fn try_install_nvml_hooks() {
     tracing::debug!("Installing NVML hooks...");
 
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        detour::nvml::enable_hooks(&mut hook_manager);
+        detour::nvml::enable_hooks(&mut hook_manager, is_mapping_device_idx());
     }));
 
     match install_result {
@@ -211,6 +217,15 @@ fn try_install_nvml_hooks() {
 }
 
 fn init_hooks() {
+    if cfg!(test) {
+        tracing::debug!("Test mode detected, skipping hook initialization");
+        return;
+    }
+
+    unsafe {
+        // Load CUDA library to ensure it's loaded before hooks are installed
+        let _ = culib::culib();
+    }
     init_ngpu_library();
 
     // Try to install hooks immediately if libraries are already loaded
@@ -346,4 +361,9 @@ pub fn global_trap() -> impl Trap {
     });
 
     trap.lock().expect("poisoned").clone()
+}
+
+fn is_mapping_device_idx() -> bool {
+    let cmdline = std::fs::read_to_string("/proc/self/cmdline").unwrap();
+    cmdline.contains("nvidia-smi")
 }
