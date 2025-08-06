@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use cudarc::driver::sys::CUdevice;
 use dashmap::DashMap;
+use nvml_wrapper::error::nvml_try;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
@@ -14,6 +15,7 @@ use trap::TrapError;
 use utils::shared_memory::handle::SharedMemoryHandle;
 
 use crate::culib;
+use crate::detour::nvml::FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
@@ -173,10 +175,8 @@ impl Limiter {
         if !state.has_device(raw_device_index) {
             return Err(Error::DeviceNotConfigured(raw_device_index));
         }
-        if !crate::is_mock_mode() {
-            if !state.is_healthy(Duration::from_secs(2)) {
-                return Err(Error::DeviceNotHealthy(raw_device_index));
-            }
+        if !crate::is_mock_mode() && !state.is_healthy(Duration::from_secs(2)) {
+            return Err(Error::DeviceNotHealthy(raw_device_index));
         }
 
         // Exponential backoff parameters
@@ -221,10 +221,8 @@ impl Limiter {
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
 
-        if !crate::is_mock_mode() {
-            if !state.is_healthy(Duration::from_secs(2)) {
-                return Err(Error::DeviceNotHealthy(raw_device_index));
-            }
+        if !crate::is_mock_mode() && !state.is_healthy(Duration::from_secs(2)) {
+            return Err(Error::DeviceNotHealthy(raw_device_index));
         }
 
         if let Some((used, limit)) = state.with_device(raw_device_index, |device| {
@@ -250,10 +248,24 @@ impl Limiter {
         device_handle: nvmlDevice_t,
     ) -> Result<usize, NvmlError> {
         for (idx, uuid) in self.gpu_idx_uuids.iter() {
-            let dev = self.nvml.device_by_index(*idx as u32);
+            let dev = if FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2.is_none() {
+                self.nvml
+                    .device_by_index(*idx as u32)
+                    .map(|dev| unsafe { dev.handle() })
+            } else {
+                let mut device_handle = device_handle;
+                unsafe {
+                    nvml_try(FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(
+                        *idx as u32,
+                        &mut device_handle,
+                    ))
+                    .map(|_| device_handle)
+                }
+            };
+
             match dev {
                 Ok(dev) => {
-                    if unsafe { dev.handle() } == device_handle {
+                    if dev == device_handle {
                         return Ok(*idx);
                     }
                 }
@@ -268,6 +280,13 @@ impl Limiter {
             device_handle
         );
         Err(NvmlError::NotFound)
+    }
+
+    pub(crate) fn nvml_index_mapping(&self, index: usize) -> Result<usize, Error> {
+        self.gpu_idx_uuids
+            .get(index)
+            .map(|(idx, _)| *idx)
+            .ok_or_else(|| Error::DeviceNotConfigured(index))
     }
 
     /// Get block dimensions for a device

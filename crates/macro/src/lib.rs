@@ -101,7 +101,7 @@ pub fn hook_fn(
         // Create a new body with tracing at the beginning - just log the function name
         let new_body = quote! {
             {
-                tracing::debug!(target: "hook_fn", "Called {}", stringify!(#fn_name));
+                tracing::trace!(target: "hook_fn", "Called {}", stringify!(#fn_name));
                 #block
             }
         };

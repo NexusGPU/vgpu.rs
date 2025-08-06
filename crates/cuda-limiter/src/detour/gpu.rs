@@ -389,7 +389,7 @@ pub(crate) unsafe extern "C" fn cu_device_get_detour(
         );
 
         if let Err(e) = limiter.insert_cu_device_if_not_exists(*device, || {
-            let uuid = unsafe { culib::device_uuid(*device).map_err(|e| Error::Cuda(e))? };
+            let uuid = unsafe { culib::device_uuid(*device).map_err(Error::Cuda)? };
             Ok(uuid)
         }) {
             tracing::error!("Failed to insert CUDA device: {}", e);

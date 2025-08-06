@@ -1,3 +1,5 @@
+use std::ffi::c_uint;
+
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
 use nvml_wrapper_sys::bindings::nvmlEnableState_enum_NVML_FEATURE_DISABLED;
 use nvml_wrapper_sys::bindings::nvmlEnableState_t;
@@ -44,6 +46,18 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
 }
 
 #[hook_fn]
+pub(crate) unsafe fn nvml_device_get_count_v2_detour(device_count: *mut c_uint) -> nvmlReturn_t {
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let device_count_ref: &mut u32 = &mut *device_count;
+    *device_count_ref = limiter.get_device_count();
+    tracing::info!(
+        "nvml_device_get_count_v2_detour: device count: {}",
+        *device_count_ref
+    );
+    nvmlReturn_enum_NVML_SUCCESS
+}
+
+#[hook_fn]
 pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     device: nvmlDevice_t,
     memory: *mut nvmlMemory_v2_t,
@@ -84,8 +98,21 @@ pub(crate) unsafe fn nvml_device_get_persistence_mode_detour(
     *mode_ref = nvmlEnableState_enum_NVML_FEATURE_DISABLED;
     nvmlReturn_enum_NVML_SUCCESS
 }
+#[hook_fn]
+pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
+    index: c_uint,
+    device: *mut nvmlDevice_t,
+) -> nvmlReturn_t {
+    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+    let nvml_index = limiter.nvml_index_mapping(index as usize);
+    if let Ok(nvml_index) = nvml_index {
+        FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2(nvml_index as c_uint, device)
+    } else {
+        nvmlReturn_enum_NVML_ERROR_NOT_FOUND
+    }
+}
 
-pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
+pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager, is_mapping_idx: bool) {
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),
@@ -102,44 +129,32 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         FnNvml_device_get_memory_info_v2,
         FN_NVML_DEVICE_GET_MEMORY_INFO_V2
     );
-    // replace_symbol!(
-    //     hook_manager,
-    //     Some("libnvidia-ml."),
-    //     "nvmlDeviceGetCount_v2",
-    //     nvml_device_get_count_v2_detour,
-    //     FnNvml_device_get_count_v2,
-    //     FN_NVML_DEVICE_GET_COUNT_V2
-    // );
-    // replace_symbol!(
-    //     hook_manager,
-    //     Some("libnvidia-ml."),
-    //     "nvmlDeviceGetHandleByIndex_v2",
-    //     nvml_device_get_handle_by_index_v2_detour,
-    //     FnNvml_device_get_handle_by_index_v2,
-    //     FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
-    // );
-    // replace_symbol!(
-    //     hook_manager,
-    //     Some("libnvidia-ml."),
-    //     "nvmlDeviceGetHandleByIndex",
-    //     nvml_device_get_handle_by_index_detour,
-    //     FnNvml_device_get_handle_by_index,
-    //     FN_NVML_DEVICE_GET_HANDLE_BY_INDEX
-    // );
-    // replace_symbol!(
-    //     hook_manager,
-    //     Some("libnvidia-ml."),
-    //     "nvmlDeviceGetIndex",
-    //     nvml_device_get_index_detour,
-    //     FnNvml_device_get_index,
-    //     FN_NVML_DEVICE_GET_INDEX
-    // );
-    replace_symbol!(
-        hook_manager,
-        Some("libnvidia-ml."),
-        "nvmlDeviceGetPersistenceMode",
-        nvml_device_get_persistence_mode_detour,
-        FnNvml_device_get_persistence_mode,
-        FN_NVML_DEVICE_GET_PERSISTENCE_MODE
-    );
+
+    if is_mapping_idx {
+        replace_symbol!(
+            hook_manager,
+            Some("libnvidia-ml."),
+            "nvmlDeviceGetCount_v2",
+            nvml_device_get_count_v2_detour,
+            FnNvml_device_get_count_v2,
+            FN_NVML_DEVICE_GET_COUNT_V2
+        );
+        replace_symbol!(
+            hook_manager,
+            Some("libnvidia-ml."),
+            "nvmlDeviceGetHandleByIndex_v2",
+            nvml_device_get_handle_by_index_v2_detour,
+            FnNvml_device_get_handle_by_index_v2,
+            FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
+        );
+
+        replace_symbol!(
+            hook_manager,
+            Some("libnvidia-ml."),
+            "nvmlDeviceGetPersistenceMode",
+            nvml_device_get_persistence_mode_detour,
+            FnNvml_device_get_persistence_mode,
+            FN_NVML_DEVICE_GET_PERSISTENCE_MODE
+        );
+    }
 }

@@ -202,7 +202,7 @@ fn try_install_nvml_hooks() {
     tracing::debug!("Installing NVML hooks...");
 
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        detour::nvml::enable_hooks(&mut hook_manager);
+        detour::nvml::enable_hooks(&mut hook_manager, is_mapping_device_idx());
     }));
 
     match install_result {
@@ -356,4 +356,9 @@ pub fn global_trap() -> impl Trap {
     });
 
     trap.lock().expect("poisoned").clone()
+}
+
+fn is_mapping_device_idx() -> bool {
+    let cmdline = std::fs::read_to_string("/proc/self/cmdline").unwrap();
+    cmdline.contains("nvidia-smi")
 }

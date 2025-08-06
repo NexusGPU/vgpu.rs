@@ -14,7 +14,7 @@ macro_rules! with_device {
                 panic!("Failed to get current CUDA device: error code {:?}", result);
             }
 
-            let limiter: &crate::limiter::Limiter = $crate::GLOBAL_LIMITER
+            let limiter: &$crate::limiter::Limiter = $crate::GLOBAL_LIMITER
                 .get()
                 .expect("Limiter not initialized");
 
