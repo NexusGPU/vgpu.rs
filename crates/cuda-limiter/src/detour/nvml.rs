@@ -69,7 +69,6 @@ pub(crate) unsafe fn nvml_device_get_count_detour(device_count: *mut c_uint) -> 
     nvmlReturn_enum_NVML_SUCCESS
 }
 
-
 #[hook_fn]
 pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     device: nvmlDevice_t,
