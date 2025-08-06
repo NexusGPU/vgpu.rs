@@ -541,8 +541,18 @@ mod tests {
         // Test initial state
         assert_eq!(state.version(), 1);
         assert_eq!(state.device_count(), 1);
-        assert_eq!(state.get_last_heartbeat(), 0);
-        assert!(!state.is_healthy(Duration::from_secs(30)));
+
+        // Test that heartbeat is initialized to current time (should be non-zero and recent)
+        let heartbeat = state.get_last_heartbeat();
+        assert!(heartbeat > 0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(now.saturating_sub(heartbeat) < 2); // Should be within 2 seconds
+
+        // Should be healthy since heartbeat was just set
+        assert!(state.is_healthy(Duration::from_secs(30)));
 
         // Test device exists by index
         let device_idx = configs[0].device_idx as usize;
@@ -553,10 +563,10 @@ mod tests {
     fn shared_device_state_heartbeat_functionality() {
         let state = SharedDeviceState::new(&[]);
 
-        // Test initial unhealthy state
-        assert!(!state.is_healthy(Duration::from_secs(30)));
+        // Test initial healthy state (heartbeat is initialized to current time)
+        assert!(state.is_healthy(Duration::from_secs(30)));
 
-        // Test setting heartbeat
+        // Test setting heartbeat to a specific time
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -566,7 +576,7 @@ mod tests {
         assert_eq!(state.get_last_heartbeat(), now);
         assert!(state.is_healthy(Duration::from_secs(30)));
 
-        // Test old heartbeat
+        // Test old heartbeat (should be unhealthy)
         state.update_heartbeat(now - 60);
         assert!(!state.is_healthy(Duration::from_secs(30)));
     }
