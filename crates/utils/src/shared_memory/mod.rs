@@ -267,11 +267,7 @@ impl SharedDeviceState {
     {
         match self {
             Self::V1(inner) => {
-                if index < inner.device_count() {
-                    Some(f(&inner.devices[index]))
-                } else {
-                    None
-                }
+                inner.devices.get(index).map(f)
             }
         }
     }
