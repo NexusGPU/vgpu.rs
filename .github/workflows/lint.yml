@@ -30,5 +30,7 @@ jobs:
       with:
         sub-packages: '["nvcc", "cudart-dev"]'
         method: network
+    - name: Install Protobuf Compiler (protoc)
+      run: sudo apt-get install -y protobuf-compiler
     - name: Check clippy
       run: cargo clippy --locked --workspace --all-targets -- -D warnings

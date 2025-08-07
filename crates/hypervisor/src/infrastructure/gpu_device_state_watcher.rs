@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
@@ -41,10 +42,13 @@ pub struct GpuDeviceStateWatcher {
 }
 
 impl GpuDeviceStateWatcher {
-    pub fn new(kubelet_device_state_path: PathBuf) -> Self {
+    pub fn new<P1: Into<PathBuf>, P2: Into<PathBuf>>(
+        kubelet_device_state_path: P1,
+        kubelet_socket_path: P2,
+    ) -> Self {
         Self {
-            kubelet_device_state_path,
-            kubelet_socket_path: PathBuf::from("/var/lib/kubelet/pod-resources/kubelet.sock"),
+            kubelet_device_state_path: kubelet_device_state_path.into(),
+            kubelet_socket_path: kubelet_socket_path.into(),
         }
     }
 
@@ -619,9 +623,7 @@ impl GpuDeviceStateWatcher {
     }
 
     /// Create a gRPC channel connected to the kubelet unix socket
-    async fn create_unix_channel(
-        &self,
-    ) -> Result<tonic::transport::Channel, Box<dyn std::error::Error + Send + Sync>> {
+    async fn create_unix_channel(&self) -> Result<tonic::transport::Channel, io::Error> {
         use hyper_util::rt::TokioIo;
         use tonic::transport::{Endpoint, Uri};
         use tower::service_fn;
@@ -630,16 +632,18 @@ impl GpuDeviceStateWatcher {
         let socket_path = self.kubelet_socket_path.clone();
 
         // Create a channel that connects to the unix socket using TokioIo wrapper
-        let channel = Endpoint::try_from("http://[::]:50051")?
+        let channel: tonic::transport::Channel = Endpoint::try_from("http://[::]:50051")
+            .map_err(|e| io::Error::other(e.to_string()))?
             .connect_with_connector(service_fn(move |_: Uri| {
                 let socket_path = socket_path.clone();
                 async move {
-                    let stream = tokio::net::UnixStream::connect(socket_path).await?;
-                    Ok::<_, std::io::Error>(TokioIo::new(stream))
+                    tokio::net::UnixStream::connect(socket_path)
+                        .await
+                        .map(TokioIo::new)
                 }
             }))
-            .await?;
-
+            .await
+            .map_err(|e| io::Error::other(e.to_string()))?;
         Ok(channel)
     }
 
@@ -756,6 +760,7 @@ mod tests {
 
     use super::*;
 
+    const KUBELET_DEVICE_STATE_PATH: &str = "/var/lib/kubelet/pod-resources/kubelet.sock";
     fn create_test_device_state() -> KubeletDeviceState {
         let mut device_ids = HashMap::new();
         device_ids.insert(
@@ -813,7 +818,8 @@ mod tests {
         let device_state = create_test_device_state();
         let temp_file = create_temp_device_state_file(&device_state).await;
 
-        let watcher = GpuDeviceStateWatcher::new(temp_file.path().to_path_buf());
+        let watcher =
+            GpuDeviceStateWatcher::new(temp_file.path().to_path_buf(), KUBELET_DEVICE_STATE_PATH);
         let result = watcher.read_device_state_file().await;
 
         assert!(result.is_ok(), "should successfully read device state file");
@@ -831,7 +837,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_device_state_file_not_found() {
-        let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/nonexistent/path"));
+        let watcher = GpuDeviceStateWatcher::new(
+            PathBuf::from("/nonexistent/path"),
+            KUBELET_DEVICE_STATE_PATH,
+        );
         let result = watcher.read_device_state_file().await;
 
         assert!(result.is_err(), "should fail when file does not exist");
@@ -853,7 +862,8 @@ mod tests {
             .expect("should write to temp file");
         temp_file.flush().expect("should flush temp file");
 
-        let watcher = GpuDeviceStateWatcher::new(temp_file.path().to_path_buf());
+        let watcher =
+            GpuDeviceStateWatcher::new(temp_file.path().to_path_buf(), KUBELET_DEVICE_STATE_PATH);
         let result = watcher.read_device_state_file().await;
 
         assert!(result.is_err(), "should fail when JSON is invalid");
@@ -868,7 +878,7 @@ mod tests {
 
     #[test]
     fn test_extract_device_ids_with_devices() {
-        let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
+        let watcher = GpuDeviceStateWatcher::new("/test", KUBELET_DEVICE_STATE_PATH);
         let device_state = create_test_device_state();
 
         let resource_system_map = GpuDeviceStateWatcher::create_resource_system_map();
@@ -887,7 +897,7 @@ mod tests {
 
     #[test]
     fn test_extract_device_ids_empty() {
-        let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
+        let watcher = GpuDeviceStateWatcher::new("/test", KUBELET_DEVICE_STATE_PATH);
         let device_state = create_empty_device_state();
 
         let resource_system_map = GpuDeviceStateWatcher::create_resource_system_map();
@@ -903,7 +913,7 @@ mod tests {
 
     #[test]
     fn test_extract_device_ids_multiple_devices() {
-        let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
+        let watcher = GpuDeviceStateWatcher::new("/test", KUBELET_DEVICE_STATE_PATH);
 
         let mut device_ids_1 = HashMap::new();
         device_ids_1.insert(
@@ -958,7 +968,7 @@ mod tests {
 
     #[test]
     fn test_find_resource_name_for_device_success() {
-        let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
+        let watcher = GpuDeviceStateWatcher::new("/test", KUBELET_DEVICE_STATE_PATH);
         let device_state = create_test_device_state();
 
         let result = watcher.find_resource_name_for_device(
@@ -976,7 +986,7 @@ mod tests {
 
     #[test]
     fn test_find_resource_name_for_device_not_found() {
-        let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
+        let watcher = GpuDeviceStateWatcher::new("/test", KUBELET_DEVICE_STATE_PATH);
         let device_state = create_test_device_state();
 
         let result = watcher.find_resource_name_for_device(&device_state, "nonexistent-device");
@@ -1015,7 +1025,7 @@ mod tests {
 
     #[test]
     fn test_log_device_allocation_details() {
-        let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
+        let watcher = GpuDeviceStateWatcher::new("/test", KUBELET_DEVICE_STATE_PATH);
         let device_state = create_test_device_state();
 
         // This test mainly ensures the function doesn't panic
@@ -1164,7 +1174,7 @@ mod tests {
 
     #[test]
     fn test_device_state_with_complex_device_ids() {
-        let watcher = GpuDeviceStateWatcher::new(PathBuf::from("/test"));
+        let watcher = GpuDeviceStateWatcher::new("/test", KUBELET_DEVICE_STATE_PATH);
 
         // Create a more complex device ID structure
         let mut device_ids = HashMap::new();

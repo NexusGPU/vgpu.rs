@@ -86,7 +86,8 @@ impl ApplicationBuilder {
 
         // create a GPU device state watcher
         let gpu_device_state_watcher = Arc::new(GpuDeviceStateWatcher::new(
-            self.daemon_args.kubelet_device_state_path.clone(),
+            &self.daemon_args.kubelet_device_state_path,
+            &self.daemon_args.kubelet_socket_path,
         ));
 
         // create a pod info cache
