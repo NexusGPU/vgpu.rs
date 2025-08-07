@@ -51,7 +51,7 @@ prost = "0.13"
 prost-types = "0.14"
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-build = "0.14"
 
 [[bin]]
 name = "hypervisor"
