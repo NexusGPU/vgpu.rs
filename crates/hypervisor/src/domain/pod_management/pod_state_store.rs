@@ -49,12 +49,12 @@ impl PodStateStore {
     /// This operation is idempotent - if the pod already exists, it will be updated.
     pub fn register_pod(
         &self,
-        pod_identifier: String,
+        pod_identifier: &str,
         info: WorkerInfo,
         device_configs: Vec<DeviceConfig>,
     ) -> Result<()> {
         let mut pod_state = PodState::new(info.clone(), device_configs);
-
+        let pod_identifier = pod_identifier.to_string();
         // If pod already exists, preserve existing processes and shared memory handle
         if let Some(existing) = self.pods.get(&pod_identifier) {
             pod_state.processes = existing.processes.clone();
@@ -67,13 +67,13 @@ impl PodStateStore {
         }
 
         let device_count = pod_state.device_configs.len();
-        self.pods.insert(pod_identifier.clone(), pod_state);
-
         info!(
             pod_identifier = %pod_identifier,
             device_count = device_count,
             "Pod registered in state store"
         );
+
+        self.pods.insert(pod_identifier.to_string(), pod_state);
 
         Ok(())
     }
@@ -305,7 +305,7 @@ mod tests {
 
         // Test pod registration
         store
-            .register_pod("pod-1".to_string(), info.clone(), device_configs)
+            .register_pod("pod-1", info.clone(), device_configs)
             .unwrap();
 
         assert!(store.contains_pod("pod-1"));
@@ -335,9 +335,7 @@ mod tests {
         let info = create_test_worker_info("test-pod");
         let device_configs = vec![create_test_device_config()];
 
-        store
-            .register_pod("pod-1".to_string(), info, device_configs)
-            .unwrap();
+        store.register_pod("pod-1", info, device_configs).unwrap();
 
         let pods_using_device_0 = store.get_pods_using_device(0);
         assert_eq!(pods_using_device_0.len(), 1);
@@ -359,9 +357,7 @@ mod tests {
         assert_eq!(stats.total_processes, 0);
 
         // Add pod
-        store
-            .register_pod("pod-1".to_string(), info, device_configs)
-            .unwrap();
+        store.register_pod("pod-1", info, device_configs).unwrap();
 
         let stats = store.stats();
         assert_eq!(stats.total_pods, 1);

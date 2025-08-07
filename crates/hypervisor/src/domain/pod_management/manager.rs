@@ -165,7 +165,7 @@ impl PodManager {
     }
 
     /// Ensure pod is registered in all components (lazy loading)
-    async fn ensure_pod_registered(
+    pub async fn ensure_pod_registered(
         &self,
         namespace: &str,
         pod_name: &str,
@@ -208,7 +208,14 @@ impl PodManager {
 
         // Register in state store
         self.pod_state_store
-            .register_pod(pod_identifier, pod_info.0, device_configs.clone())?;
+            .register_pod(&pod_identifier, pod_info.0, device_configs.clone())?;
+
+        self.limiter_coordinator
+            .ensure_pod_registered(&pod_identifier, device_configs.clone())
+            .await
+            .map_err(|e| PodManagementError::RegistrationFailed {
+                message: e.to_string(),
+            })?;
 
         Ok(device_configs)
     }

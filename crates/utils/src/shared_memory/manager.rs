@@ -31,12 +31,8 @@ impl ThreadSafeSharedMemoryManager {
         }
     }
 
-    /// Creates or gets a shared memory segment.
-    pub fn create_or_get_shared_memory(
-        &self,
-        identifier: &str,
-        configs: &[DeviceConfig],
-    ) -> Result<()> {
+    /// Creates a shared memory segment.
+    pub fn create_shared_memory(&self, identifier: &str, configs: &[DeviceConfig]) -> Result<()> {
         let mut memories = self.active_memories.write();
 
         // Check if the segment already exists.
@@ -52,26 +48,22 @@ impl ThreadSafeSharedMemoryManager {
         Ok(())
     }
 
-    /// Registers an existing shared memory handle without reinitializing the data.
-    /// This is useful when restoring state from existing shared memory.
-    pub fn register_existing_handle(
-        &self,
-        identifier: &str,
-        handle: SharedMemoryHandle,
-    ) -> Result<()> {
-        let mut memories = self.active_memories.write();
-
-        // Only register if not already present
-        if !memories.contains_key(identifier) {
-            memories.insert(identifier.to_string(), handle);
-        }
-
-        Ok(())
-    }
-
     /// Gets a pointer to the shared memory by its identifier.
     pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut SharedDeviceState> {
-        self.with_memory_handle(identifier, |shmem| Ok(shmem.get_ptr()))
+        if let Some(shmem) = self.active_memories.read().get(identifier) {
+            Ok(shmem.get_ptr())
+        } else {
+            self.active_memories.write().insert(
+                identifier.to_string(),
+                SharedMemoryHandle::open(identifier)?,
+            );
+            Ok(self
+                .active_memories
+                .read()
+                .get(identifier)
+                .unwrap()
+                .get_ptr())
+        }
     }
 
     pub fn add_pid(&self, identifier: &str, pid: usize) -> Result<()> {

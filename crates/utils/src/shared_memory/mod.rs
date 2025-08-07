@@ -702,9 +702,7 @@ mod tests {
         let identifier = create_unique_identifier("manager_basic");
 
         // Test creation
-        manager
-            .create_or_get_shared_memory(&identifier, &configs)
-            .unwrap();
+        manager.create_shared_memory(&identifier, &configs).unwrap();
         assert!(manager.contains(&identifier));
 
         // Verify shared memory file exists
@@ -742,8 +740,7 @@ mod tests {
             let identifier_clone = identifier.clone();
 
             let handle = thread::spawn(move || {
-                let result =
-                    manager_clone.create_or_get_shared_memory(&identifier_clone, &configs_clone);
+                let result = manager_clone.create_shared_memory(&identifier_clone, &configs_clone);
                 assert!(result.is_ok());
             });
 
