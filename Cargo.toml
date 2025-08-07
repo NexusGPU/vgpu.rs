@@ -47,7 +47,7 @@ priority-queue = "2.5.0"
 serde_yaml = "0.9"
 influxdb-line-protocol = "2.0.0"
 poem = { version = "3.1", features = ["sse", "test"] }
-frida-gum = { git = "https://github.com/frida/frida-rust", rev = "e5840dfd5c0c99b74d58adcdd00e10521d0ffd0f" }
+frida-gum = { version = "0.17" }
 libc = "0.2.174"
 tempfile = "3.20.0"
 proc-macro2 = "1"

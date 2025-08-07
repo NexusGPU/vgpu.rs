@@ -74,6 +74,13 @@ pub async fn get_pod_info(
         qos_level: pod_entry.qos_level,
     };
 
+    pod_manager
+        .ensure_pod_registered(namespace, pod_name)
+        .await
+        .map_err(|e| {
+            poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+
     Ok(poem::web::Json(PodInfoResponse {
         success: true,
         data: Some(pod_info),

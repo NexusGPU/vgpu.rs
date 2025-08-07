@@ -265,15 +265,15 @@ impl LimiterCoordinator {
     }
 
     /// Ensures a pod is registered with device configurations (idempotent operation)
-    async fn ensure_pod_registered(
+    pub async fn ensure_pod_registered(
         &self,
         pod_identifier: &str,
         configs: Vec<DeviceConfig>,
     ) -> Result<()> {
-        let (restored_pids, existed) = match SharedMemoryHandle::open(pod_identifier) {
-            Ok(handle) => {
+        let restored_pids = match self.shared_memory_manager.get_shared_memory(pod_identifier) {
+            Ok(ptr) => {
                 debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
-                let restored_pids = handle.get_state().get_all_pids();
+                let restored_pids = unsafe { &*ptr }.get_all_pids();
 
                 if !restored_pids.is_empty() {
                     debug!(
@@ -283,27 +283,15 @@ impl LimiterCoordinator {
                         restored_pids.len()
                     );
                 }
-
-                self.shared_memory_manager
-                    .register_existing_handle(pod_identifier, handle)?;
-
-                (restored_pids, true)
+                restored_pids
             }
             Err(_) => {
                 debug!(pod_identifier = %pod_identifier, "Creating new shared memory for pod");
                 self.shared_memory_manager
-                    .create_or_get_shared_memory(pod_identifier, &configs)?;
-                (Vec::new(), false)
+                    .create_shared_memory(pod_identifier, &configs)?;
+                Vec::new()
             }
         };
-
-        info!(
-            pod_identifier = %pod_identifier,
-            device_count = configs.len(),
-            restored_processes = restored_pids.len(),
-            shared_memory_existed = existed,
-            "Pod registered successfully"
-        );
 
         if !restored_pids.is_empty() {
             info!(
