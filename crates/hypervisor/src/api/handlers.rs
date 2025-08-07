@@ -10,11 +10,11 @@ use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
 
-use super::types::JwtPayload;
-use super::types::PodInfo;
-use super::types::PodInfoResponse;
-use super::types::ProcessInfo;
-use super::types::ProcessInitResponse;
+use super::JwtPayload;
+use super::PodInfo;
+use super::PodInfoResponse;
+use super::ProcessInfo;
+use super::ProcessInitResponse;
 
 use crate::pod_management::PodManager;
 

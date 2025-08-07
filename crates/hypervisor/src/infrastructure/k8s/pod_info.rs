@@ -4,8 +4,8 @@ use api_types::QosLevel;
 use error_stack::Report;
 use error_stack::ResultExt;
 
-use crate::api::types::WorkerInfo;
-use crate::infrastructure::k8s::types::KubernetesError;
+use crate::infrastructure::k8s::KubernetesError;
+use api_types::WorkerInfo;
 
 /// Domain prefix for tensor-fusion annotations.
 const TENSOR_FUSION_DOMAIN: &str = "tensor-fusion.ai";

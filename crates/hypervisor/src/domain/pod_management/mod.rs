@@ -14,3 +14,6 @@ pub use pod_state_store::{PodStateStore, StoreStats};
 pub use types::{
     DeviceUsage, PodManagementError, PodState, PodStatus, ProcessState, Result, SystemStats,
 };
+
+/// Concrete pod manager type
+pub type PodManagerType = PodManager;

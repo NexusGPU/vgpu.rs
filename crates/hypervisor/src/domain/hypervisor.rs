@@ -5,10 +5,13 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::GpuProcess;
-use crate::scheduler::GpuScheduler;
+use crate::process::{GpuProcess, Worker};
 use crate::scheduler::SchedulingDecision;
+use crate::scheduler::{GpuScheduler, Scheduler};
 use trap::{TrapFrame, TrapHandler, Waker};
+
+/// Concrete hypervisor type used throughout the application
+pub type HypervisorType = Hypervisor<Worker, Scheduler>;
 
 pub struct Hypervisor<Proc: GpuProcess, Sched: GpuScheduler<Proc>> {
     scheduler: Arc<Mutex<Sched>>,

@@ -25,7 +25,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::infrastructure::k8s::pod_info::TensorFusionPodInfo;
-use crate::infrastructure::k8s::types::KubernetesError;
+use crate::infrastructure::k8s::KubernetesError;
 use crate::infrastructure::kube_client;
 
 /// Key for identifying a pod in the cache

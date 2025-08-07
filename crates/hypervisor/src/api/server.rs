@@ -22,8 +22,8 @@ use trap::TrapHandler;
 use trap::Waker;
 
 use super::auth::JwtAuthMiddleware;
-use super::errors::ApiError;
-use super::types::JwtAuthConfig;
+use super::ApiError;
+use super::JwtAuthConfig;
 use crate::api::handlers::get_pod_info;
 use crate::api::handlers::process_init;
 use crate::limiter_comm::CommandDispatcher;

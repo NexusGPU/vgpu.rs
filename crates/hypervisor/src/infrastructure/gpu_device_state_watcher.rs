@@ -27,7 +27,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::k8s::types::KubernetesError;
+use crate::k8s::KubernetesError;
 use crate::kube_client;
 use kube::api::{ObjectMeta, Patch};
 

@@ -9,7 +9,7 @@ use api_types::QosLevel;
 use super::GpuProcess;
 use super::GpuResources;
 use super::ProcessState;
-use crate::api::types::LimiterCommandType;
+use crate::api::LimiterCommandType;
 use crate::gpu_observer::GpuObserver;
 use crate::limiter_comm::CommandDispatcher;
 

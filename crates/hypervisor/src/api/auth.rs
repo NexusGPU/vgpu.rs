@@ -9,9 +9,9 @@ use poem::Result as PoemResult;
 use tracing::debug;
 use tracing::error;
 
-use super::errors::ApiError;
-use super::types::JwtAuthConfig;
-use super::types::JwtPayload;
+use super::ApiError;
+use super::JwtAuthConfig;
+use super::JwtPayload;
 
 /// JWT authentication middleware
 pub struct JwtAuthMiddleware {

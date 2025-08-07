@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::core::types::{HypervisorType, PodManagerType};
 use crate::domain::pod_management::LimiterCoordinator;
+use crate::domain::{HypervisorType, PodManagerType};
 use crate::infrastructure::gpu_device_state_watcher::GpuDeviceStateWatcher;
 use crate::infrastructure::gpu_observer::GpuObserver;
 use crate::infrastructure::host_pid_probe::HostPidProbe;

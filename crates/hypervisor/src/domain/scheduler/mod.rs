@@ -2,9 +2,15 @@ use std::fmt;
 
 use anyhow::Result;
 
-use crate::process::GpuProcess;
+use crate::process::{GpuProcess, Worker};
 
 pub mod weighted;
+
+// Re-export weighted scheduler
+pub use weighted::WeightedScheduler;
+
+/// Concrete scheduler type
+pub type Scheduler = WeightedScheduler<Worker>;
 
 // Public exports - remove self-references as types are already public
 

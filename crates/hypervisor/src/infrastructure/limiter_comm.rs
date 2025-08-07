@@ -12,9 +12,9 @@ use http_bidir_comm::{ClientStats, CommError, HttpServer, ServerConfig};
 use tracing::info;
 use tracing::instrument;
 
-use crate::api::types::LimiterCommand;
-use crate::api::types::LimiterCommandResponse;
-use crate::api::types::LimiterCommandType;
+use crate::api::LimiterCommand;
+use crate::api::LimiterCommandResponse;
+use crate::api::LimiterCommandType;
 
 /// Command dispatcher using the new HTTP bidirectional communication library.
 pub struct CommandDispatcher {

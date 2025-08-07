@@ -7,7 +7,7 @@ use kube::config::Kubeconfig;
 use kube::Client;
 use kube::Config;
 
-use crate::infrastructure::k8s::types::KubernetesError;
+use crate::infrastructure::k8s::KubernetesError;
 
 pub async fn init_kube_client(
     kubeconfig: Option<PathBuf>,

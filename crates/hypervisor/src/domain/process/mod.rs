@@ -6,6 +6,12 @@ use api_types::QosLevel;
 
 pub mod worker;
 
+// Re-export worker type
+pub use worker::TensorFusionWorker;
+
+/// Concrete worker type
+pub type Worker = Arc<TensorFusionWorker>;
+
 // Public exports - remove self-references as types are already public
 
 /// GPU resource requirements

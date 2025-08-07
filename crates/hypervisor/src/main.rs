@@ -1,8 +1,6 @@
 mod api;
 mod app;
-mod app_builder;
 mod config;
-mod core;
 mod domain;
 mod infrastructure;
 mod tui;
@@ -27,7 +25,7 @@ use clap::Parser;
 use std::time::Duration;
 use utils::version;
 
-use crate::app_builder::ApplicationBuilder;
+use crate::app::ApplicationBuilder;
 use crate::config::{Cli, Commands};
 
 /// Sets up global panic hooks.

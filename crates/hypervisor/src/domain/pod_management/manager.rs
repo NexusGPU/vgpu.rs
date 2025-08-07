@@ -8,7 +8,7 @@ use nvml_wrapper::Nvml;
 use tracing::{info, warn};
 use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig};
 
-use crate::core::types::HypervisorType;
+use crate::domain::HypervisorType;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::{HostPidProbe, PodProcessInfo, SubscriptionRequest};
 use crate::infrastructure::k8s::pod_info_cache::PodInfoCache;

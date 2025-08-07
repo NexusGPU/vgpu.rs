@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use crate::app::{Application, ApplicationServices};
 use crate::config::DaemonArgs;
-use crate::core::types::{HypervisorType, PodManagerType};
+use crate::domain::{HypervisorType, PodManagerType};
 use crate::gpu_device_state_watcher::GpuDeviceStateWatcher;
 use crate::gpu_init::initialize_gpu_system;
 use crate::gpu_init::GpuSystem;
