@@ -21,7 +21,8 @@
             },
             "env": {
                 "TF_ENABLE_LOG": "1",
-                "GPU_NODE_NAME": "gpu-2"
+                "GPU_NODE_NAME": "gpu-2",
+                "DETECT_IN_USED_GPUS": "true"
             },
             "args": [
                 "daemon",

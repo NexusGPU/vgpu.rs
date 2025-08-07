@@ -45,6 +45,14 @@ glob = "0.3"
 async-trait = { workspace = true }
 dashmap = { workspace = true }
 rand = { workspace = true }
+# gRPC dependencies for kubelet pod-resources API
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
+[build-dependencies]
+tonic-build = "0.12"
+
 [[bin]]
 name = "hypervisor"
 path = "src/main.rs"

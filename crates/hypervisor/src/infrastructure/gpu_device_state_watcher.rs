@@ -30,14 +30,21 @@ use crate::k8s::types::KubernetesError;
 use crate::kube_client;
 use kube::api::{ObjectMeta, Patch};
 
+// Include generated protobuf code
+pub mod pod_resources {
+    tonic::include_proto!("v1");
+}
+
 pub struct GpuDeviceStateWatcher {
     kubelet_device_state_path: PathBuf,
+    kubelet_socket_path: PathBuf,
 }
 
 impl GpuDeviceStateWatcher {
     pub fn new(kubelet_device_state_path: PathBuf) -> Self {
         Self {
             kubelet_device_state_path,
+            kubelet_socket_path: PathBuf::from("/var/lib/kubelet/pod-resources/kubelet.sock"),
         }
     }
 
@@ -103,6 +110,14 @@ impl GpuDeviceStateWatcher {
             self.kubelet_device_state_path
         );
 
+        let grpc_check_result = self.check_grpc_accessibility().await;
+        if grpc_check_result.is_err() {
+            warn!("gRPC kubelet pod-resources API is not accessible, fallback to checkpoint_file_only_mode for watching other device plugin managed GPUs");
+        } else {
+            info!("gRPC kubelet pod-resources API is accessible, using gRPC for watching other device plugin managed GPUs");
+        }
+        let use_grpc = grpc_check_result.is_ok();
+
         // Set up filesystem watcher
         let (fs_tx, mut fs_rx) = mpsc::channel(10);
         let watcher_result = self.setup_filesystem_watcher(fs_tx).await;
@@ -111,7 +126,7 @@ impl GpuDeviceStateWatcher {
         let mut poll_interval = interval(Duration::from_secs(30));
         poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        let patch_duration_with_jitter = Self::duration_with_jitter(Duration::from_secs(300), 0.15); // ±15% jitter
+        let patch_duration_with_jitter = Self::duration_with_jitter(Duration::from_secs(120), 0.15); // ±15% jitter
         let mut patch_all_devices_interval = interval(patch_duration_with_jitter);
         patch_all_devices_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -120,6 +135,7 @@ impl GpuDeviceStateWatcher {
             poll_interval = interval(Duration::from_secs(5));
             poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         }
+        
 
         // Keep watcher alive by holding it in scope
         info!("Filesystem watcher enabled for real-time updates");
@@ -129,22 +145,22 @@ impl GpuDeviceStateWatcher {
                 // Process filesystem events
                 Some(_event) = fs_rx.recv() => {
                     debug!("Filesystem event detected, processing device state");
-                    if let Err(e) = self.read_and_process_device_state(&gpu_api, previous_device_ids, &resource_to_system_map, false).await {
+                    if let Err(e) = self.read_and_process_device_state(&gpu_api, previous_device_ids, &resource_to_system_map, false, use_grpc).await {
                         error!("Failed to process device state after filesystem event: {e:?}");
                     }
                 }
                 // Fallback polling every 30 seconds
                 _ = poll_interval.tick() => {
                     debug!("Periodic polling check");
-                    if let Err(e) = self.read_and_process_device_state(&gpu_api, previous_device_ids, &resource_to_system_map, false).await {
+                    if let Err(e) = self.read_and_process_device_state(&gpu_api, previous_device_ids, &resource_to_system_map, false, use_grpc).await {
                         error!("Failed to process device state during periodic check: {e:?}");
                     }
                 }
 
                 // Patch all devices periodically with jitter
                 _ = patch_all_devices_interval.tick() => {
-                    debug!("Patching all devices");
-                    if let Err(e) = self.read_and_process_device_state(&gpu_api, previous_device_ids, &resource_to_system_map, true).await {
+                    debug!("Checking all devices");
+                    if let Err(e) = self.read_and_process_device_state(&gpu_api, previous_device_ids, &resource_to_system_map, true, use_grpc).await {
                         error!("Failed to process device state during patch all devices check: {e:?}");
                     }
                 }
@@ -200,13 +216,20 @@ impl GpuDeviceStateWatcher {
         previous_device_ids: &mut HashSet<String>,
         resource_to_system_map: &HashMap<String, String>,
         patch_all_devices: bool,
+        use_grpc: bool,
     ) -> Result<(), Report<KubernetesError>> {
         // Read and parse the kubelet device state file
         let device_state = self.read_device_state_file().await?;
 
         // Extract current device IDs from PodDeviceEntries
-        let (current_allocated_device_ids, current_registered_device_ids) =
+        let (mut current_allocated_device_ids, current_registered_device_ids) =
             self.extract_device_ids(&device_state, resource_to_system_map)?;
+
+        if use_grpc {
+            // grpc result is more accurate and real-time
+            // checkpoint file may not updated after Pod deleted
+            current_allocated_device_ids = self.get_allocated_devices().await?;
+        }
 
         // Find added and removed devices
         let (added_devices, removed_devices) = if patch_all_devices {
@@ -475,6 +498,147 @@ impl GpuDeviceStateWatcher {
         Err(Report::new(KubernetesError::AnnotationParseError {
             message: format!("Could not find resource name for device: {device_id}"),
         }))
+    }
+
+    /// Get allocatable resources from kubelet pod-resources API
+    #[tracing::instrument(skip(self))]
+    pub async fn get_allocated_devices(&self) -> Result<HashSet<String>, Report<KubernetesError>> {
+        debug!(
+            "Connecting to kubelet pod-resources API at {:?}",
+            self.kubelet_socket_path
+        );
+
+        // Create a channel that connects to the unix socket
+        let channel = self.create_unix_channel().await
+            .map_err(|e|KubernetesError::ConnectionFailed {
+                message: format!("Failed to connect to kubelet socket, pod-resource kubelet API may not enabled or not accessible: {e}") 
+            })?;
+
+        // Create a gRPC client using the generated code
+        let mut client =
+            pod_resources::pod_resources_lister_client::PodResourcesListerClient::new(channel);
+
+        // Make the List request to get allocated resources
+        let request = tonic::Request::new(pod_resources::ListPodResourcesRequest {});
+
+        let response =
+            client
+                .list(request)
+                .await
+                .map_err(|e| KubernetesError::ConnectionFailed {
+                    message: format!("Failed to list pod resources: {e}"),
+                })?;
+
+        let pod_resources_response = response.into_inner();
+
+        // Get the resource names we're interested in from the resource-system map
+        let resource_system_map = Self::create_resource_system_map();
+        let target_resource_names: HashSet<String> = resource_system_map.keys().cloned().collect();
+
+        // Build allocated device map: resource_name -> list of allocated device_ids
+        let mut allocated_devices: HashSet<String> = HashSet::new();
+
+        debug!(
+            "Processing {} pods for allocated devices",
+            pod_resources_response.pod_resources.len()
+        );
+
+        // For each pod and each container, loop over containerDevices
+        for pod_resource in &pod_resources_response.pod_resources {
+            for container in &pod_resource.containers {
+                for device in &container.devices {
+                    // Filter by resource_name that exists in create_resource_system_map()
+                    if target_resource_names.contains(&device.resource_name) {
+                        allocated_devices.extend(device.device_ids.clone());
+                        debug!(
+                            "Found allocated devices for {}: {} devices in pod {}/{}, container {}",
+                            device.resource_name,
+                            device.device_ids.len(),
+                            pod_resource.namespace,
+                            pod_resource.name,
+                            container.name
+                        );
+                    }
+                }
+            }
+        }
+
+        info!(
+            "Retrieved allocated devices from device-plugins: {} devices",
+            allocated_devices.len()
+        );
+        Ok(allocated_devices)
+    }
+
+    /// Check if the gRPC kubelet pod-resources API is accessible
+    /// Returns Ok(()) if accessible, Err if not accessible
+    #[tracing::instrument(skip(self))]
+    pub async fn check_grpc_accessibility(&self) -> Result<(), Report<KubernetesError>> {
+        info!(
+            "Checking gRPC accessibility for kubelet pod-resources API at {:?}",
+            self.kubelet_socket_path
+        );
+
+        // First check if the socket file exists
+        if tokio::fs::metadata(&self.kubelet_socket_path).await.is_err() {
+            return Err(KubernetesError::ConnectionFailed {
+                message: format!(
+                    "Kubelet socket file does not exist: {:?}",
+                    self.kubelet_socket_path
+                ),
+            }
+            .into());
+        }
+
+        // Try to create a channel connection
+        let channel =
+            self.create_unix_channel()
+                .await
+                .map_err(|e| KubernetesError::ConnectionFailed {
+                    message: format!("Failed to connect to kubelet socket: {e}"),
+                })?;
+
+        // Create a gRPC client and attempt a simple request
+        let mut client =
+            pod_resources::pod_resources_lister_client::PodResourcesListerClient::new(channel);
+
+        // Make a test request to verify the API is responding
+        let request = tonic::Request::new(pod_resources::ListPodResourcesRequest {});
+
+        client
+            .list(request)
+            .await
+            .map_err(|e| KubernetesError::ConnectionFailed {
+                message: format!(
+                    "gRPC request failed - kubelet pod-resources API not responding: {e}"
+                ),
+            })?;
+        Ok(())
+    }
+
+    /// Create a gRPC channel connected to the kubelet unix socket
+    async fn create_unix_channel(
+        &self,
+    ) -> Result<tonic::transport::Channel, Box<dyn std::error::Error + Send + Sync>> {
+        use hyper_util::rt::TokioIo;
+        use tonic::transport::{Endpoint, Uri};
+        use tower::service_fn;
+
+        // Convert the unix socket path to a URI that tonic can understand
+        let socket_path = self.kubelet_socket_path.clone();
+
+        // Create a channel that connects to the unix socket using TokioIo wrapper
+        let channel = Endpoint::try_from("http://[::]:50051")?
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let socket_path = socket_path.clone();
+                async move {
+                    let stream = tokio::net::UnixStream::connect(socket_path).await?;
+                    Ok::<_, std::io::Error>(TokioIo::new(stream))
+                }
+            }))
+            .await?;
+
+        Ok(channel)
     }
 
     fn create_resource_system_map() -> HashMap<String, String> {
