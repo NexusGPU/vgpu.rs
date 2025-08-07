@@ -399,13 +399,6 @@ pub(crate) unsafe extern "C" fn cu_device_get_detour(
     result
 }
 
-#[hook_fn]
-pub(crate) unsafe extern "C" fn cu_device_get_count_detour(count: *mut c_int) -> CUresult {
-    let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
-    *count = limiter.get_device_count() as c_int;
-    CUresult::CUDA_SUCCESS
-}
-
 pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
     replace_symbol!(
         hook_manager,
@@ -495,14 +488,5 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_device_get_detour,
         FnCu_device_get,
         FN_CU_DEVICE_GET
-    );
-
-    replace_symbol!(
-        hook_manager,
-        Some("libcuda."),
-        "cuDeviceGetCount",
-        cu_device_get_count_detour,
-        FnCu_device_get_count,
-        FN_CU_DEVICE_GET_COUNT
     );
 }

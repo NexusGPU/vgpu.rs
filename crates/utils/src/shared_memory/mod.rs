@@ -267,7 +267,7 @@ impl SharedDeviceState {
     {
         match self {
             Self::V1(inner) => {
-                inner.devices.get(index).map(f)
+                inner.devices.get(index).filter(|device| device.is_active()).map(f)
             }
         }
     }
@@ -337,13 +337,11 @@ impl SharedDeviceStateV1 {
 
         let state = Self {
             devices: std::array::from_fn(|_| DeviceEntry::new()),
-            device_count: AtomicU32::new(0),
+            device_count: AtomicU32::new(configs.len() as u32),
             last_heartbeat: AtomicU64::new(now),
             pids: ShmMutex::new(Set::new()),
         };
 
-        // Add devices from configs using device_idx
-        let mut max_device_idx = 0;
         for config in configs {
             let device_idx = config.device_idx as usize;
             if device_idx >= MAX_DEVICES {
@@ -370,13 +368,7 @@ impl SharedDeviceStateV1 {
                 .mem_limit
                 .store(config.mem_limit, Ordering::Relaxed);
             state.devices[device_idx].set_active(true);
-
-            max_device_idx = max_device_idx.max(device_idx + 1);
         }
-
-        state
-            .device_count
-            .store(max_device_idx as u32, Ordering::Release);
         state
     }
 
