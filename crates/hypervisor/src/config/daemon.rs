@@ -103,6 +103,14 @@ pub struct DaemonArgs {
 
     #[arg(
         long,
+        help = "Kubelet socket path for fetching GPU allocation state of other device plugins",
+        default_value = "/var/lib/kubelet/pod-resources/kubelet.sock",
+        value_hint = clap::ValueHint::FilePath,
+    )]
+    pub kubelet_socket_path: PathBuf,
+
+    #[arg(
+        long,
         help = "Detect in-use GPUs for other device plugins",
         default_value_t = false,
         env = "DETECT_IN_USED_GPUS",
