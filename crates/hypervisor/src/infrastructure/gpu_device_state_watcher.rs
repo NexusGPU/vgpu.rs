@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
@@ -619,9 +620,7 @@ impl GpuDeviceStateWatcher {
     }
 
     /// Create a gRPC channel connected to the kubelet unix socket
-    async fn create_unix_channel(
-        &self,
-    ) -> Result<tonic::transport::Channel, Box<dyn std::error::Error + Send + Sync>> {
+    async fn create_unix_channel(&self) -> Result<tonic::transport::Channel, io::Error> {
         use hyper_util::rt::TokioIo;
         use tonic::transport::{Endpoint, Uri};
         use tower::service_fn;
@@ -630,16 +629,18 @@ impl GpuDeviceStateWatcher {
         let socket_path = self.kubelet_socket_path.clone();
 
         // Create a channel that connects to the unix socket using TokioIo wrapper
-        let channel = Endpoint::try_from("http://[::]:50051")?
+        let channel: tonic::transport::Channel = Endpoint::try_from("http://[::]:50051")
+            .map_err(|e| io::Error::other(e.to_string()))?
             .connect_with_connector(service_fn(move |_: Uri| {
                 let socket_path = socket_path.clone();
                 async move {
-                    let stream = tokio::net::UnixStream::connect(socket_path).await?;
-                    Ok::<_, std::io::Error>(TokioIo::new(stream))
+                    tokio::net::UnixStream::connect(socket_path)
+                        .await
+                        .map(TokioIo::new)
                 }
             }))
-            .await?;
-
+            .await
+            .map_err(|e| io::Error::other(e.to_string()))?;
         Ok(channel)
     }
 

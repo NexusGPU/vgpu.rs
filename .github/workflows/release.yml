@@ -230,15 +230,23 @@ jobs:
             bootstrap-x64.tar.gz
             bootstrap-arm64.tar.gz
 
-  publish_x86:
+  publish_hypervisor:
     needs:
       - release
     if: needs.release.outputs.published == 'true'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+            use_cross: false
+            cache_strategy: gha
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+            use_cross: true
+            cache_strategy: no-cache
     runs-on: ubuntu-latest
-    env:
-      arch: amd64
-    outputs:
-      image_digest: ${{ steps.build.outputs.digest }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -246,63 +254,31 @@ jobs:
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          target: x86_64-unknown-linux-gnu
+          target: ${{ matrix.target }}
 
-      - name: Configure cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1
+      - name: Install protobuf-compiler (native build)
+        if: '!matrix.use_cross'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
-      - name: Build for amd64
-        run: VERSION=${{ needs.release.outputs.version }} cargo build -p hypervisor --release --target x86_64-unknown-linux-gnu
-      
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            tensorfusion/tensor-fusion-hypervisor
-          tags: |
-            type=raw,value=${{ needs.release.outputs.version }}_${{ env.arch }}
+      - name: Setup Cross.toml for CI
+        if: matrix.use_cross
+        run: |
+          cat > Cross.toml << 'EOF'
+          [build.env]
+          passthrough = [
+              "VERSION",
+          ]
 
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/${{ env.arch }}
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            BINARY_PATH=target/x86_64-unknown-linux-gnu/release/hypervisor
-
-  publish_arm:
-    needs:
-      - release
-    if: needs.release.outputs.published == 'true'
-    runs-on: ubuntu-latest
-    env:
-      arch: arm64
-    outputs:
-      image_digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Install rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          target: aarch64-unknown-linux-gnu
+          [build]
+          pre-build = [
+              "apt-get update && apt-get install -y protobuf-compiler"
+          ]
+          EOF
 
       - name: Install cross
+        if: matrix.use_cross
         run: |
           if ! (command -v cross &> /dev/null && command -v cross-util &> /dev/null); then
             cargo install cross --git https://github.com/cross-rs/cross
@@ -314,17 +290,26 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1
+          shared-key: "hypervisor-${{ matrix.target }}"
 
-      - name: Build for arm64
-        run: VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target aarch64-unknown-linux-gnu
-
+      - name: Build hypervisor
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target ${{ matrix.target }}
+          else
+            VERSION=${{ needs.release.outputs.version }} cargo build -p hypervisor --release --target ${{ matrix.target }}
+          fi
+      
       - id: meta
         uses: docker/metadata-action@v5
         with:
           images: |
             tensorfusion/tensor-fusion-hypervisor
           tags: |
-            type=raw,value=${{ needs.release.outputs.version }}_${{ env.arch }}
+            type=raw,value=${{ needs.release.outputs.version }}_${{ matrix.arch }}
+
+      - name: Setup buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to DockerHub
         uses: docker/login-action@v3
@@ -332,30 +317,24 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker
-          driver-opts: |
-            image=moby/buildkit:master
-            network=host
-
       - id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          platforms: linux/${{ env.arch }}
+          platforms: linux/${{ matrix.arch }}
           tags: ${{ steps.meta.outputs.tags }}
-          no-cache: true
+          cache-from: ${{ matrix.cache_strategy == 'gha' && 'type=gha' || '' }}
+          cache-to: ${{ matrix.cache_strategy == 'gha' && 'type=gha,mode=max' || '' }}
+          no-cache: ${{ matrix.cache_strategy == 'no-cache' }}
           build-args: |
-            BINARY_PATH=target/aarch64-unknown-linux-gnu/release/hypervisor
+            BINARY_PATH=target/${{ matrix.target }}/release/hypervisor
 
   merge_images:
     needs:
       - release
-      - publish_x86
-      - publish_arm
-    if: needs.publish_x86.outputs.image_digest && needs.publish_arm.outputs.image_digest
+      - publish_hypervisor
+    if: needs.publish_hypervisor.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
