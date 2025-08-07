@@ -24,5 +24,7 @@ jobs:
       with:
         sub-packages: '["nvcc", "cudart-dev"]'
         method: network
+    - name: Install Protobuf Compiler (protoc)
+      run: sudo apt-get install -y protobuf-compiler
     - name: Test
       run: cargo test --locked --workspace --all-targets
