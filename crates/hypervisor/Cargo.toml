@@ -46,7 +46,7 @@ async-trait = { workspace = true }
 dashmap = { workspace = true }
 rand = { workspace = true }
 # gRPC dependencies for kubelet pod-resources API
-tonic = "0.12"
+tonic = "0.14"
 prost = "0.13"
 prost-types = "0.14"
 
