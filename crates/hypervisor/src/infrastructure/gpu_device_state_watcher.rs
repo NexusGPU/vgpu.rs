@@ -135,7 +135,6 @@ impl GpuDeviceStateWatcher {
             poll_interval = interval(Duration::from_secs(5));
             poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         }
-        
 
         // Keep watcher alive by holding it in scope
         info!("Filesystem watcher enabled for real-time updates");
@@ -580,7 +579,10 @@ impl GpuDeviceStateWatcher {
         );
 
         // First check if the socket file exists
-        if tokio::fs::metadata(&self.kubelet_socket_path).await.is_err() {
+        if tokio::fs::metadata(&self.kubelet_socket_path)
+            .await
+            .is_err()
+        {
             return Err(KubernetesError::ConnectionFailed {
                 message: format!(
                     "Kubelet socket file does not exist: {:?}",

@@ -266,9 +266,11 @@ impl SharedDeviceState {
         F: FnOnce(&DeviceEntry) -> T,
     {
         match self {
-            Self::V1(inner) => {
-                inner.devices.get(index).filter(|device| device.is_active()).map(f)
-            }
+            Self::V1(inner) => inner
+                .devices
+                .get(index)
+                .filter(|device| device.is_active())
+                .map(f),
         }
     }
 
