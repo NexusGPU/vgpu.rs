@@ -769,7 +769,7 @@ mod tests {
 
         // Test cleanup with a pattern that won't match
         let cleaned = manager
-            .cleanup_orphaned_files("nonexistent_pattern")
+            .cleanup_orphaned_files("nonexistent_pattern", |_| false)
             .unwrap();
         assert_eq!(cleaned.len(), 0);
 

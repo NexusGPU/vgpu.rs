@@ -492,6 +492,7 @@ impl LimiterCoordinator {
         let shared_memory_manager = self.shared_memory_manager.clone();
 
         let shared_memory_glob_pattern = self.shared_memory_glob_pattern.clone();
+        let pod_state_store = self.pod_state_store.clone();
         tokio::spawn(async move {
             // Run cleanup every 5 minutes
             let mut cleanup_interval = interval(Duration::from_secs(300));
@@ -504,11 +505,15 @@ impl LimiterCoordinator {
                     _ = cleanup_interval.tick() => {
                         tracing::info!("Running periodic cleanup of unused shared memory segments");
 
-                        if let Err(e) = shared_memory_manager.cleanup_orphaned_files(&shared_memory_glob_pattern) {
+                        if let Err(e) = shared_memory_manager.cleanup_orphaned_files(&shared_memory_glob_pattern, |identifier| {
+                            !pod_state_store.contains_pod(identifier)
+                        }) {
                             tracing::warn!("Failed to cleanup orphaned shared memory files: {}", e);
                         }
 
-                        match shared_memory_manager.cleanup_unused() {
+                        match shared_memory_manager.cleanup_unused(|identifier| {
+                            pod_state_store.contains_pod(identifier)
+                        }) {
                             Ok(cleaned_files) => {
                                 if !cleaned_files.is_empty() {
                                     tracing::info!(

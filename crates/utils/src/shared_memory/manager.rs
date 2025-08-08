@@ -108,13 +108,19 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Cleanup orphaned shared memory files from /dev/shm that match our naming pattern.
     /// This should be called at startup to clean up files left by crashed processes.
-    pub fn cleanup_orphaned_files(&self, glob_pattern: &str) -> Result<Vec<String>> {
+    pub fn cleanup_orphaned_files(
+        &self,
+        glob_pattern: &str,
+        is_pod_tracking: impl Fn(&str) -> bool,
+    ) -> Result<Vec<String>> {
         let mut cleaned_files = Vec::new();
         let file_paths = self.find_shared_memory_files(glob_pattern)?;
 
         for file_path in file_paths {
             let identifier = self.extract_identifier_from_path(&file_path)?;
-
+            if is_pod_tracking(&identifier) {
+                continue;
+            }
             if self.is_shared_memory_orphaned(&identifier)? {
                 if let Err(e) = self.remove_orphaned_file(&file_path, &identifier) {
                     warn!(
@@ -208,7 +214,7 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Attempt to cleanup shared memory segments with zero reference count.
-    pub fn cleanup_unused(&self) -> Result<Vec<String>> {
+    pub fn cleanup_unused(&self, is_pod_tracking: impl Fn(&str) -> bool) -> Result<Vec<String>> {
         let mut cleaned_up = Vec::new();
         let identifiers: Vec<String> = {
             let memories = self.active_memories.read();
@@ -216,6 +222,9 @@ impl ThreadSafeSharedMemoryManager {
         };
 
         for identifier in identifiers {
+            if is_pod_tracking(&identifier) {
+                continue;
+            }
             if self.should_cleanup(&identifier) {
                 match self.cleanup(&identifier) {
                     Ok(_) => {
