@@ -53,16 +53,11 @@ impl ThreadSafeSharedMemoryManager {
         if let Some(shmem) = self.active_memories.read().get(identifier) {
             Ok(shmem.get_ptr())
         } else {
-            self.active_memories.write().insert(
-                identifier.to_string(),
-                SharedMemoryHandle::open(identifier)?,
-            );
-            Ok(self
-                .active_memories
-                .read()
-                .get(identifier)
-                .unwrap()
-                .get_ptr())
+            let mut memories = self.active_memories.write();
+            let handle = SharedMemoryHandle::open(identifier)?;
+            let ptr = handle.get_ptr();
+            memories.insert(identifier.to_string(), handle);
+            Ok(ptr)
         }
     }
 
