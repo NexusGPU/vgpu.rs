@@ -371,7 +371,7 @@ impl GpuDeviceStateWatcher {
         // Find the resource name for this device
         let resource_name = self.find_resource_name_for_device(device_state, device_id)?;
         let used_by_system = resource_to_system_map
-            .get(&resource_name)
+            .get(resource_name)
             .unwrap_or(&"nvidia-device-plugin".to_string())
             .clone();
 
@@ -483,16 +483,19 @@ impl GpuDeviceStateWatcher {
         Ok(())
     }
 
-    fn find_resource_name_for_device(
+    fn find_resource_name_for_device<'a>(
         &self,
-        device_state: &KubeletDeviceState,
+        device_state: &'a KubeletDeviceState,
         device_id: &str,
-    ) -> Result<String, Report<KubernetesError>> {
+    ) -> Result<&'a str, Report<KubernetesError>> {
         if let Some(pod_device_entries) = &device_state.data.pod_device_entries {
             for entry in pod_device_entries {
                 for device_list in entry.device_ids.values() {
-                    if device_list.iter().any(|d| d.to_lowercase() == device_id) {
-                        return Ok(entry.resource_name.clone());
+                    if device_list
+                        .iter()
+                        .any(|d| d.to_lowercase() == device_id.to_lowercase())
+                    {
+                        return Ok(&entry.resource_name);
                     }
                 }
             }
@@ -552,7 +555,8 @@ impl GpuDeviceStateWatcher {
                 for device in &container.devices {
                     // Filter by resource_name that exists in create_resource_system_map()
                     if target_resource_names.contains(&device.resource_name) {
-                        allocated_devices.extend(device.device_ids.clone());
+                        allocated_devices
+                            .extend(device.device_ids.iter().map(|id| id.to_lowercase()));
                         debug!(
                             "Found allocated devices for {}: {} devices in pod {}/{}, container {}",
                             device.resource_name,
