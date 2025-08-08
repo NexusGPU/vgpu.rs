@@ -50,9 +50,11 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Gets a pointer to the shared memory by its identifier.
     pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut SharedDeviceState> {
-        if let Some(shmem) = self.active_memories.read().get(identifier) {
+        let memories = self.active_memories.read();
+        if let Some(shmem) = memories.get(identifier) {
             Ok(shmem.get_ptr())
         } else {
+            drop(memories);
             let mut memories = self.active_memories.write();
             let handle = SharedMemoryHandle::open(identifier)?;
             let ptr = handle.get_ptr();
