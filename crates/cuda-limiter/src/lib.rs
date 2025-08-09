@@ -276,7 +276,9 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         return FN_DLSYM(handle, symbol);
     }
 
-    let symbol_str = CStr::from_ptr(symbol).to_str().unwrap();
+    let Ok(symbol_str) = CStr::from_ptr(symbol).to_str() else {
+        return FN_DLSYM(handle, symbol);
+    };
     let may_be_cuda = symbol_str.starts_with("cu");
     let may_be_nvml = symbol_str.starts_with("nvml");
 
@@ -364,6 +366,8 @@ pub fn global_trap() -> impl Trap {
 }
 
 fn is_mapping_device_idx() -> bool {
-    let cmdline = std::fs::read_to_string("/proc/self/cmdline").unwrap();
-    cmdline.contains("nvidia-smi")
+    match std::fs::read_to_string("/proc/self/cmdline") {
+        Ok(cmdline) => cmdline.contains("nvidia-smi"),
+        Err(_) => false,
+    }
 }
