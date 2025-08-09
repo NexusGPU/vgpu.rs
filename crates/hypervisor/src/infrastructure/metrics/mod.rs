@@ -8,6 +8,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::GPU_CAPACITY_MAP;
 use crate::gpu_observer::GpuObserver;
+use crate::metrics::encoders::GpuMetricsParams;
+use crate::metrics::encoders::WorkerMetricsParams;
 use crate::process::GpuResources;
 
 use crate::pod_management::PodManager;
@@ -52,6 +54,7 @@ struct AccumulatedGpuMetrics {
     memory_clock_mhz: f64,
     video_clock_mhz: f64,
     memory_bytes: u64,
+    memory_percentage: f64,
     compute_percentage: f64,
     compute_tflops: f64,
     count: usize,
@@ -123,6 +126,7 @@ pub(crate) async fn run_metrics(
                             acc.memory_clock_mhz += gpu.memory_clock_mhz as f64;
                             acc.video_clock_mhz += gpu.video_clock_mhz as f64;
                             acc.memory_bytes += gpu.resources.memory_bytes;
+                            acc.memory_percentage += gpu.memory_percentage;
                             acc.compute_percentage += gpu.resources.compute_percentage as f64;
 
                             // Estimation of TFlops (not accurate because of
@@ -159,18 +163,15 @@ pub(crate) async fn run_metrics(
                         for (gpu_uuid, process_metrics) in process_metrics_snapshot {
                             let worker_acc = worker_acc.entry(gpu_uuid.clone()).or_default();
                             for (pid, resources) in process_metrics.iter() {
-                                let pod_identifier = pod_mgr.find_pod_by_worker_pid(*pid);
-                                if pod_identifier.is_none() {
+                                let Some(pod_identifier) = pod_mgr.find_pod_by_worker_pid(*pid) else {
                                     tracing::debug!(
                                         msg = "Failed to find worker, GPU may used by unknown process not managed by TensorFusion",
                                         pid = *pid,
                                     );
                                     continue;
-                                }
-                                let pod_identifier = pod_identifier.unwrap();
+                                };
                                 let acc = worker_acc.entry(pod_identifier).or_default();
                                 acc.memory_bytes += resources.memory_bytes;
-                                acc.compute_percentage += resources.compute_percentage as f64;
                                 acc.compute_tflops += resources.compute_percentage as f64
                                     * GPU_CAPACITY_MAP
                                         .read()
@@ -186,22 +187,23 @@ pub(crate) async fn run_metrics(
                             // Output averaged PCIE metrics
                             for (gpu_uuid, acc) in &gpu_acc {
                                 if acc.count > 0 {
-                                    let metrics_str = encoder.encode_gpu_metrics(
+                                    let metrics_str = encoder.encode_gpu_metrics_with_params(&GpuMetricsParams {
                                         gpu_uuid,
                                         node_name,
                                         gpu_pool,
-                                        acc.rx / acc.count as f64,
-                                        acc.tx / acc.count as f64,
-                                        acc.temperature / acc.count as f64,
-                                        acc.graphics_clock_mhz / acc.count as f64,
-                                        acc.sm_clock_mhz / acc.count as f64,
-                                        acc.memory_clock_mhz / acc.count as f64,
-                                        acc.video_clock_mhz / acc.count as f64,
-                                        acc.memory_bytes / acc.count as u64,
-                                        acc.compute_percentage / acc.count as f64,
-                                        acc.compute_tflops / acc.count as f64,
+                                        rx: acc.rx / acc.count as f64,
+                                        tx: acc.tx / acc.count as f64,
+                                        temperature: acc.temperature / acc.count as f64,
+                                        graphics_clock_mhz: acc.graphics_clock_mhz / acc.count as f64,
+                                        sm_clock_mhz: acc.sm_clock_mhz / acc.count as f64,
+                                        memory_clock_mhz: acc.memory_clock_mhz / acc.count as f64,
+                                        video_clock_mhz: acc.video_clock_mhz / acc.count as f64,
+                                        memory_bytes: acc.memory_bytes / acc.count as u64,
+                                        memory_percentage: acc.memory_percentage / acc.count as f64,
+                                        compute_percentage: acc.compute_percentage / acc.count as f64,
+                                        compute_tflops: acc.compute_tflops / acc.count as f64,
                                         timestamp,
-                                    );
+                                    });
                                     tracing::info!(
                                         target: "metrics",
                                         msg = %metrics_str,
@@ -236,25 +238,32 @@ pub(crate) async fn run_metrics(
                                             }
                                         }
 
-                                        let metrics_str = encoder.encode_worker_metrics(
+                                        let metrics_str = encoder.encode_worker_metrics_with_params(&WorkerMetricsParams {
                                             gpu_uuid,
                                             node_name,
                                             gpu_pool,
                                             pod_identifier,
-                                            &pod_state.info.namespace,
-                                            pod_state
+                                            namespace: &pod_state.info.namespace,
+                                            workload: pod_state
                                                 .info
                                                 .workload_name
                                                 .as_deref()
                                                 .unwrap_or("unknown"),
-                                            acc.memory_bytes / acc.count as u64,
-                                            acc.compute_percentage / acc.count as f64,
-                                            acc.compute_tflops / acc.count as f64,
-                                            (acc.memory_bytes as f64 / acc.count as f64)
-                                                / pod_state.info.vram_limit.unwrap_or(0) as f64,
+                                            memory_bytes: acc.memory_bytes / acc.count as u64,
+                                            compute_percentage: acc.compute_percentage / acc.count as f64,
+                                            compute_tflops: acc.compute_tflops / acc.count as f64,
+                                            memory_percentage: {
+                                                let avg_memory_bytes = acc.memory_bytes as f64 / acc.count as f64;
+                                                let vram_limit = pod_state.info.vram_limit.unwrap_or(0) as f64;
+                                                if vram_limit > 0.0 {
+                                                    avg_memory_bytes / vram_limit
+                                                } else {
+                                                    0.0
+                                                }
+                                            },
                                             timestamp,
-                                            &extra_labels,
-                                        );
+                                            extra_labels: &extra_labels,
+                                        });
                                         tracing::info!(
                                             target: "metrics",
                                             msg = %metrics_str,

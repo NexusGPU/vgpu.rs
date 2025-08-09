@@ -80,6 +80,8 @@ impl MetricsEncoder for InfluxEncoder {
 mod tests {
     use std::collections::HashMap;
 
+    use crate::metrics::encoders::{GpuMetricsParams, WorkerMetricsParams};
+
     use super::*;
 
     #[test]
@@ -181,22 +183,23 @@ mod tests {
     #[test]
     fn test_encode_gpu_metrics() {
         let encoder = InfluxEncoder::new();
-        let result = encoder.encode_gpu_metrics(
-            "gpu-123",
-            "worker-node-1",
-            "default-pool",
-            150.0,
-            250.0,
-            78.5,
-            1200.0,
-            1100.0,
-            2000.0,
-            800.0,
-            2048000000,
-            92.3,
-            18.7,
-            1609459200000000000,
-        );
+        let result = encoder.encode_gpu_metrics_with_params(&GpuMetricsParams {
+            gpu_uuid: "gpu-123",
+            node_name: "worker-node-1",
+            gpu_pool: "default-pool",
+            rx: 150.0,
+            tx: 250.0,
+            temperature: 78.5,
+            graphics_clock_mhz: 1200.0,
+            sm_clock_mhz: 1100.0,
+            memory_clock_mhz: 2000.0,
+            video_clock_mhz: 800.0,
+            memory_bytes: 2048000000,
+            memory_percentage: 0.5,
+            compute_percentage: 92.3,
+            compute_tflops: 18.7,
+            timestamp: 1609459200000000000,
+        });
 
         assert!(result.starts_with("tf_gpu_usage"));
         assert!(result.contains("node=worker-node-1"));
@@ -218,20 +221,20 @@ mod tests {
         extra_labels.insert("environment".to_string(), "production".to_string());
         extra_labels.insert("team".to_string(), "ml-ops".to_string());
 
-        let result = encoder.encode_worker_metrics(
-            "gpu-456",
-            "worker-node-2",
-            "ml-pool",
-            "worker-abc",
-            "ml-namespace",
-            "pytorch-training",
-            4096000000,
-            88.5,
-            22.1,
-            95.2,
-            1609459200000000000,
-            &extra_labels,
-        );
+        let result = encoder.encode_worker_metrics_with_params(&WorkerMetricsParams {
+            gpu_uuid: "gpu-456",
+            node_name: "worker-node-2",
+            gpu_pool: "ml-pool",
+            pod_identifier: "worker-abc",
+            namespace: "ml-namespace",
+            workload: "pytorch-training",
+            memory_bytes: 4096000000,
+            compute_percentage: 88.5,
+            compute_tflops: 22.1,
+            memory_percentage: 95.2,
+            timestamp: 1609459200000000000,
+            extra_labels: &extra_labels,
+        });
 
         assert!(result.starts_with("tf_worker_usage"));
         assert!(result.contains("node=worker-node-2"));
@@ -254,20 +257,20 @@ mod tests {
         let encoder = InfluxEncoder::new();
         let extra_labels = HashMap::new();
 
-        let result = encoder.encode_worker_metrics(
-            "gpu-789",
-            "worker-node-3",
-            "test-pool",
-            "worker-def",
-            "default",
-            "tensorflow",
-            1024000000,
-            75.0,
-            15.5,
-            80.0,
-            1609459200000000000,
-            &extra_labels,
-        );
+        let result = encoder.encode_worker_metrics_with_params(&WorkerMetricsParams {
+            gpu_uuid: "gpu-789",
+            node_name: "worker-node-3",
+            gpu_pool: "test-pool",
+            pod_identifier: "worker-def",
+            namespace: "default",
+            workload: "tensorflow",
+            memory_bytes: 1024000000,
+            compute_percentage: 75.0,
+            compute_tflops: 15.5,
+            memory_percentage: 80.0,
+            timestamp: 1609459200000000000,
+            extra_labels: &extra_labels,
+        });
 
         assert!(result.starts_with("tf_worker_usage"));
         assert!(result.contains("node=worker-node-3"));

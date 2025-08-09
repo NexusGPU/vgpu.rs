@@ -17,6 +17,7 @@ pub struct GpuMetricsParams<'a> {
     pub memory_clock_mhz: f64,
     pub video_clock_mhz: f64,
     pub memory_bytes: u64,
+    pub memory_percentage: f64,
     pub compute_percentage: f64,
     pub compute_tflops: f64,
     pub timestamp: i64,
@@ -28,7 +29,7 @@ pub struct WorkerMetricsParams<'a> {
     pub gpu_uuid: &'a str,
     pub node_name: &'a str,
     pub gpu_pool: &'a str,
-    pub worker_identifier: &'a str,
+    pub pod_identifier: &'a str,
     pub namespace: &'a str,
     pub workload: &'a str,
     pub memory_bytes: u64,
@@ -127,51 +128,13 @@ pub trait MetricsEncoder: Send + Sync {
         self.encode_metrics("tf_gpu_usage", &tags, &fields, params.timestamp)
     }
 
-    /// Encode GPU metrics (convenience method)
-    #[allow(clippy::too_many_arguments)]
-    fn encode_gpu_metrics(
-        &self,
-        gpu_uuid: &str,
-        node_name: &str,
-        gpu_pool: &str,
-        rx: f64,
-        tx: f64,
-        temperature: f64,
-        graphics_clock_mhz: f64,
-        sm_clock_mhz: f64,
-        memory_clock_mhz: f64,
-        video_clock_mhz: f64,
-        memory_bytes: u64,
-        compute_percentage: f64,
-        compute_tflops: f64,
-        timestamp: i64,
-    ) -> String {
-        let params = GpuMetricsParams {
-            gpu_uuid,
-            node_name,
-            gpu_pool,
-            rx,
-            tx,
-            temperature,
-            graphics_clock_mhz,
-            sm_clock_mhz,
-            memory_clock_mhz,
-            video_clock_mhz,
-            memory_bytes,
-            compute_percentage,
-            compute_tflops,
-            timestamp,
-        };
-        self.encode_gpu_metrics_with_params(&params)
-    }
-
     /// Encode worker metrics using parameters struct
     fn encode_worker_metrics_with_params(&self, params: &WorkerMetricsParams) -> String {
         let mut tags = HashMap::new();
         tags.insert("node".to_string(), params.node_name.to_string());
         tags.insert("pool".to_string(), params.gpu_pool.to_string());
         tags.insert("uuid".to_string(), params.gpu_uuid.to_string());
-        tags.insert("worker".to_string(), params.worker_identifier.to_string());
+        tags.insert("worker".to_string(), params.pod_identifier.to_string());
         tags.insert("namespace".to_string(), params.namespace.to_string());
         tags.insert("workload".to_string(), params.workload.to_string());
 
@@ -193,40 +156,6 @@ pub trait MetricsEncoder: Send + Sync {
         );
 
         self.encode_metrics("tf_worker_usage", &tags, &fields, params.timestamp)
-    }
-
-    /// Encode worker metrics (convenience method)
-    #[allow(clippy::too_many_arguments)]
-    fn encode_worker_metrics(
-        &self,
-        gpu_uuid: &str,
-        node_name: &str,
-        gpu_pool: &str,
-        worker_identifier: &str,
-        namespace: &str,
-        workload: &str,
-        memory_bytes: u64,
-        compute_percentage: f64,
-        compute_tflops: f64,
-        memory_percentage: f64,
-        timestamp: i64,
-        extra_labels: &HashMap<String, String>,
-    ) -> String {
-        let params = WorkerMetricsParams {
-            gpu_uuid,
-            node_name,
-            gpu_pool,
-            worker_identifier,
-            namespace,
-            workload,
-            memory_bytes,
-            compute_percentage,
-            compute_tflops,
-            memory_percentage,
-            timestamp,
-            extra_labels,
-        };
-        self.encode_worker_metrics_with_params(&params)
     }
 }
 
@@ -369,22 +298,23 @@ mod tests {
     #[test]
     fn test_encode_gpu_metrics() {
         let encoder = create_encoder("json");
-        let result = encoder.encode_gpu_metrics(
-            "gpu-uuid-123",
-            "node1",
-            "pool1",
-            100.5,
-            200.5,
-            75.0,
-            1200.0,
-            1100.0,
-            2000.0,
-            800.0,
-            1024000000,
-            85.5,
-            12.5,
-            1234567890,
-        );
+        let result = encoder.encode_gpu_metrics_with_params(&GpuMetricsParams {
+            gpu_uuid: "gpu-uuid-123",
+            node_name: "node1",
+            gpu_pool: "pool1",
+            rx: 100.5,
+            tx: 200.5,
+            temperature: 75.0,
+            graphics_clock_mhz: 1200.0,
+            sm_clock_mhz: 1100.0,
+            memory_clock_mhz: 2000.0,
+            video_clock_mhz: 800.0,
+            memory_bytes: 1024000000,
+            compute_percentage: 85.5,
+            compute_tflops: 12.5,
+            timestamp: 1234567890,
+            memory_percentage: 0.5,
+        });
 
         // Should contain all the expected fields and tags
         assert!(result.contains("tf_gpu_usage"));
@@ -399,20 +329,20 @@ mod tests {
         let mut extra_labels = HashMap::new();
         extra_labels.insert("custom_label".to_string(), "custom_value".to_string());
 
-        let result = encoder.encode_worker_metrics(
-            "gpu-uuid-456",
-            "node2",
-            "pool2",
-            "worker-123",
-            "default",
-            "tensorflow",
-            2048000000,
-            90.0,
-            15.0,
-            75.0,
-            1234567890,
-            &extra_labels,
-        );
+        let result = encoder.encode_worker_metrics_with_params(&WorkerMetricsParams {
+            gpu_uuid: "gpu-uuid-456",
+            node_name: "node2",
+            gpu_pool: "pool2",
+            pod_identifier: "worker-123",
+            namespace: "default",
+            workload: "tensorflow",
+            memory_bytes: 2048000000,
+            compute_percentage: 90.0,
+            compute_tflops: 15.0,
+            memory_percentage: 0.5,
+            timestamp: 1234567890,
+            extra_labels: &extra_labels,
+        });
 
         // Should contain all the expected fields and tags
         assert!(result.contains("tf_worker_usage"));
@@ -429,22 +359,23 @@ mod tests {
     #[test]
     fn test_encode_gpu_metrics_influx() {
         let encoder = create_encoder("influx");
-        let result = encoder.encode_gpu_metrics(
-            "gpu-uuid-789",
-            "node3",
-            "pool3",
-            150.0,
-            250.0,
-            80.0,
-            1300.0,
-            1150.0,
-            2100.0,
-            850.0,
-            4096000000,
-            95.0,
-            20.0,
-            1234567890,
-        );
+        let result = encoder.encode_gpu_metrics_with_params(&GpuMetricsParams {
+            gpu_uuid: "gpu-uuid-789",
+            node_name: "node3",
+            gpu_pool: "pool3",
+            rx: 150.0,
+            tx: 250.0,
+            temperature: 80.0,
+            graphics_clock_mhz: 1300.0,
+            sm_clock_mhz: 1150.0,
+            memory_clock_mhz: 2100.0,
+            video_clock_mhz: 850.0,
+            memory_bytes: 4096000000,
+            compute_percentage: 88.0,
+            compute_tflops: 25.0,
+            memory_percentage: 92.0,
+            timestamp: 1234567890,
+        });
 
         // InfluxDB line protocol format
         assert!(result.contains("tf_gpu_usage"));
@@ -460,20 +391,20 @@ mod tests {
         let mut extra_labels = HashMap::new();
         extra_labels.insert("env".to_string(), "production".to_string());
 
-        let result = encoder.encode_worker_metrics(
-            "gpu-uuid-abc",
-            "node4",
-            "pool4",
-            "worker-456",
-            "kube-system",
-            "pytorch",
-            8192000000,
-            88.0,
-            25.0,
-            92.0,
-            1234567890,
-            &extra_labels,
-        );
+        let result = encoder.encode_worker_metrics_with_params(&WorkerMetricsParams {
+            gpu_uuid: "gpu-uuid-abc",
+            node_name: "node4",
+            gpu_pool: "pool4",
+            pod_identifier: "worker-456",
+            namespace: "kube-system",
+            workload: "pytorch",
+            memory_bytes: 8192000000,
+            compute_percentage: 88.0,
+            compute_tflops: 25.0,
+            memory_percentage: 92.0,
+            timestamp: 1234567890,
+            extra_labels: &extra_labels,
+        });
 
         // InfluxDB line protocol format
         assert!(result.contains("tf_worker_usage"));
