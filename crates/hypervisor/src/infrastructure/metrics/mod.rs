@@ -14,6 +14,7 @@ use crate::pod_management::PodManager;
 
 pub mod encoders;
 use encoders::create_encoder;
+use encoders::MetricsEncoder as _;
 
 // Wrapper struct for Vec<u8> that implements Display
 pub struct BytesWrapper(Vec<u8>);

@@ -230,12 +230,33 @@ pub trait MetricsEncoder: Send + Sync {
     }
 }
 
-/// Factory function to create encoders based on format string
-pub fn create_encoder(format: &str) -> Box<dyn MetricsEncoder + Send + Sync> {
+/// Concrete encoder without dynamic dispatch
+pub enum Encoder {
+    Json(json::JsonEncoder),
+    Influx(influx::InfluxEncoder),
+}
+
+impl MetricsEncoder for Encoder {
+    fn encode_metrics(
+        &self,
+        measurement: &str,
+        tags: &HashMap<String, String>,
+        fields: &HashMap<String, FieldValue>,
+        timestamp: i64,
+    ) -> String {
+        match self {
+            Encoder::Json(inner) => inner.encode_metrics(measurement, tags, fields, timestamp),
+            Encoder::Influx(inner) => inner.encode_metrics(measurement, tags, fields, timestamp),
+        }
+    }
+}
+
+/// Factory function to create encoders based on format string (static dispatch)
+pub fn create_encoder(format: &str) -> Encoder {
     match format.to_lowercase().as_str() {
-        "json" => Box::new(json::JsonEncoder::new()),
-        "influx" => Box::new(influx::InfluxEncoder::new()),
-        _ => Box::new(influx::InfluxEncoder::new()),
+        "json" => Encoder::Json(json::JsonEncoder::new()),
+        "influx" => Encoder::Influx(influx::InfluxEncoder::new()),
+        _ => Encoder::Influx(influx::InfluxEncoder::new()),
     }
 }
 
