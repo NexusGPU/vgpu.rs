@@ -22,10 +22,9 @@ use utils::shared_memory::{
 };
 
 use super::pod_state_store::PodStateStore;
-use super::types::DeviceUsage;
 use super::utilization::{codec_normalize, DeviceSnapshot, ProcessUtilization};
 
-/// Limiter coordinator - now focused on coordination rather than state management.
+/// Limiter coordinator
 pub struct LimiterCoordinator {
     /// Shared memory manager.
     shared_memory_manager: Arc<ThreadSafeSharedMemoryManager>,
@@ -184,26 +183,31 @@ impl LimiterCoordinator {
             return Ok(());
         }
 
-        let device_snapshot =
-            match Self::get_device_snapshot(device_idx, *last_seen_timestamp).await? {
-                Some(snapshot) => {
-                    *last_seen_timestamp = snapshot.timestamp;
-                    snapshot
-                }
-                None => {
-                    debug!(device_idx = device_idx, "No device data available");
-                    return Ok(());
-                }
+        let device_snapshot = Self::get_device_snapshot(device_idx, *last_seen_timestamp).await?;
+        *last_seen_timestamp = device_snapshot.timestamp;
+
+        for pod_identifier in pods_for_device {
+            let Some(host_pids) = pod_state_store.get_host_pids_for_pod(&pod_identifier) else {
+                debug!(pod_identifier = %pod_identifier, "Pod not found when fetching host PIDs");
+                continue;
             };
 
-        for (pod_identifier, pod_state) in pods_for_device {
-            // Convert PodState to DeviceUsage using the unified type
-            let pod_usage = pod_state.to_device_usage();
+            if host_pids.is_empty() {
+                debug!(pod_identifier = %pod_identifier, device_idx = device_idx, "No active processes to monitor");
+                continue;
+            }
+
+            let Some(device_config) =
+                pod_state_store.get_device_config_for_pod(&pod_identifier, device_idx)
+            else {
+                debug!(pod_identifier = %pod_identifier, device_idx = device_idx, "Device config not found for pod");
+                continue;
+            };
 
             if let Err(e) = Self::process_pod_utilization_update(
                 &pod_identifier,
-                &pod_usage,
-                device_idx,
+                &host_pids,
+                &device_config,
                 &device_snapshot,
             )
             .await
@@ -223,29 +227,17 @@ impl LimiterCoordinator {
     /// Process utilization update for a single pod
     async fn process_pod_utilization_update(
         pod_identifier: &str,
-        pod_usage: &DeviceUsage,
-        device_idx: u32,
+        host_pids: &[u32],
+        device_config: &DeviceConfig,
         device_snapshot: &DeviceSnapshot,
     ) -> Result<()> {
-        let host_pids = pod_usage.get_host_pids();
-        if host_pids.is_empty() {
-            debug!(pod_identifier = %pod_identifier, device_idx = device_idx, "No active processes to monitor");
-            return Ok(());
-        }
-
-        let device_config = pod_usage
-            .device_configs
-            .iter()
-            .find(|config| config.device_idx == device_idx)
-            .context("Device config must exist for filtered pod")?;
-
         let current_share =
             Self::get_available_cores(pod_identifier, device_config.device_idx as usize)
                 .await
                 .context("Failed to read current share from shared memory")?;
 
-        let pod_utilization = device_snapshot.get_pod_utilization(&host_pids);
-        let pod_memory = device_snapshot.get_pod_memory(&host_pids);
+        let pod_utilization = device_snapshot.get_pod_utilization(host_pids);
+        let pod_memory = device_snapshot.get_pod_memory(host_pids);
 
         let new_share = calculate_delta(
             device_config,
@@ -357,8 +349,7 @@ impl LimiterCoordinator {
         new_share: Option<i32>,
         timestamp: u64,
     ) -> Result<()> {
-        let pod_identifier = pod_identifier.to_string();
-        Self::with_shared_memory_handle(&pod_identifier.clone(), move |state| {
+        Self::with_shared_memory_handle(pod_identifier, move |state, pod_identifier: &str| {
             if !state.has_device(device_index) {
                 anyhow::bail!(
                     "Device {} not found in shared memory for pod {}",
@@ -390,13 +381,11 @@ impl LimiterCoordinator {
 
     /// Gets available cores for a device efficiently
     async fn get_available_cores(pod_identifier: &str, device_index: usize) -> Result<i32> {
-        let pod_identifier = pod_identifier.to_string();
-
-        Self::with_shared_memory_handle(&pod_identifier.clone(), move |state| {
+        Self::with_shared_memory_handle(pod_identifier, move |state, pod_identifier: &str| {
             state
                 .with_device(device_index, |device| device.device_info.get_available_cores())
                 .context(format!(
-                    "Device {device_index} not found in shared memory for pod {pod_identifier}. This indicates a system state inconsistency."
+                    "Device {device_index} not found in shared memory for pod {pod_identifier}. This indicates a system state inconsistency.",
                 ))
         })
     }
@@ -404,36 +393,44 @@ impl LimiterCoordinator {
     /// Helper method to safely access shared memory handles with consistent error handling
     fn with_shared_memory_handle<T, F>(pod_identifier: &str, f: F) -> Result<T>
     where
-        F: FnOnce(&SharedDeviceState) -> Result<T> + Send + 'static,
+        F: FnOnce(&SharedDeviceState, &str) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        let pod_identifier = pod_identifier.to_string();
         let handle =
-            SharedMemoryHandle::open(&pod_identifier).context("Failed to open shared memory")?;
+            SharedMemoryHandle::open(pod_identifier).context("Failed to open shared memory")?;
         let state = handle.get_state();
-        f(state)
+        f(state, pod_identifier)
     }
 
     /// Gets a complete snapshot of device state (utilization + memory)
     async fn get_device_snapshot(
         device_idx: u32,
         last_seen_timestamp: u64,
-    ) -> Result<Option<DeviceSnapshot>> {
+    ) -> Result<DeviceSnapshot> {
         tokio::task::spawn_blocking({
-            move || -> Result<Option<DeviceSnapshot>> {
+            move || -> Result<DeviceSnapshot> {
                 let nvml = nvml_wrapper::Nvml::init().context("Failed to initialize NVML")?;
                 let device = nvml
                     .device_by_index(device_idx)
                     .context("Failed to get device by index")?;
 
+                let device_snapshot = DeviceSnapshot {
+                    process_utilizations: HashMap::new(),
+                    process_memories: HashMap::new(),
+                    timestamp: last_seen_timestamp,
+                };
+
                 // Get utilization data from last seen timestamp
                 let process_utilization_samples =
-                    device.process_utilization_stats(last_seen_timestamp);
-                if let Err(NvmlError::NotFound) = process_utilization_samples {
-                    return Ok(None);
-                }
-                let process_utilization_samples = process_utilization_samples
-                    .context("Failed to get process utilization stats")?;
+                    match device.process_utilization_stats(last_seen_timestamp) {
+                        Ok(process_utilization_samples) => process_utilization_samples,
+                        Err(NvmlError::NotFound) => {
+                            return Ok(device_snapshot);
+                        }
+                        Err(e) => {
+                            return Err(e.into());
+                        }
+                    };
 
                 // Get memory data
                 let process_info = device
@@ -473,13 +470,13 @@ impl LimiterCoordinator {
                 }
 
                 if process_utilizations.is_empty() && process_memories.is_empty() {
-                    Ok(None)
+                    Ok(device_snapshot)
                 } else {
-                    Ok(Some(DeviceSnapshot {
+                    Ok(DeviceSnapshot {
                         process_utilizations,
                         process_memories,
                         timestamp: newest_timestamp,
-                    }))
+                    })
                 }
             }
         })
@@ -560,7 +557,7 @@ impl LimiterCoordinator {
 
                         // Update heartbeat for each pod
                         for pod_identifier in pod_identifiers {
-                            if let Err(e) = Self::with_shared_memory_handle(&pod_identifier, move |state| {
+                            if let Err(e) = Self::with_shared_memory_handle(&pod_identifier, move |state, _| {
                                 state.update_heartbeat(timestamp);
                                 Ok(())
                             })
