@@ -379,6 +379,14 @@ impl LimiterCoordinator {
                     let current_cores = device.device_info.get_available_cores();
                     let target_cores = new_share.max(0).min(total_cuda_cores);
                     let delta = target_cores - current_cores;
+                    tracing::info!(
+                        pod_identifier = %pod_identifier,
+                        device_index = device_index,
+                        current_cores = current_cores,
+                        target_cores = target_cores,
+                        delta = delta,
+                        "Updating shared memory state"
+                    );
                     device.device_info.fetch_add_available_cores(delta);
                 });
             }
