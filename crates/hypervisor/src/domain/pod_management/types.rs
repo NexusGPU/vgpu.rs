@@ -83,14 +83,6 @@ pub struct ProcessState {
     pub container_name: String,
 }
 
-/// Device usage information for compatibility with existing components
-#[derive(Debug, Clone)]
-pub struct DeviceUsage {
-    pub device_configs: Vec<DeviceConfig>,
-    /// Set of active host PIDs
-    pub active_processes: HashSet<u32>,
-}
-
 impl PodState {
     /// Create a new pod state
     pub fn new(info: WorkerInfo, device_configs: Vec<DeviceConfig>) -> Self {
@@ -144,14 +136,6 @@ impl PodState {
         }
     }
 
-    /// Convert to device usage format (for backward compatibility)
-    pub fn to_device_usage(&self) -> DeviceUsage {
-        DeviceUsage {
-            device_configs: self.device_configs.clone(),
-            active_processes: self.processes.keys().copied().collect(),
-        }
-    }
-
     /// Get processes grouped by container
     pub fn get_processes_by_container(&self) -> HashMap<String, Vec<&ProcessState>> {
         let mut container_processes: HashMap<String, Vec<&ProcessState>> = HashMap::new();
@@ -200,28 +184,7 @@ impl ProcessState {
     }
 }
 
-impl DeviceUsage {
-    pub fn new(device_configs: Vec<DeviceConfig>) -> Self {
-        Self {
-            device_configs,
-            active_processes: HashSet::new(),
-        }
-    }
-
-    pub fn add_process(&mut self, host_pid: u32) {
-        self.active_processes.insert(host_pid);
-    }
-
-    pub fn remove_process(&mut self, host_pid: u32) -> bool {
-        self.active_processes.remove(&host_pid);
-        self.active_processes.is_empty()
-    }
-
-    /// Gets all host_pids in the usage.
-    pub fn get_host_pids(&self) -> Vec<u32> {
-        self.active_processes.iter().copied().collect()
-    }
-}
+// Removed DeviceUsage impl
 
 /// Statistics about the pod management system
 #[derive(Debug, Clone)]
@@ -234,19 +197,6 @@ pub struct SystemStats {
     pub gpu_pods: usize,
     /// Number of active devices
     pub active_devices: usize,
-}
-
-// Conversion implementations for backward compatibility
-impl From<PodState> for DeviceUsage {
-    fn from(pod_state: PodState) -> Self {
-        pod_state.to_device_usage()
-    }
-}
-
-impl From<&PodState> for DeviceUsage {
-    fn from(pod_state: &PodState) -> Self {
-        pod_state.to_device_usage()
-    }
 }
 
 /// Helper trait for converting errors to our unified error type
@@ -355,10 +305,10 @@ mod tests {
         let process_state = ProcessState::new(1234, 5678, "main".to_string());
         pod_state.add_process(process_state);
 
-        let device_usage = pod_state.to_device_usage();
-        assert_eq!(device_usage.device_configs.len(), 1);
-        assert_eq!(device_usage.active_processes.len(), 1);
-        assert!(device_usage.active_processes.contains(&1234));
+        assert_eq!(pod_state.device_configs.len(), 1);
+        let host_pids = pod_state.get_host_pids();
+        assert_eq!(host_pids.len(), 1);
+        assert_eq!(host_pids[0], 1234);
     }
 
     #[test]

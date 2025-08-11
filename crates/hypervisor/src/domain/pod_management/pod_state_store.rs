@@ -160,13 +160,33 @@ impl PodStateStore {
         self.pods.contains_key(pod_identifier)
     }
 
-    /// Get all pods using a specific device
-    pub fn get_pods_using_device(&self, device_idx: u32) -> Vec<(String, PodState)> {
+    /// Get all pod identifiers using a specific device
+    pub fn get_pods_using_device(&self, device_idx: u32) -> Vec<String> {
         self.pods
             .iter()
             .filter(|entry| entry.value().uses_device(device_idx))
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .map(|entry| entry.key().clone())
             .collect()
+    }
+
+    /// Get host PIDs for a specific pod
+    pub fn get_host_pids_for_pod(&self, pod_identifier: &str) -> Option<Vec<u32>> {
+        self.pods.get(pod_identifier).map(|pod| pod.get_host_pids())
+    }
+
+    /// Get a device config for a pod and device index
+    // TODO: avoid cloning the device config
+    pub fn get_device_config_for_pod(
+        &self,
+        pod_identifier: &str,
+        device_idx: u32,
+    ) -> Option<DeviceConfig> {
+        self.pods.get(pod_identifier).and_then(|pod| {
+            pod.device_configs
+                .iter()
+                .find(|cfg| cfg.device_idx == device_idx)
+                .cloned()
+        })
     }
 
     /// Set shared memory handle for a pod
@@ -339,7 +359,7 @@ mod tests {
 
         let pods_using_device_0 = store.get_pods_using_device(0);
         assert_eq!(pods_using_device_0.len(), 1);
-        assert_eq!(pods_using_device_0[0].0, "pod-1");
+        assert_eq!(pods_using_device_0[0], "pod-1");
 
         let pods_using_device_1 = store.get_pods_using_device(1);
         assert_eq!(pods_using_device_1.len(), 0);
