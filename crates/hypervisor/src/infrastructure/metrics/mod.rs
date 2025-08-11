@@ -89,12 +89,17 @@ pub(crate) async fn run_metrics(
     let mut worker_acc: HashMap<String, HashMap<String, AccumulatedWorkerMetrics>> = HashMap::new();
     let mut counter = 0;
 
-    let metrics_extra_labels: Vec<_> = metrics_extra_labels
-        .unwrap_or_default()
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect();
+    let metrics_extra_labels: HashMap<String, String> = metrics_extra_labels
+        .map(|labels_json| {
+            serde_json::from_str(labels_json).unwrap_or_else(|e| {
+                tracing::warn!(
+                    "Failed to parse metrics_extra_labels JSON: {}, using empty map",
+                    e
+                );
+                HashMap::new()
+            })
+        })
+        .unwrap_or_default();
     let has_dynamic_metrics_labels = !metrics_extra_labels.is_empty();
 
     let mut receiver = gpu_observer.subscribe().await;
@@ -227,9 +232,9 @@ pub(crate) async fn run_metrics(
                                     if acc.count > 0 {
                                         let mut extra_labels = HashMap::new();
                                         if has_dynamic_metrics_labels {
-                                            for label in &metrics_extra_labels {
+                                            for (label, value) in &metrics_extra_labels {
                                                 extra_labels.insert(
-                                                    label.clone(),
+                                                    value.clone(),
                                                     labels
                                                         .get(label)
                                                         .cloned()
