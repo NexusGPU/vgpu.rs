@@ -107,7 +107,7 @@ impl PodManager {
         container_pid: u32,
     ) -> Result<u32> {
         // Ensure pod is registered first
-        let device_configs = self.ensure_pod_registered(namespace, pod_name).await?;
+        self.ensure_pod_registered(namespace, pod_name).await?;
 
         // Discover PID
         let process_info = self
@@ -121,7 +121,6 @@ impl PodManager {
             container_name,
             process_info.host_pid,
             process_info.container_pid,
-            device_configs,
         )
         .await?;
 
@@ -169,12 +168,12 @@ impl PodManager {
         &self,
         namespace: &str,
         pod_name: &str,
-    ) -> Result<Vec<DeviceConfig>> {
+    ) -> Result<()> {
         let pod_identifier = self.pod_identifier(namespace, pod_name);
 
         // Check if already registered
         if self.pod_state_store.contains_pod(&pod_identifier) {
-            return Ok(Vec::new());
+            return Ok(());
         }
 
         // Get pod info from cache
@@ -211,13 +210,13 @@ impl PodManager {
             .register_pod(&pod_identifier, pod_info.0, device_configs.clone())?;
 
         self.limiter_coordinator
-            .ensure_pod_registered(&pod_identifier, device_configs.clone())
+            .ensure_pod_registered(&pod_identifier, &device_configs)
             .await
             .map_err(|e| PodManagementError::RegistrationFailed {
                 message: e.to_string(),
             })?;
 
-        Ok(device_configs)
+        Ok(())
     }
 
     /// Discover process info (separated from registration logic)
@@ -265,7 +264,6 @@ impl PodManager {
         container_name: &str,
         host_pid: u32,
         container_pid: u32,
-        device_configs: Vec<DeviceConfig>,
     ) -> Result<()> {
         let pod_identifier = self.pod_identifier(namespace, pod_name);
 
@@ -309,13 +307,7 @@ impl PodManager {
         // 2. Register with limiter coordinator
         // Register process with the limiter coordinator.
         self.limiter_coordinator
-            .register_process(
-                &pod_identifier,
-                container_name,
-                container_pid,
-                host_pid,
-                device_configs,
-            )
+            .register_process(&pod_identifier, host_pid)
             .await
             .map_err(|e| PodManagementError::RegistrationFailed {
                 message: e.to_string(),
