@@ -183,17 +183,8 @@ impl LimiterCoordinator {
             return Ok(());
         }
 
-        let device_snapshot =
-            match Self::get_device_snapshot(device_idx, *last_seen_timestamp).await? {
-                Some(snapshot) => {
-                    *last_seen_timestamp = snapshot.timestamp;
-                    snapshot
-                }
-                None => {
-                    debug!(device_idx = device_idx, "No device data available");
-                    return Ok(());
-                }
-            };
+        let device_snapshot = Self::get_device_snapshot(device_idx, *last_seen_timestamp).await?;
+        *last_seen_timestamp = device_snapshot.timestamp;
 
         for pod_identifier in pods_for_device {
             let Some(host_pids) = pod_state_store.get_host_pids_for_pod(&pod_identifier) else {
@@ -379,14 +370,6 @@ impl LimiterCoordinator {
                     let current_cores = device.device_info.get_available_cores();
                     let target_cores = new_share.max(0).min(total_cuda_cores);
                     let delta = target_cores - current_cores;
-                    tracing::info!(
-                        pod_identifier = %pod_identifier,
-                        device_index = device_index,
-                        current_cores = current_cores,
-                        target_cores = target_cores,
-                        delta = delta,
-                        "Updating shared memory state"
-                    );
                     device.device_info.fetch_add_available_cores(delta);
                 });
             }
@@ -423,20 +406,26 @@ impl LimiterCoordinator {
     async fn get_device_snapshot(
         device_idx: u32,
         last_seen_timestamp: u64,
-    ) -> Result<Option<DeviceSnapshot>> {
+    ) -> Result<DeviceSnapshot> {
         tokio::task::spawn_blocking({
-            move || -> Result<Option<DeviceSnapshot>> {
+            move || -> Result<DeviceSnapshot> {
                 let nvml = nvml_wrapper::Nvml::init().context("Failed to initialize NVML")?;
                 let device = nvml
                     .device_by_index(device_idx)
                     .context("Failed to get device by index")?;
+
+                let device_snapshot = DeviceSnapshot {
+                    process_utilizations: HashMap::new(),
+                    process_memories: HashMap::new(),
+                    timestamp: last_seen_timestamp,
+                };
 
                 // Get utilization data from last seen timestamp
                 let process_utilization_samples =
                     match device.process_utilization_stats(last_seen_timestamp) {
                         Ok(process_utilization_samples) => process_utilization_samples,
                         Err(NvmlError::NotFound) => {
-                            return Ok(None);
+                            return Ok(device_snapshot);
                         }
                         Err(e) => {
                             return Err(e.into());
@@ -481,13 +470,13 @@ impl LimiterCoordinator {
                 }
 
                 if process_utilizations.is_empty() && process_memories.is_empty() {
-                    Ok(None)
+                    Ok(device_snapshot)
                 } else {
-                    Ok(Some(DeviceSnapshot {
+                    Ok(DeviceSnapshot {
                         process_utilizations,
                         process_memories,
                         timestamp: newest_timestamp,
-                    }))
+                    })
                 }
             }
         })
