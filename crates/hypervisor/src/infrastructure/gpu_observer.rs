@@ -23,10 +23,17 @@ type ProcessMetrics = HashMap<ProcessId, GpuResources>;
 
 #[derive(Debug, Default)]
 pub struct GpuMetrics {
-    // KB/s
+    pub resources: GpuResources,
+    pub memory_percentage: f64,
+
+    // PCIe KB/s
     pub rx: u32,
-    // KB/s
+    // PCIe KB/s
     pub tx: u32,
+
+    // NVLink bandwidth in bytes/s (-1 if not active)
+    pub nvlink_rx_bandwidth: i64,
+    pub nvlink_tx_bandwidth: i64,
 
     pub temperature: u32,
 
@@ -36,8 +43,7 @@ pub struct GpuMetrics {
     pub memory_clock_mhz: u32,
     pub video_clock_mhz: u32,
 
-    pub resources: GpuResources,
-    pub memory_percentage: f64,
+    pub power_usage: u32,
 }
 
 type LastSeenTimestamp = u64;
@@ -148,6 +154,7 @@ impl GpuObserver {
 
         for i in 0..self.nvml.device_count()? {
             let device = self.nvml.device_by_index(i)?;
+            let nv_link = device.link_wrapper_for(0);
             let gpu_uuid = device.uuid()?.to_lowercase();
 
             let last_seen_timestamp = last_metrics
@@ -234,12 +241,9 @@ impl GpuObserver {
 
             let tx = device.pcie_throughput(PcieUtilCounter::Send)?;
             let rx = device.pcie_throughput(PcieUtilCounter::Receive)?;
-
-            // Get GPU temperature
+            let power_usage = device.power_usage()?;
             let temperature = device.temperature(TemperatureSensor::Gpu)?;
-            // Get GPU memory info
             let memory_info = device.memory_info()?;
-            // Get GPU utilization info
             let utilization = device.utilization_rates()?;
 
             // Get GPU clock frequencies
@@ -248,11 +252,25 @@ impl GpuObserver {
             let memory_clock = device.clock_info(Clock::Memory)?;
             let video_clock = device.clock_info(Clock::Video)?;
 
+            // Monitor NVLink bandwidth if available
+            let (nvlink_rx_bandwidth, nvlink_tx_bandwidth) = match nv_link.is_active() {
+                Ok(true) => {
+                    // TODO: add DCGM rust binding and implement it here
+                    (-1, -1)
+                }
+                _ => {
+                    // NVLink not active or error checking status, record as -1
+                    (-1, -1)
+                }
+            };
+
             gpu_metrics.insert(
                 gpu_uuid.clone(),
                 GpuMetrics {
                     rx,
                     tx,
+                    nvlink_rx_bandwidth,
+                    nvlink_tx_bandwidth,
                     temperature,
                     graphics_clock_mhz: graphics_clock,
                     sm_clock_mhz: sm_clock,
@@ -263,6 +281,7 @@ impl GpuObserver {
                         compute_percentage: utilization.gpu,
                     },
                     memory_percentage: utilization.memory as f64 / memory_info.total as f64,
+                    power_usage,
                 },
             );
             gpu_process_metrics.insert(gpu_uuid, (process_metrics, newest_timestamp_candidate));

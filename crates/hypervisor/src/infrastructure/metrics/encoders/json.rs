@@ -164,6 +164,9 @@ mod tests {
             memory_bytes: 2048000000,
             compute_percentage: 92.3,
             compute_tflops: 18.7,
+            power_usage: 180,
+            nvlink_rx_bandwidth: 5000000,
+            nvlink_tx_bandwidth: 3000000,
             timestamp: 1609459200,
             memory_percentage: 0.5,
         });

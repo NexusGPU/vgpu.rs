@@ -46,6 +46,11 @@ impl From<Vec<u8>> for BytesWrapper {
 
 #[derive(Default)]
 struct AccumulatedGpuMetrics {
+    memory_bytes: u64,
+    memory_percentage: f64,
+    compute_percentage: f64,
+    compute_tflops: f64,
+
     rx: f64,
     tx: f64,
     temperature: f64,
@@ -53,10 +58,10 @@ struct AccumulatedGpuMetrics {
     sm_clock_mhz: f64,
     memory_clock_mhz: f64,
     video_clock_mhz: f64,
-    memory_bytes: u64,
-    memory_percentage: f64,
-    compute_percentage: f64,
-    compute_tflops: f64,
+    power_usage: i64,
+    nvlink_rx_bandwidth: i64,
+    nvlink_tx_bandwidth: i64,
+
     count: usize,
 }
 
@@ -133,6 +138,7 @@ pub(crate) async fn run_metrics(
                             acc.memory_bytes += gpu.resources.memory_bytes;
                             acc.memory_percentage += gpu.memory_percentage;
                             acc.compute_percentage += gpu.resources.compute_percentage as f64;
+                            acc.power_usage += gpu.power_usage as i64;
 
                             // Estimation of TFlops (not accurate because of
                             // a. MFU won't be 100%
@@ -198,6 +204,8 @@ pub(crate) async fn run_metrics(
                                         gpu_pool,
                                         rx: acc.rx / acc.count as f64,
                                         tx: acc.tx / acc.count as f64,
+                                        nvlink_rx_bandwidth: acc.nvlink_rx_bandwidth / acc.count as i64,
+                                        nvlink_tx_bandwidth: acc.nvlink_tx_bandwidth / acc.count as i64,
                                         temperature: acc.temperature / acc.count as f64,
                                         graphics_clock_mhz: acc.graphics_clock_mhz / acc.count as f64,
                                         sm_clock_mhz: acc.sm_clock_mhz / acc.count as f64,
@@ -207,6 +215,7 @@ pub(crate) async fn run_metrics(
                                         memory_percentage: acc.memory_percentage / acc.count as f64,
                                         compute_percentage: acc.compute_percentage / acc.count as f64,
                                         compute_tflops: acc.compute_tflops / acc.count as f64,
+                                        power_usage: acc.power_usage / acc.count as i64,
                                         timestamp,
                                     });
                                     tracing::info!(

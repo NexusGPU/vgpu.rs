@@ -20,6 +20,9 @@ pub struct GpuMetricsParams<'a> {
     pub memory_percentage: f64,
     pub compute_percentage: f64,
     pub compute_tflops: f64,
+    pub power_usage: i64,
+    pub nvlink_rx_bandwidth: i64,
+    pub nvlink_tx_bandwidth: i64,
     pub timestamp: i64,
 }
 
@@ -124,6 +127,9 @@ pub trait MetricsEncoder: Send + Sync {
             params.compute_percentage.into(),
         );
         fields.insert("compute_tflops".to_string(), params.compute_tflops.into());
+        fields.insert("power_usage".to_string(), params.power_usage.into());
+        fields.insert("nvlink_rx".to_string(), params.nvlink_rx_bandwidth.into());
+        fields.insert("nvlink_tx".to_string(), params.nvlink_tx_bandwidth.into());
 
         self.encode_metrics("tf_gpu_usage", &tags, &fields, params.timestamp)
     }
@@ -312,6 +318,9 @@ mod tests {
             memory_bytes: 1024000000,
             compute_percentage: 85.5,
             compute_tflops: 12.5,
+            power_usage: 150,
+            nvlink_rx_bandwidth: 1000000,
+            nvlink_tx_bandwidth: 2000000,
             timestamp: 1234567890,
             memory_percentage: 0.5,
         });
@@ -373,6 +382,9 @@ mod tests {
             memory_bytes: 4096000000,
             compute_percentage: 88.0,
             compute_tflops: 25.0,
+            power_usage: 200,
+            nvlink_rx_bandwidth: -1,
+            nvlink_tx_bandwidth: -1,
             memory_percentage: 92.0,
             timestamp: 1234567890,
         });
