@@ -260,7 +260,7 @@ impl LimiterCoordinator {
     pub async fn ensure_pod_registered(
         &self,
         pod_identifier: &str,
-        configs: Vec<DeviceConfig>,
+        configs: &[DeviceConfig],
     ) -> Result<()> {
         let restored_pids = match self.shared_memory_manager.get_shared_memory(pod_identifier) {
             Ok(ptr) => {
@@ -280,7 +280,7 @@ impl LimiterCoordinator {
             Err(_) => {
                 debug!(pod_identifier = %pod_identifier, "Creating new shared memory for pod");
                 self.shared_memory_manager
-                    .create_shared_memory(pod_identifier, &configs)?;
+                    .create_shared_memory(pod_identifier, configs)?;
                 Vec::new()
             }
         };
@@ -292,23 +292,24 @@ impl LimiterCoordinator {
                 "Restored {} processes from existing shared memory",
                 restored_pids.len()
             );
+
+            for pid in restored_pids {
+                if let Err(e) = self.register_process(pod_identifier, pid as u32).await {
+                    tracing::error!(
+                        pod_identifier = %pod_identifier,
+                        pid = pid,
+                        error = %e,
+                        "Failed to register process from existing shared memory"
+                    );
+                }
+            }
         }
 
         Ok(())
     }
 
     /// Registers a process within a pod (Process-level operation)
-    pub async fn register_process(
-        &self,
-        pod_identifier: &str,
-        container_name: &str,
-        container_pid: u32,
-        host_pid: u32,
-        device_configs: Vec<DeviceConfig>,
-    ) -> Result<()> {
-        self.ensure_pod_registered(pod_identifier, device_configs)
-            .await?;
-
+    pub async fn register_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
         // Add PID to shared memory
         self.shared_memory_manager
             .add_pid(pod_identifier, host_pid as usize)
@@ -316,8 +317,6 @@ impl LimiterCoordinator {
 
         info!(
             pod_identifier = %pod_identifier,
-            container_name = %container_name,
-            container_pid = container_pid,
             host_pid = host_pid,
             "Registered process to coordinator"
         );
