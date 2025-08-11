@@ -6,7 +6,7 @@ use std::time::Duration;
 use api_types::{QosLevel, WorkerInfo};
 use nvml_wrapper::Nvml;
 use tracing::{info, warn};
-use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig};
+use utils::shared_memory::handle::SharedMemoryHandle;
 
 use crate::domain::HypervisorType;
 use crate::gpu_observer::GpuObserver;
@@ -164,11 +164,7 @@ impl PodManager {
     }
 
     /// Ensure pod is registered in all components (lazy loading)
-    pub async fn ensure_pod_registered(
-        &self,
-        namespace: &str,
-        pod_name: &str,
-    ) -> Result<()> {
+    pub async fn ensure_pod_registered(&self, namespace: &str, pod_name: &str) -> Result<()> {
         let pod_identifier = self.pod_identifier(namespace, pod_name);
 
         // Check if already registered
