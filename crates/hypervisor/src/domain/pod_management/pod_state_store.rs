@@ -15,7 +15,7 @@ use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig};
 use super::types::{PodManagementError, PodStatus, Result, SystemStats};
 
 // Re-export unified types for backward compatibility
-use super::types::{PodState, ProcessState};
+use super::types::PodState;
 
 /// Centralized pod state store providing atomic operations
 ///
@@ -81,28 +81,19 @@ impl PodStateStore {
     /// Register a process within a pod
     ///
     /// If the pod doesn't exist, this will return an error.
-    pub fn register_process(
-        &self,
-        pod_identifier: &str,
-        host_pid: u32,
-        container_pid: u32,
-        container_name: String,
-    ) -> Result<()> {
+    pub fn register_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
         let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
             PodManagementError::PodIdentifierNotFound {
                 pod_identifier: pod_identifier.to_string(),
             }
         })?;
 
-        let process_state = ProcessState::new(host_pid, container_pid, container_name);
-
-        pod_ref.add_process(process_state);
+        pod_ref.add_process(host_pid);
         self.pid_to_pod.insert(host_pid, pod_identifier.to_string());
 
         info!(
             pod_identifier = %pod_identifier,
             host_pid = host_pid,
-            container_pid = container_pid,
             "Process registered in pod state store"
         );
 
@@ -124,7 +115,7 @@ impl PodStateStore {
             })?;
 
             pod_ref.remove_process(host_pid);
-            !pod_ref.has_processes()
+            pod_ref.is_empty()
         };
 
         if should_remove_pod {
@@ -267,10 +258,10 @@ impl PodStateStore {
     }
 
     /// Get all processes for a pod
-    pub fn get_pod_processes(&self, pod_identifier: &str) -> Vec<ProcessState> {
+    pub fn get_pod_processes(&self, pod_identifier: &str) -> Vec<u32> {
         self.pods
             .get(pod_identifier)
-            .map(|pod| pod.processes.values().cloned().collect())
+            .map(|pod| pod.processes.iter().copied().collect())
             .unwrap_or_default()
     }
 }
@@ -331,15 +322,13 @@ mod tests {
         assert!(store.contains_pod("pod-1"));
         assert_eq!(store.get_pod("pod-1").unwrap().info.pod_name, "test-pod");
 
-        store
-            .register_process("pod-1", 1234, 5678, "main".to_string())
-            .unwrap();
+        store.register_process("pod-1", 1234).unwrap();
 
         assert_eq!(store.get_pod_by_pid(1234), Some("pod-1".to_string()));
 
         let pod_state = store.get_pod("pod-1").unwrap();
         assert_eq!(pod_state.processes.len(), 1);
-        assert!(pod_state.get_process(1234).is_some());
+        assert!(pod_state.has_processes(1234));
 
         // Test process unregistration
         let should_remove = store.unregister_process("pod-1", 1234).unwrap();
@@ -383,9 +372,7 @@ mod tests {
         assert_eq!(stats.total_pods, 1);
         assert_eq!(stats.total_processes, 0);
 
-        store
-            .register_process("pod-1", 1234, 5678, "main".to_string())
-            .unwrap();
+        store.register_process("pod-1", 1234).unwrap();
 
         let stats = store.stats();
         assert_eq!(stats.total_pods, 1);

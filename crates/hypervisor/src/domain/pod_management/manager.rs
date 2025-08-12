@@ -120,7 +120,6 @@ impl PodManager {
             namespace,
             container_name,
             process_info.host_pid,
-            process_info.container_pid,
         )
         .await?;
 
@@ -205,12 +204,25 @@ impl PodManager {
         self.pod_state_store
             .register_pod(&pod_identifier, pod_info.0, device_configs.clone())?;
 
-        self.limiter_coordinator
+        let restored_pids = self
+            .limiter_coordinator
             .ensure_pod_registered(&pod_identifier, &device_configs)
             .await
             .map_err(|e| PodManagementError::RegistrationFailed {
                 message: e.to_string(),
             })?;
+
+        if !restored_pids.is_empty() {
+            for pid in restored_pids {
+                self.pod_state_store
+                    .register_process(&pod_identifier, pid as u32)?;
+                self.limiter_coordinator
+                    .register_process(&pod_identifier, pid as u32)
+                    .map_err(|e| PodManagementError::RegistrationFailed {
+                        message: e.to_string(),
+                    })?;
+            }
+        }
 
         Ok(())
     }
@@ -259,7 +271,6 @@ impl PodManager {
         namespace: &str,
         container_name: &str,
         host_pid: u32,
-        container_pid: u32,
     ) -> Result<()> {
         let pod_identifier = self.pod_identifier(namespace, pod_name);
 
@@ -293,18 +304,13 @@ impl PodManager {
         ));
 
         // 1. Register process in state store
-        self.pod_state_store.register_process(
-            &pod_identifier,
-            host_pid,
-            container_pid,
-            container_name.to_string(),
-        )?;
+        self.pod_state_store
+            .register_process(&pod_identifier, host_pid)?;
 
         // 2. Register with limiter coordinator
         // Register process with the limiter coordinator.
         self.limiter_coordinator
             .register_process(&pod_identifier, host_pid)
-            .await
             .map_err(|e| PodManagementError::RegistrationFailed {
                 message: e.to_string(),
             })?;
@@ -345,7 +351,7 @@ impl PodManager {
             for pod_id in self.pod_state_store.list_pod_identifiers() {
                 let processes = self.pod_state_store.get_pod_processes(&pod_id);
                 for process in processes {
-                    pids.push(process.host_pid);
+                    pids.push(process);
                 }
             }
             pids
