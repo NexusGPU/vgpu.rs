@@ -48,7 +48,7 @@ serde_yaml = "0.9"
 influxdb-line-protocol = "2.0.0"
 poem = { version = "3.1", features = ["sse", "test"] }
 frida-gum = { version = "0.17" }
-libc = "0.2.174"
+libc = "0.2.175"
 tempfile = "3.20.0"
 proc-macro2 = "1"
 quote = "1"
