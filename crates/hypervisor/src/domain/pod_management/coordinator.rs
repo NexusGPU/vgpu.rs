@@ -1,6 +1,7 @@
 //! Limiter Coordinator Module
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -58,6 +59,16 @@ impl LimiterCoordinator {
             device_count,
             shared_memory_glob_pattern,
         }
+    }
+
+    pub fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<PathBuf>> {
+        self.shared_memory_manager
+            .find_shared_memory_files(glob_pattern)
+    }
+
+    pub fn extract_identifier_from_path(&self, file_path: &std::path::Path) -> Result<String> {
+        self.shared_memory_manager
+            .extract_identifier_from_path(file_path)
     }
 
     /// Run the coordinator with cancellation support
