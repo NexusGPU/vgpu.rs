@@ -22,6 +22,7 @@ use super::device_info::create_device_configs_from_worker_info;
 use super::pod_state_store::PodStateStore;
 use super::types::{PodManagementError, Result};
 
+const IDENTIFIER_PREFIX: &str = "tf_shm_";
 /// Simplified pod manager with unified state management
 pub struct PodManager {
     /// Centralized pod state store
@@ -75,8 +76,13 @@ impl PodManager {
                 .map_err(|e| PodManagementError::SharedMemoryError {
                     message: e.to_string(),
                 })?;
-            let (namespace, pod_name) = self.pod_name_namespace(&identifier);
-            if let Err(e) = self.ensure_pod_registered(&namespace, &pod_name).await {
+            let Some((namespace, pod_name)) = self.pod_name_namespace(&identifier) else {
+                tracing::warn!(
+                    "Skipping shared memory file: {identifier} because it does not match the expected format"
+                );
+                continue;
+            };
+            if let Err(e) = self.ensure_pod_registered(namespace, pod_name).await {
                 tracing::error!(
                     "Failed to restore pod from shared memory: {}: {}",
                     identifier,
@@ -186,12 +192,14 @@ impl PodManager {
 
     // Private helper methods
     fn pod_identifier(&self, namespace: &str, pod_name: &str) -> String {
-        format!("tf_shm_{namespace}_{pod_name}")
+        format!("{IDENTIFIER_PREFIX}{namespace}_{pod_name}")
     }
 
-    fn pod_name_namespace(&self, pod_identifier: &str) -> (String, String) {
-        let parts: Vec<&str> = pod_identifier.split('_').collect();
-        (parts[1].to_string(), parts[2].to_string())
+    fn pod_name_namespace<'s>(&self, pod_identifier: &'s str) -> Option<(&'s str, &'s str)> {
+        pod_identifier
+            .strip_prefix(IDENTIFIER_PREFIX)
+            .unwrap()
+            .split_once('_')
     }
 
     /// Ensure pod is registered in all components (lazy loading)
