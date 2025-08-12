@@ -46,6 +46,11 @@ impl From<Vec<u8>> for BytesWrapper {
 
 #[derive(Default)]
 struct AccumulatedGpuMetrics {
+    memory_bytes: u64,
+    memory_percentage: f64,
+    compute_percentage: f64,
+    compute_tflops: f64,
+
     rx: f64,
     tx: f64,
     temperature: f64,
@@ -53,10 +58,10 @@ struct AccumulatedGpuMetrics {
     sm_clock_mhz: f64,
     memory_clock_mhz: f64,
     video_clock_mhz: f64,
-    memory_bytes: u64,
-    memory_percentage: f64,
-    compute_percentage: f64,
-    compute_tflops: f64,
+    power_usage: i64,
+    nvlink_rx_bandwidth: i64,
+    nvlink_tx_bandwidth: i64,
+
     count: usize,
 }
 
@@ -85,8 +90,11 @@ pub(crate) async fn run_metrics(
 
     let mut gpu_acc: HashMap<String, AccumulatedGpuMetrics> = HashMap::new();
 
-    // level 1 key is gpu_uuid, level 2 key is pod_ns/pod_name, value is GPU usage metrics
-    let mut worker_acc: HashMap<String, HashMap<String, AccumulatedWorkerMetrics>> = HashMap::new();
+    // level 1 key is gpu_uuid, level 2 key is pod_ns/pod_name, level3 is process pid, value is GPU usage metrics
+    let mut worker_acc: HashMap<
+        String,
+        HashMap<String, HashMap<String, AccumulatedWorkerMetrics>>,
+    > = HashMap::new();
     let mut counter = 0;
 
     let metrics_extra_labels: HashMap<String, String> = metrics_extra_labels
@@ -133,6 +141,7 @@ pub(crate) async fn run_metrics(
                             acc.memory_bytes += gpu.resources.memory_bytes;
                             acc.memory_percentage += gpu.memory_percentage;
                             acc.compute_percentage += gpu.resources.compute_percentage as f64;
+                            acc.power_usage += gpu.power_usage as i64;
 
                             // Estimation of TFlops (not accurate because of
                             // a. MFU won't be 100%
@@ -176,7 +185,9 @@ pub(crate) async fn run_metrics(
                                     continue;
                                 };
                                 let acc = worker_acc.entry(pod_identifier).or_default();
+                                let acc = acc.entry(pid.to_string()).or_default();
                                 acc.memory_bytes += resources.memory_bytes;
+                                acc.compute_percentage += resources.compute_percentage as f64;
                                 acc.compute_tflops += resources.compute_percentage as f64
                                     * GPU_CAPACITY_MAP
                                         .read()
@@ -198,6 +209,8 @@ pub(crate) async fn run_metrics(
                                         gpu_pool,
                                         rx: acc.rx / acc.count as f64,
                                         tx: acc.tx / acc.count as f64,
+                                        nvlink_rx_bandwidth: acc.nvlink_rx_bandwidth / acc.count as i64,
+                                        nvlink_tx_bandwidth: acc.nvlink_tx_bandwidth / acc.count as i64,
                                         temperature: acc.temperature / acc.count as f64,
                                         graphics_clock_mhz: acc.graphics_clock_mhz / acc.count as f64,
                                         sm_clock_mhz: acc.sm_clock_mhz / acc.count as f64,
@@ -207,6 +220,7 @@ pub(crate) async fn run_metrics(
                                         memory_percentage: acc.memory_percentage / acc.count as f64,
                                         compute_percentage: acc.compute_percentage / acc.count as f64,
                                         compute_tflops: acc.compute_tflops / acc.count as f64,
+                                        power_usage: acc.power_usage / acc.count as i64,
                                         timestamp,
                                     });
                                     tracing::info!(
@@ -229,51 +243,61 @@ pub(crate) async fn run_metrics(
 
                                     let labels = &pod_state.info.labels;
 
-                                    if acc.count > 0 {
-                                        let mut extra_labels = HashMap::new();
-                                        if has_dynamic_metrics_labels {
-                                            for (label, value) in &metrics_extra_labels {
-                                                extra_labels.insert(
-                                                    value.clone(),
-                                                    labels
-                                                        .get(label)
-                                                        .cloned()
-                                                        .unwrap_or_else(|| "unknown".to_string()),
-                                                );
+                                    let mut memory_bytes = 0;
+                                    let mut compute_percentage = 0.0;
+                                    let mut compute_tflops = 0.0;
+                                    let mut memory_percentage = 0.0;
+                                    for acc in acc.values() {
+                                        memory_bytes += acc.memory_bytes / acc.count as u64;
+                                        compute_percentage += acc.compute_percentage / acc.count as f64;
+                                        compute_tflops += acc.compute_tflops / acc.count as f64;
+                                        memory_percentage += {
+                                            let avg_memory_bytes = acc.memory_bytes as f64 / acc.count as f64;
+                                            let vram_limit = pod_state.info.vram_limit.unwrap_or(0) as f64;
+                                            if vram_limit > 0.0 {
+                                                avg_memory_bytes / vram_limit
+                                            } else {
+                                                0.0
                                             }
                                         }
-
-                                        let metrics_str = encoder.encode_worker_metrics_with_params(&WorkerMetricsParams {
-                                            gpu_uuid,
-                                            node_name,
-                                            gpu_pool,
-                                            pod_identifier,
-                                            namespace: &pod_state.info.namespace,
-                                            workload: pod_state
-                                                .info
-                                                .workload_name
-                                                .as_deref()
-                                                .unwrap_or("unknown"),
-                                            memory_bytes: acc.memory_bytes / acc.count as u64,
-                                            compute_percentage: acc.compute_percentage / acc.count as f64,
-                                            compute_tflops: acc.compute_tflops / acc.count as f64,
-                                            memory_percentage: {
-                                                let avg_memory_bytes = acc.memory_bytes as f64 / acc.count as f64;
-                                                let vram_limit = pod_state.info.vram_limit.unwrap_or(0) as f64;
-                                                if vram_limit > 0.0 {
-                                                    avg_memory_bytes / vram_limit
-                                                } else {
-                                                    0.0
-                                                }
-                                            },
-                                            timestamp,
-                                            extra_labels: &extra_labels,
-                                        });
-                                        tracing::info!(
-                                            target: "metrics",
-                                            msg = %metrics_str,
-                                        );
                                     }
+
+                                    let mut extra_labels = HashMap::new();
+                                    if has_dynamic_metrics_labels {
+                                        for (label, value) in &metrics_extra_labels {
+                                            extra_labels.insert(
+                                                value.clone(),
+                                                labels
+                                                    .get(label)
+                                                    .cloned()
+                                                    .unwrap_or_else(|| "unknown".to_string()),
+                                            );
+                                        }
+                                    }
+
+                                    let metrics_str = encoder.encode_worker_metrics_with_params(&WorkerMetricsParams {
+                                        gpu_uuid,
+                                        node_name,
+                                        gpu_pool,
+                                        pod_identifier,
+                                        namespace: &pod_state.info.namespace,
+                                        workload: pod_state
+                                            .info
+                                            .workload_name
+                                            .as_deref()
+                                            .unwrap_or("unknown"),
+                                        memory_bytes,
+                                        compute_percentage,
+                                        compute_tflops,
+                                        memory_percentage,
+                                        timestamp,
+                                        extra_labels: &extra_labels,
+                                    });
+                                    tracing::info!(
+                                        target: "metrics",
+                                        msg = %metrics_str,
+                                    );
+
                                 }
                             }
 

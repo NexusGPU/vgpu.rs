@@ -18,6 +18,7 @@
         "LIBNVML",
         "NGPU",
         "nspid",
+        "nvlink",
         "Nvml",
         "oneshot",
         "pids",
