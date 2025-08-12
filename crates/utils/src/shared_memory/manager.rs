@@ -138,7 +138,7 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Find shared memory files matching the glob pattern
-    fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<std::path::PathBuf>> {
+    pub fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<std::path::PathBuf>> {
         let paths = glob::glob(&format!("/dev/shm/{glob_pattern}"))
             .context("Failed to compile glob pattern")?;
 
@@ -154,7 +154,7 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Extract identifier from file path by removing /dev/shm/ prefix
-    fn extract_identifier_from_path(&self, file_path: &std::path::Path) -> Result<String> {
+    pub fn extract_identifier_from_path(&self, file_path: &std::path::Path) -> Result<String> {
         file_path
             .strip_prefix("/dev/shm/")
             .map(|relative_path| relative_path.to_string_lossy().to_string())

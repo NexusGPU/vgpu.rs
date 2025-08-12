@@ -60,6 +60,34 @@ impl PodManager {
         }
     }
 
+    pub async fn restore_pod_from_shared_memory(&self, shm_glob_pattern: &str) -> Result<()> {
+        let shared_memory_files = self
+            .limiter_coordinator
+            .find_shared_memory_files(shm_glob_pattern)
+            .map_err(|e| PodManagementError::SharedMemoryError {
+                message: e.to_string(),
+            })?;
+
+        for file in shared_memory_files {
+            let identifier = self
+                .limiter_coordinator
+                .extract_identifier_from_path(&file)
+                .map_err(|e| PodManagementError::SharedMemoryError {
+                    message: e.to_string(),
+                })?;
+            let (namespace, pod_name) = self.pod_name_namespace(&identifier);
+            if let Err(e) = self.ensure_pod_registered(&namespace, &pod_name).await {
+                tracing::error!(
+                    "Failed to restore pod from shared memory: {}: {}",
+                    identifier,
+                    e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// Find a pod by namespace and pod name.
     pub async fn find_pod_by_name(
         &self,
@@ -157,15 +185,18 @@ impl PodManager {
     }
 
     // Private helper methods
-
     fn pod_identifier(&self, namespace: &str, pod_name: &str) -> String {
         format!("tf_shm_{namespace}_{pod_name}")
+    }
+
+    fn pod_name_namespace(&self, pod_identifier: &str) -> (String, String) {
+        let parts: Vec<&str> = pod_identifier.split('_').collect();
+        (parts[1].to_string(), parts[2].to_string())
     }
 
     /// Ensure pod is registered in all components (lazy loading)
     pub async fn ensure_pod_registered(&self, namespace: &str, pod_name: &str) -> Result<()> {
         let pod_identifier = self.pod_identifier(namespace, pod_name);
-
         // Check if already registered
         if self.pod_state_store.contains_pod(&pod_identifier) {
             return Ok(());
