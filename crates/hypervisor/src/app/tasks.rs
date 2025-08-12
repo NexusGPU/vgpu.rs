@@ -266,6 +266,14 @@ impl Tasks {
         let token = self.cancellation_token.clone();
 
         tokio::spawn(async move {
+            tracing::info!("Restoring pods from shared memory");
+            if let Err(e) = pod_manager
+                .restore_pod_from_shared_memory("tf_shm_*")
+                .await
+            {
+                panic!("Failed to restore pods from shared memory: {}", e);
+            }
+
             tracing::info!("Starting worker manager resource monitoring task");
             // Start monitoring with 30 second interval and cancellation token
             pod_manager
