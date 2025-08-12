@@ -91,7 +91,10 @@ pub(crate) async fn run_metrics(
     let mut gpu_acc: HashMap<String, AccumulatedGpuMetrics> = HashMap::new();
 
     // level 1 key is gpu_uuid, level 2 key is pod_ns/pod_name, level3 is process pid, value is GPU usage metrics
-    let mut worker_acc: HashMap<String, HashMap<String, HashMap<String, AccumulatedWorkerMetrics>>> = HashMap::new();
+    let mut worker_acc: HashMap<
+        String,
+        HashMap<String, HashMap<String, AccumulatedWorkerMetrics>>,
+    > = HashMap::new();
     let mut counter = 0;
 
     let metrics_extra_labels: HashMap<String, String> = metrics_extra_labels
@@ -244,7 +247,7 @@ pub(crate) async fn run_metrics(
                                     let mut compute_percentage = 0.0;
                                     let mut compute_tflops = 0.0;
                                     let mut memory_percentage = 0.0;
-                                    for (_, acc) in acc {
+                                    for acc in acc.values() {
                                         memory_bytes += acc.memory_bytes / acc.count as u64;
                                         compute_percentage += acc.compute_percentage / acc.count as f64;
                                         compute_tflops += acc.compute_tflops / acc.count as f64;
@@ -283,10 +286,10 @@ pub(crate) async fn run_metrics(
                                             .workload_name
                                             .as_deref()
                                             .unwrap_or("unknown"),
-                                        memory_bytes: memory_bytes,
-                                        compute_percentage: compute_percentage,
-                                        compute_tflops: compute_tflops,
-                                        memory_percentage: memory_percentage,
+                                        memory_bytes,
+                                        compute_percentage,
+                                        compute_tflops,
+                                        memory_percentage,
                                         timestamp,
                                         extra_labels: &extra_labels,
                                     });
@@ -294,7 +297,7 @@ pub(crate) async fn run_metrics(
                                         target: "metrics",
                                         msg = %metrics_str,
                                     );
-                                    
+
                                 }
                             }
 
