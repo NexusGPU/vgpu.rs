@@ -410,11 +410,11 @@ impl SharedDeviceStateV1 {
     }
 
     pub fn add_pid(&self, pid: usize) {
-        self.pids.lock().insert(pid);
+        let _ = self.pids.lock().insert_if_absent(pid);
     }
 
     pub fn remove_pid(&self, pid: usize) {
-        self.pids.lock().remove(pid);
+        let _ = self.pids.lock().remove_value(&pid);
     }
 
     /// Gets all PIDs currently stored in shared memory
@@ -845,5 +845,75 @@ mod tests {
         assert_eq!(active_after_deactivation.len(), 1);
         assert_eq!(active_after_deactivation[0].0, 0);
         assert_eq!(active_after_deactivation[0].1.get_uuid(), "device-0");
+    }
+
+    #[test]
+    fn pid_set_deduplicates_on_add() {
+        let state = SharedDeviceState::new(&[]);
+
+        // Add the same pid multiple times
+        state.add_pid(1234);
+        state.add_pid(1234);
+        state.add_pid(1234);
+
+        let pids = state.get_all_pids();
+        assert_eq!(
+            pids.len(),
+            1,
+            "should contain only one PID after duplicate adds"
+        );
+        assert_eq!(pids[0], 1234);
+    }
+
+    #[test]
+    fn pid_remove_by_value_works() {
+        let state = SharedDeviceState::new(&[]);
+
+        state.add_pid(111);
+        state.add_pid(222);
+        state.add_pid(333);
+
+        state.remove_pid(222);
+
+        let pids = state.get_all_pids();
+        assert_eq!(pids.len(), 2, "should remove the specified PID");
+        assert!(pids.contains(&111));
+        assert!(pids.contains(&333));
+        assert!(!pids.contains(&222));
+    }
+
+    #[test]
+    fn pid_set_capacity_and_duplicate_behavior() {
+        let state = SharedDeviceState::new(&[]);
+
+        // Fill to capacity with unique PIDs
+        for pid in 0..MAX_PROCESSES {
+            state.add_pid(pid);
+        }
+
+        let pids = state.get_all_pids();
+        assert_eq!(
+            pids.len(),
+            MAX_PROCESSES,
+            "should reach max capacity with unique PIDs"
+        );
+
+        // Adding an existing PID should not change the count
+        state.add_pid(0);
+        let pids_after_dup = state.get_all_pids();
+        assert_eq!(
+            pids_after_dup.len(),
+            MAX_PROCESSES,
+            "should remain at capacity when inserting duplicate"
+        );
+
+        // Attempt to add a new PID beyond capacity should be a no-op
+        state.add_pid(MAX_PROCESSES + 1);
+        let pids_final = state.get_all_pids();
+        assert_eq!(
+            pids_final.len(),
+            MAX_PROCESSES,
+            "should remain at capacity when inserting new PID beyond capacity"
+        );
     }
 }

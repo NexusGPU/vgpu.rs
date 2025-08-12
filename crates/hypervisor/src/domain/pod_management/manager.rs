@@ -255,11 +255,6 @@ impl PodManager {
             for pid in restored_pids {
                 self.pod_state_store
                     .register_process(&pod_identifier, pid as u32)?;
-                self.limiter_coordinator
-                    .register_process(&pod_identifier, pid as u32)
-                    .map_err(|e| PodManagementError::RegistrationFailed {
-                        message: e.to_string(),
-                    })?;
             }
         }
 

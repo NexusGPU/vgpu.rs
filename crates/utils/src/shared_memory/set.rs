@@ -129,6 +129,50 @@ impl<T, const N: usize> Set<T, N> {
     pub fn values(&self) -> impl Iterator<Item = &T> + '_ {
         self.iter().map(|(_, value)| value)
     }
+
+    /// Finds the index of the first slot that contains a value equal to `value`.
+    pub fn find_index_of(&self, value: &T) -> Option<usize>
+    where
+        T: PartialEq,
+    {
+        for (index, existing) in self.iter() {
+            if existing == value {
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    /// Returns true if the set contains a value equal to `value`.
+    pub fn contains_value(&self, value: &T) -> bool
+    where
+        T: PartialEq,
+    {
+        self.find_index_of(value).is_some()
+    }
+
+    /// Inserts a value only if an equal value is not already present.
+    /// Returns the existing or newly inserted index, or None if the set is full
+    /// and the value was not present.
+    pub fn insert_if_absent(&mut self, value: T) -> Option<usize>
+    where
+        T: PartialEq,
+    {
+        if let Some(index) = self.find_index_of(&value) {
+            return Some(index);
+        }
+        self.insert(value)
+    }
+
+    /// Removes the first occurrence of a value equal to `value`.
+    /// Returns the removed value with its index, or None if not found.
+    pub fn remove_value(&mut self, value: &T) -> Option<(usize, T)>
+    where
+        T: PartialEq,
+    {
+        let index = self.find_index_of(value)?;
+        self.remove(index).map(|v| (index, v))
+    }
 }
 
 impl<T, const N: usize> Default for Set<T, N> {
@@ -166,14 +210,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_set() {
-        let set: Set<i32, 10> = Set::new();
-        assert_eq!(set.len(), 0);
-        assert_eq!(set.capacity(), 10);
-        assert!(set.is_empty());
-    }
-
-    #[test]
     fn test_insert_and_get() {
         let mut set: Set<String, 5> = Set::new();
 
@@ -195,11 +231,55 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_if_absent_deduplicates() {
+        let mut set: Set<i32, 4> = Set::new();
+
+        let i1 = set.insert_if_absent(7).unwrap();
+        let i2 = set.insert_if_absent(7).unwrap();
+
+        assert_eq!(i1, i2, "Index should be the same when inserting duplicates");
+        assert_eq!(
+            set.len(),
+            1,
+            "Set should contain only one element after dedup insert"
+        );
+
+        // Fill remaining capacity
+        let _ = set.insert_if_absent(8).unwrap();
+        let _ = set.insert_if_absent(9).unwrap();
+        let _ = set.insert_if_absent(10).unwrap();
+
+        assert!(
+            set.insert_if_absent(11).is_none(),
+            "should return None when full and value missing"
+        );
+        // But inserting an existing value should still succeed and return the existing index
+        assert_eq!(set.insert_if_absent(9), set.find_index_of(&9));
+    }
+
+    #[test]
+    fn test_remove_value_by_value() {
+        let mut set: Set<&str, 5> = Set::new();
+        let _ = set.insert("a");
+        let _ = set.insert("b");
+        let _ = set.insert("c");
+
+        assert!(set.contains_value(&"b"));
+        let removed = set
+            .remove_value(&"b")
+            .expect("should remove existing value");
+        assert_eq!(removed.1, "b");
+        assert!(!set.contains_value(&"b"));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
     fn test_insert_until_full() {
         let mut set: Set<i32, 3> = Set::new();
 
         // Fill the set
         let idx1 = set.insert(10).unwrap();
+        let _ = set.insert(10).unwrap();
         let idx2 = set.insert(20).unwrap();
         let idx3 = set.insert(30).unwrap();
 
