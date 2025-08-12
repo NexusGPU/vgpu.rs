@@ -3,7 +3,7 @@
 //! This module contains all the core data structures used across the pod management system,
 //! eliminating duplication and providing a single source of truth for type definitions.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use api_types::WorkerInfo;
@@ -65,22 +65,11 @@ pub struct PodState {
     /// Device configurations for GPU resources
     pub device_configs: Vec<DeviceConfig>,
     /// All processes in this pod, keyed by host PID
-    pub processes: HashMap<u32, ProcessState>,
+    pub processes: HashSet<u32>,
     /// Shared memory handle for GPU coordination
     pub shared_memory_handle: Option<Arc<SharedMemoryHandle>>,
     /// Current pod status
     pub status: PodStatus,
-}
-
-/// Unified state information for a single process within a pod
-#[derive(Debug, Clone)]
-pub struct ProcessState {
-    /// Host process ID
-    pub host_pid: u32,
-    /// Container process ID
-    pub container_pid: u32,
-    /// Container name this process belongs to
-    pub container_name: String,
 }
 
 impl PodState {
@@ -89,35 +78,34 @@ impl PodState {
         Self {
             info,
             device_configs,
-            processes: HashMap::new(),
+            processes: HashSet::new(),
             shared_memory_handle: None,
             status: PodStatus::Running,
         }
     }
 
     /// Add a process to this pod
-    pub fn add_process(&mut self, process_state: ProcessState) {
-        self.processes.insert(process_state.host_pid, process_state);
+    pub fn add_process(&mut self, host_pid: u32) {
+        self.processes.insert(host_pid);
     }
 
     /// Remove a process from this pod
-    pub fn remove_process(&mut self, host_pid: u32) -> Option<ProcessState> {
+    pub fn remove_process(&mut self, host_pid: u32) -> bool {
         self.processes.remove(&host_pid)
     }
 
     /// Check if pod has any active processes
-    pub fn has_processes(&self) -> bool {
-        !self.processes.is_empty()
+    pub fn has_processes(&self, host_pid: u32) -> bool {
+        self.processes.contains(&host_pid)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.processes.is_empty()
     }
 
     /// Get all host PIDs in this pod
     pub fn get_host_pids(&self) -> Vec<u32> {
-        self.processes.keys().copied().collect()
-    }
-
-    /// Get process state by host PID
-    pub fn get_process(&self, host_pid: u32) -> Option<&ProcessState> {
-        self.processes.get(&host_pid)
+        self.processes.iter().copied().collect()
     }
 
     /// Check if pod uses a specific device
@@ -135,30 +123,6 @@ impl PodState {
             Vec::new()
         }
     }
-
-    /// Get processes grouped by container
-    pub fn get_processes_by_container(&self) -> HashMap<String, Vec<&ProcessState>> {
-        let mut container_processes: HashMap<String, Vec<&ProcessState>> = HashMap::new();
-
-        for process in self.processes.values() {
-            container_processes
-                .entry(process.container_name.clone())
-                .or_default()
-                .push(process);
-        }
-
-        container_processes
-    }
-
-    /// Get all container names in this pod
-    pub fn get_container_names(&self) -> Vec<String> {
-        self.processes
-            .values()
-            .map(|p| p.container_name.clone())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect()
-    }
 }
 
 impl std::fmt::Debug for PodState {
@@ -172,19 +136,6 @@ impl std::fmt::Debug for PodState {
             .finish()
     }
 }
-
-impl ProcessState {
-    /// Create a new process state
-    pub fn new(host_pid: u32, container_pid: u32, container_name: String) -> Self {
-        Self {
-            host_pid,
-            container_pid,
-            container_name,
-        }
-    }
-}
-
-// Removed DeviceUsage impl
 
 /// Statistics about the pod management system
 #[derive(Debug, Clone)]
@@ -268,50 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn test_unified_process_state_creation() {
-        let process_state = ProcessState::new(1234, 5678, "main".to_string());
-
-        assert_eq!(process_state.host_pid, 1234);
-        assert_eq!(process_state.container_pid, 5678);
-        assert_eq!(process_state.container_name, "main");
-    }
-
-    #[test]
-    fn test_pod_state_process_management() {
-        let info = create_test_worker_info("test-pod");
-        let device_configs = vec![create_test_device_config()];
-        let mut pod_state = PodState::new(info, device_configs);
-
-        // Add process
-        let process_state = ProcessState::new(1234, 5678, "main".to_string());
-        pod_state.add_process(process_state);
-
-        assert!(pod_state.has_processes());
-        assert_eq!(pod_state.get_host_pids(), vec![1234]);
-        assert!(pod_state.get_process(1234).is_some());
-
-        // Remove process
-        let removed = pod_state.remove_process(1234);
-        assert!(removed.is_some());
-        assert!(!pod_state.has_processes());
-    }
-
-    #[test]
-    fn test_device_usage_conversion() {
-        let info = create_test_worker_info("test-pod");
-        let device_configs = vec![create_test_device_config()];
-        let mut pod_state = PodState::new(info, device_configs);
-
-        let process_state = ProcessState::new(1234, 5678, "main".to_string());
-        pod_state.add_process(process_state);
-
-        assert_eq!(pod_state.device_configs.len(), 1);
-        let host_pids = pod_state.get_host_pids();
-        assert_eq!(host_pids.len(), 1);
-        assert_eq!(host_pids[0], 1234);
-    }
-
-    #[test]
     fn test_device_filtering() {
         let info = create_test_worker_info("test-pod");
         let device_configs = vec![create_test_device_config()];
@@ -319,25 +226,5 @@ mod tests {
 
         assert!(pod_state.uses_device(0));
         assert!(!pod_state.uses_device(1));
-    }
-
-    #[test]
-    fn test_container_grouping() {
-        let info = create_test_worker_info("test-pod");
-        let device_configs = vec![create_test_device_config()];
-        let mut pod_state = PodState::new(info, device_configs);
-
-        pod_state.add_process(ProcessState::new(1234, 5678, "main".to_string()));
-        pod_state.add_process(ProcessState::new(1235, 5679, "sidecar".to_string()));
-
-        let containers = pod_state.get_processes_by_container();
-        assert_eq!(containers.len(), 2);
-        assert!(containers.contains_key("main"));
-        assert!(containers.contains_key("sidecar"));
-
-        let container_names = pod_state.get_container_names();
-        assert_eq!(container_names.len(), 2);
-        assert!(container_names.contains(&"main".to_string()));
-        assert!(container_names.contains(&"sidecar".to_string()));
     }
 }

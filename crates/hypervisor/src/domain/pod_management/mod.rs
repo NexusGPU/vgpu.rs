@@ -11,7 +11,7 @@ pub mod utilization;
 pub use coordinator::LimiterCoordinator;
 pub use manager::PodManager;
 pub use pod_state_store::{PodStateStore, StoreStats};
-pub use types::{PodManagementError, PodState, PodStatus, ProcessState, Result, SystemStats};
+pub use types::{PodManagementError, PodState, PodStatus, Result, SystemStats};
 
 /// Concrete pod manager type
 pub type PodManagerType = PodManager;

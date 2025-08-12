@@ -261,7 +261,7 @@ impl LimiterCoordinator {
         &self,
         pod_identifier: &str,
         configs: &[DeviceConfig],
-    ) -> Result<()> {
+    ) -> Result<Vec<usize>> {
         let restored_pids = match self.shared_memory_manager.get_shared_memory(pod_identifier) {
             Ok(ptr) => {
                 debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
@@ -292,24 +292,13 @@ impl LimiterCoordinator {
                 "Restored {} processes from existing shared memory",
                 restored_pids.len()
             );
-
-            for pid in restored_pids {
-                if let Err(e) = self.register_process(pod_identifier, pid as u32).await {
-                    tracing::error!(
-                        pod_identifier = %pod_identifier,
-                        pid = pid,
-                        error = %e,
-                        "Failed to register process from existing shared memory"
-                    );
-                }
-            }
         }
 
-        Ok(())
+        Ok(restored_pids)
     }
 
     /// Registers a process within a pod (Process-level operation)
-    pub async fn register_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
+    pub fn register_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
         // Add PID to shared memory
         self.shared_memory_manager
             .add_pid(pod_identifier, host_pid as usize)

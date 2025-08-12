@@ -224,7 +224,7 @@ impl GpuObserver {
             let mut all_pids = HashSet::new();
             for pod_identifier in self.pod_state_store.list_pod_identifiers() {
                 let pod_processes = self.pod_state_store.get_pod_processes(&pod_identifier);
-                all_pids.extend(pod_processes.iter().map(|p| p.host_pid));
+                all_pids.extend(pod_processes);
             }
 
             let idle_pids = all_pids.difference(&nvml_pids);
