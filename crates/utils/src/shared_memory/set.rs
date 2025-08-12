@@ -279,7 +279,7 @@ mod tests {
 
         // Fill the set
         let idx1 = set.insert(10).unwrap();
-        let _ = set.insert(10).unwrap();
+        let _ = set.insert_if_absent(10);
         let idx2 = set.insert(20).unwrap();
         let idx3 = set.insert(30).unwrap();
 
