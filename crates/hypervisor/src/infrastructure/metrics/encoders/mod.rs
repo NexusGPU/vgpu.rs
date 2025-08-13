@@ -126,7 +126,10 @@ pub trait MetricsEncoder: Send + Sync {
             "compute_percentage".to_string(),
             params.compute_percentage.into(),
         );
-        fields.insert("memory_percentage".to_string(), params.memory_percentage.into());
+        fields.insert(
+            "memory_percentage".to_string(),
+            params.memory_percentage.into(),
+        );
         fields.insert("compute_tflops".to_string(), params.compute_tflops.into());
         fields.insert("power_usage".to_string(), params.power_usage.into());
         fields.insert("nvlink_rx".to_string(), params.nvlink_rx_bandwidth.into());

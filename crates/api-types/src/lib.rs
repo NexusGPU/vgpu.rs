@@ -123,8 +123,11 @@ pub struct ProcessInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KubernetesInfo {
     pub namespace: String,
-    pub node: KubernetesNode,
+
+    pub node: Option<KubernetesNode>,
+
     pub pod: KubernetesPod,
+
     pub serviceaccount: KubernetesServiceAccount,
 }
 

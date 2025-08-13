@@ -123,7 +123,6 @@ where
 #[cfg(test)]
 mod tests {
     use api_types::KubernetesInfo;
-    use api_types::KubernetesNode;
     use api_types::KubernetesPod;
     use api_types::KubernetesServiceAccount;
     use base64::Engine as _;
@@ -157,10 +156,7 @@ mod tests {
         JwtPayload {
             kubernetes: KubernetesInfo {
                 namespace: "test-namespace".to_string(),
-                node: KubernetesNode {
-                    name: "test-node".to_string(),
-                    uid: "node-uuid-123".to_string(),
-                },
+                node: None,
                 pod: KubernetesPod {
                     name: "test-pod".to_string(),
                     uid: "pod-uuid-456".to_string(),
