@@ -280,7 +280,7 @@ impl GpuObserver {
                         memory_bytes: memory_info.used,
                         compute_percentage: utilization.gpu,
                     },
-                    memory_percentage: utilization.memory as f64 / memory_info.total as f64,
+                    memory_percentage: utilization.memory as f64 / memory_info.total as f64 * 100.0,
                     power_usage,
                 },
             );
