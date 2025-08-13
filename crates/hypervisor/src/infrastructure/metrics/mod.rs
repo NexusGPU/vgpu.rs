@@ -279,7 +279,7 @@ pub(crate) async fn run_metrics(
                                         gpu_uuid,
                                         node_name,
                                         gpu_pool,
-                                        pod_identifier,
+                                        pod_name: &pod_state.info.pod_name,
                                         namespace: &pod_state.info.namespace,
                                         workload: pod_state
                                             .info

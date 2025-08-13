@@ -32,7 +32,7 @@ pub struct WorkerMetricsParams<'a> {
     pub gpu_uuid: &'a str,
     pub node_name: &'a str,
     pub gpu_pool: &'a str,
-    pub pod_identifier: &'a str,
+    pub pod_name: &'a str,
     pub namespace: &'a str,
     pub workload: &'a str,
     pub memory_bytes: u64,
@@ -144,7 +144,7 @@ pub trait MetricsEncoder: Send + Sync {
         tags.insert("node".to_string(), params.node_name.to_string());
         tags.insert("pool".to_string(), params.gpu_pool.to_string());
         tags.insert("uuid".to_string(), params.gpu_uuid.to_string());
-        tags.insert("worker".to_string(), params.pod_identifier.to_string());
+        tags.insert("worker".to_string(), params.pod_name.to_string());
         tags.insert("namespace".to_string(), params.namespace.to_string());
         tags.insert("workload".to_string(), params.workload.to_string());
 
@@ -346,7 +346,7 @@ mod tests {
             gpu_uuid: "gpu-uuid-456",
             node_name: "node2",
             gpu_pool: "pool2",
-            pod_identifier: "worker-123",
+            pod_name: "worker-123",
             namespace: "default",
             workload: "tensorflow",
             memory_bytes: 2048000000,
@@ -411,7 +411,7 @@ mod tests {
             gpu_uuid: "gpu-uuid-abc",
             node_name: "node4",
             gpu_pool: "pool4",
-            pod_identifier: "worker-456",
+            pod_name: "worker-456",
             namespace: "kube-system",
             workload: "pytorch",
             memory_bytes: 8192000000,
