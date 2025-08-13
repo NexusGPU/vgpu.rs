@@ -165,6 +165,11 @@ pub trait MetricsEncoder: Send + Sync {
             params.memory_percentage.into(),
         );
 
+        // TODO: not implemented yet
+        fields.insert("compute_throttled_cnt".to_string(), 0.0.into());
+        fields.insert("vram_freezed_cnt".to_string(), 0.0.into());
+        fields.insert("vram_resumed_cnt".to_string(), 0.0.into());
+
         self.encode_metrics("tf_worker_usage", &tags, &fields, params.timestamp)
     }
 }
