@@ -260,7 +260,7 @@ pub(crate) async fn run_metrics(
                             memory_percentage += {
                                 let avg_memory_bytes = acc.memory_bytes as f64 / acc.count as f64;
                                 let vram_limit = pod_state.info.vram_limit.unwrap_or(0) as f64;
-                                if vram_limit > 0.0 { avg_memory_bytes / vram_limit } else { 0.0 }
+                                if vram_limit > 0.0 { avg_memory_bytes / vram_limit * 100.0 } else { 0.0 }
                             }
                         }
 
