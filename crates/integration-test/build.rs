@@ -1,6 +1,6 @@
 use std::env;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn main() {
     // get output directory
@@ -12,6 +12,23 @@ fn main() {
 
     // rerun if CUDA source file changes
     println!("cargo:rerun-if-changed={cuda_src_path}");
+
+    // Check if nvcc is available; if not, skip building the CUDA test program
+    let nvcc_available = Command::new("nvcc")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !nvcc_available {
+        println!("cargo:warning=nvcc not found; skipping CUDA test program build");
+        // Provide a sentinel so code can detect absence and skip tests gracefully
+        println!("cargo:rustc-env=CUDA_TEST_PROGRAM_PATH=__NVCC_NOT_FOUND__");
+        return;
+    }
+
     // compile CUDA code
     let nvcc_status = Command::new("nvcc")
         .arg(cuda_src_path)

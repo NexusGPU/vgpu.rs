@@ -10,6 +10,8 @@ hypervisor = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
+error-stack = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 utils = { workspace = true }
 ctor = { workspace = true }
@@ -17,3 +19,4 @@ nvml-wrapper = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 tokio-util = "0.7"
+serial_test = "3.0"

@@ -533,7 +533,6 @@ mod tests {
                 "tf_shm_kube-system_coredns-123",
                 Some(("kube-system", "coredns-123")),
             ),
-            
             (
                 "tf_shm_ns_very_long_pod_name_with_many_underscores_and_numbers_123",
                 Some((
