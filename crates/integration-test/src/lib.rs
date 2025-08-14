@@ -341,6 +341,11 @@ mod limiter_tests {
 
     /// Checks if GPU testing prerequisites are met.
     fn check_test_prerequisites() -> Result<(), Report<IntegrationTestError>> {
+        // Check if CUDA is available on the system
+        if Command::new("nvidia-smi").output().is_err() {
+            return Err(Report::new(IntegrationTestError::CudaProgramNotFound)
+                .attach_printable("nvidia-smi not found"));
+        }
         // Check if CUDA test program exists
         let cuda_program_path = env!("CUDA_TEST_PROGRAM_PATH");
         if !std::path::Path::new(cuda_program_path).exists() {
