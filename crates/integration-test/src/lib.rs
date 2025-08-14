@@ -341,14 +341,6 @@ mod limiter_tests {
 
     /// Checks if GPU testing prerequisites are met.
     fn check_test_prerequisites() -> Result<(), Report<IntegrationTestError>> {
-        // Check if any GPU is available
-        let nvml = global_nvml();
-        if nvml.device_count().unwrap_or(0) == 0 {
-            eprintln!("No GPU devices available, skipping GPU tests");
-            return Err(Report::new(IntegrationTestError::GpuNotFound { index: 0 })
-                .attach_printable("No GPU devices available for testing"));
-        }
-
         // Check if CUDA test program exists
         let cuda_program_path = env!("CUDA_TEST_PROGRAM_PATH");
         if !std::path::Path::new(cuda_program_path).exists() {
