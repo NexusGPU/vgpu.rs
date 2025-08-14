@@ -218,6 +218,7 @@ impl Limiter {
         &self,
         raw_device_index: usize,
     ) -> Result<(u64, u64), Error> {
+        tracing::debug!("get_pod_memory_usage: {}", raw_device_index);
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
 
@@ -231,6 +232,7 @@ impl Limiter {
                 device.device_info.get_mem_limit(),
             )
         }) {
+            tracing::debug!("get_pod_memory_usage: {} -> ({}, {})", raw_device_index, used, limit);
             Ok((used, limit))
         } else {
             Err(Error::DeviceNotConfigured(raw_device_index))
