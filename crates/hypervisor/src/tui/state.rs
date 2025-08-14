@@ -16,6 +16,12 @@ pub struct WorkerMonitor {
     app_state: AppState,
 }
 
+impl Default for WorkerMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WorkerMonitor {
     pub fn new() -> Self {
         Self {
@@ -236,6 +242,12 @@ pub struct MockWorkerMonitor {
     mock_counter: u64,
 }
 
+impl Default for MockWorkerMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockWorkerMonitor {
     pub fn new() -> Self {
         Self {
@@ -383,7 +395,7 @@ impl MockWorkerMonitor {
         }
     }
 
-    pub fn app_state(&self) -> &AppState {
+    pub(crate) fn app_state(&self) -> &AppState {
         &self.app_state
     }
 

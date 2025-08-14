@@ -67,8 +67,8 @@ fn are_hooks_enabled() -> (bool, bool) {
     (enable_nvml_hooks, enable_cuda_hooks)
 }
 
-fn is_mock_mode() -> bool {
-    std::env::var("CUDA_LIMITER_MOCK_MODE").is_ok()
+pub(crate) fn is_mock_mode() -> bool {
+    std::env::var("TF_SHM_IDENTIFIER").is_ok()
 }
 
 fn init_ngpu_library() {
@@ -109,10 +109,18 @@ fn init_ngpu_library() {
             };
             config
         } else {
-            let dev = nvml.device_by_index(1).unwrap();
-            let uuid = dev.uuid().unwrap().to_string();
+            // In mock/test mode, derive UUIDs from either CUDA_VISIBLE_DEVICES or list all devices
+            let mut uuids = Vec::new();
+            let total = nvml.device_count().unwrap_or_default();
+            for i in 0..total {
+                if let Ok(dev) = nvml.device_by_index(i) {
+                    if let Ok(uuid) = dev.uuid() {
+                        uuids.push(uuid.to_string());
+                    }
+                }
+            }
             config::DeviceConfigResult {
-                gpu_uuids: vec![uuid],
+                gpu_uuids: uuids,
                 host_pid: 0,
             }
         };

@@ -264,6 +264,84 @@ impl PodStateStore {
             .map(|pod| pod.processes.iter().copied().collect())
             .unwrap_or_default()
     }
+
+    /// Clear all data (useful for testing)
+    #[cfg(test)]
+    pub fn clear(&self) {
+        self.pods.clear();
+        self.pid_to_pod.clear();
+    }
+}
+
+#[cfg(test)]
+impl PodStateStore {
+    /// Simple pod registration for testing (without WorkerInfo complexity)
+    pub fn register_test_pod(
+        &self,
+        pod_identifier: &str,
+        device_configs: Vec<DeviceConfig>,
+        host_pids: Vec<u32>,
+    ) -> Result<()> {
+        use std::collections::BTreeMap;
+
+        // Create minimal WorkerInfo for testing
+        let test_info = WorkerInfo {
+            namespace: "test".to_string(),
+            pod_name: pod_identifier.to_string(),
+            containers: Some(vec!["test-container".to_string()]),
+            gpu_uuids: device_configs
+                .iter()
+                .map(|cfg| cfg.device_uuid.clone())
+                .collect::<Vec<_>>()
+                .into(),
+            qos_level: Some(api_types::QosLevel::Medium),
+            tflops_request: Some(1.0),
+            tflops_limit: Some(2.0),
+            vram_request: Some(1024),
+            vram_limit: Some(2048),
+            node_name: Some("test-node".to_string()),
+            host_pid: host_pids.first().copied().unwrap_or(1234),
+            labels: BTreeMap::new(),
+            workload_name: Some("test-workload".to_string()),
+        };
+
+        // Register pod
+        self.register_pod(pod_identifier, test_info, device_configs)?;
+
+        // Register processes
+        for pid in host_pids {
+            self.register_process(pod_identifier, pid)?;
+        }
+
+        Ok(())
+    }
+}
+
+// Implement PodStateRepository trait directly
+impl super::traits::PodStateRepository for PodStateStore {
+    fn get_pods_using_device(&self, device_idx: u32) -> Vec<String> {
+        self.get_pods_using_device(device_idx)
+    }
+
+    fn get_host_pids_for_pod(&self, pod_identifier: &str) -> Option<Vec<u32>> {
+        self.get_host_pids_for_pod(pod_identifier)
+    }
+
+    fn get_device_config_for_pod(
+        &self,
+        pod_identifier: &str,
+        device_idx: u32,
+    ) -> Option<utils::shared_memory::DeviceConfig> {
+        self.get_device_config_for_pod(pod_identifier, device_idx)
+    }
+
+    fn contains_pod(&self, pod_identifier: &str) -> bool {
+        self.contains_pod(pod_identifier)
+    }
+
+    fn list_pod_identifiers(&self) -> Vec<String> {
+        self.list_pod_identifiers()
+    }
 }
 
 // Re-export system stats for backward compatibility
@@ -336,6 +414,29 @@ mod tests {
 
         assert!(!store.contains_pod("pod-1"));
         assert_eq!(store.get_pod_by_pid(1234), None);
+    }
+
+    #[test]
+    fn test_simplified_registration_for_testing() {
+        let store = PodStateStore::new();
+        let device_configs = vec![create_test_device_config()];
+
+        // Test simplified registration
+        store
+            .register_test_pod("test-pod", device_configs, vec![1234, 5678])
+            .unwrap();
+
+        assert!(store.contains_pod("test-pod"));
+        assert_eq!(
+            store.get_host_pids_for_pod("test-pod"),
+            Some(vec![1234, 5678])
+        );
+        assert_eq!(store.get_pods_using_device(0), vec!["test-pod"]);
+
+        // Test clear functionality
+        store.clear();
+        assert!(!store.contains_pod("test-pod"));
+        assert_eq!(store.get_host_pids_for_pod("test-pod"), None);
     }
 
     #[test]

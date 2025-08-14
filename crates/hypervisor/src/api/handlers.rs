@@ -16,7 +16,9 @@ use super::PodInfoResponse;
 use super::ProcessInfo;
 use super::ProcessInitResponse;
 
+use crate::pod_management::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
 use crate::pod_management::PodManager;
+use utils::shared_memory::traits::SharedMemoryAccess;
 
 /// Query parameters for process initialization
 #[derive(Debug, Deserialize)]
@@ -27,10 +29,16 @@ pub struct ProcessInitQuery {
 
 /// Get pod-level GPU and limiter information using JWT token
 #[handler]
-pub async fn get_pod_info(
+pub async fn get_pod_info<M, P, D, T>(
     req: &Request,
-    pod_manager: Data<&Arc<PodManager>>,
-) -> poem::Result<poem::web::Json<PodInfoResponse>> {
+    pod_manager: Data<&Arc<PodManager<M, P, D, T>>>,
+) -> poem::Result<poem::web::Json<PodInfoResponse>>
+where
+    M: SharedMemoryAccess + 'static,
+    P: PodStateRepository + 'static,
+    D: DeviceSnapshotProvider + 'static,
+    T: TimeSource + 'static,
+{
     // Extract JWT payload from request extensions
     let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
         poem::Error::from_string(
@@ -90,11 +98,17 @@ pub async fn get_pod_info(
 
 /// Initialize a CUDA process in a container
 #[handler]
-pub async fn process_init(
+pub async fn process_init<M, P, D, T>(
     req: &Request,
     query: Query<ProcessInitQuery>,
-    pod_manager: Data<&Arc<PodManager>>,
-) -> poem::Result<poem::web::Json<ProcessInitResponse>> {
+    pod_manager: Data<&Arc<PodManager<M, P, D, T>>>,
+) -> poem::Result<poem::web::Json<ProcessInitResponse>>
+where
+    M: SharedMemoryAccess + 'static,
+    P: PodStateRepository + 'static,
+    D: DeviceSnapshotProvider + 'static,
+    T: TimeSource + 'static,
+{
     // Extract JWT payload from request extensions
     let jwt_payload = req.extensions().get::<JwtPayload>().ok_or_else(|| {
         poem::Error::from_string(

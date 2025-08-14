@@ -75,12 +75,12 @@ struct AccumulatedWorkerMetrics {
 
 /// Run metrics collection asynchronously
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_metrics(
+pub(crate) async fn run_metrics<M, P, D, T>(
     gpu_observer: Arc<GpuObserver>,
     metrics_batch_size: usize,
     node_name: &str,
     gpu_pool: Option<&str>,
-    pod_mgr: Arc<PodManager>,
+    pod_mgr: Arc<PodManager<M, P, D, T>>,
     metrics_format: &str,
     metrics_extra_labels: Option<&str>,
     cancellation_token: CancellationToken,

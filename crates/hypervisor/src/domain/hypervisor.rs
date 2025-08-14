@@ -10,7 +10,6 @@ use crate::scheduler::SchedulingDecision;
 use crate::scheduler::{GpuScheduler, Scheduler};
 use trap::{TrapFrame, TrapHandler, Waker};
 
-/// Concrete hypervisor type used throughout the application
 pub type HypervisorType = Hypervisor<Worker, Scheduler>;
 
 pub struct Hypervisor<Proc: GpuProcess, Sched: GpuScheduler<Proc>> {

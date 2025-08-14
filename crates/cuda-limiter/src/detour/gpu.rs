@@ -15,6 +15,7 @@ use utils::replace_symbol;
 use crate::command_handler;
 use crate::config;
 use crate::culib;
+use crate::is_mock_mode;
 use crate::limiter::Error;
 use crate::with_device;
 use crate::Limiter;
@@ -299,6 +300,10 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
     // Track worker initialization state - allow retry if init_worker fails
     static WORKER_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static WORKER_INIT_MUTEX: Mutex<()> = Mutex::new(());
+
+    if is_mock_mode() {
+        WORKER_INITIALIZED.store(true, Ordering::Release);
+    }
 
     // Check if already initialized successfully
     if !WORKER_INITIALIZED.load(Ordering::Acquire) {

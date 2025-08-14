@@ -105,7 +105,9 @@ impl PodState {
 
     /// Get all host PIDs in this pod
     pub fn get_host_pids(&self) -> Vec<u32> {
-        self.processes.iter().copied().collect()
+        let mut pids: Vec<u32> = self.processes.iter().copied().collect();
+        pids.sort_unstable();
+        pids
     }
 
     /// Check if pod uses a specific device

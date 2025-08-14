@@ -1906,6 +1906,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration_test"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "api-types",
+ "ctor",
+ "hypervisor",
+ "nvml-wrapper",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "trap",
+ "utils",
+]
+
+[[package]]
 name = "io-uring"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

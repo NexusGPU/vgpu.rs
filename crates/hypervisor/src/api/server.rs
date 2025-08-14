@@ -27,21 +27,29 @@ use super::JwtAuthConfig;
 use crate::api::handlers::get_pod_info;
 use crate::api::handlers::process_init;
 use crate::limiter_comm::CommandDispatcher;
+use crate::pod_management::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
 use crate::pod_management::PodManager;
+use utils::shared_memory::traits::SharedMemoryAccess;
 
 /// HTTP API server for querying pod resource information
-pub struct ApiServer {
-    pod_manager: Arc<PodManager>,
+pub struct ApiServer<M, P, D, T> {
+    pod_manager: Arc<PodManager<M, P, D, T>>,
     listen_addr: String,
     jwt_config: JwtAuthConfig,
     trap_handler: Arc<dyn TrapHandler + Send + Sync + 'static>,
     command_dispatcher: Arc<CommandDispatcher>,
 }
 
-impl ApiServer {
+impl<M, P, D, T> ApiServer<M, P, D, T>
+where
+    M: SharedMemoryAccess + 'static,
+    P: PodStateRepository + 'static,
+    D: DeviceSnapshotProvider + 'static,
+    T: TimeSource + 'static,
+{
     /// Create a new API server
     pub fn new(
-        pod_manager: Arc<PodManager>,
+        pod_manager: Arc<PodManager<M, P, D, T>>,
         listen_addr: String,
         jwt_config: JwtAuthConfig,
         trap_handler: Arc<dyn TrapHandler + Send + Sync + 'static>,
@@ -72,11 +80,13 @@ impl ApiServer {
             // Protected routes with JWT middleware
             .at(
                 "/api/v1/pod",
-                get(get_pod_info).with(JwtAuthMiddleware::new(self.jwt_config.clone())),
+                get(get_pod_info::<M, P, D, T>::default())
+                    .with(JwtAuthMiddleware::new(self.jwt_config.clone())),
             )
             .at(
                 "/api/v1/process",
-                post(process_init).with(JwtAuthMiddleware::new(self.jwt_config.clone())),
+                post(process_init::<M, P, D, T>::default())
+                    .with(JwtAuthMiddleware::new(self.jwt_config.clone())),
             )
             // Unprotected routes without JWT middleware
             .nest("/api/v1/trap", trap_routes)

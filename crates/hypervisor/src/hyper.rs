@@ -1,32 +1,11 @@
-mod api;
-mod app;
-mod config;
-mod domain;
-mod infrastructure;
-mod tui;
-
-// Re-export main modules for backward compatibility
-pub use domain::hypervisor;
-pub use domain::pod_management;
-pub use domain::process;
-pub use domain::scheduler;
-pub use infrastructure::gpu_device_state_watcher;
-pub use infrastructure::gpu_init;
-pub use infrastructure::gpu_observer;
-pub use infrastructure::host_pid_probe;
-pub use infrastructure::k8s;
-pub use infrastructure::kube_client;
-pub use infrastructure::limiter_comm;
-pub use infrastructure::logging;
-pub use infrastructure::metrics;
-
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::time::Duration;
 use utils::version;
 
-use crate::app::ApplicationBuilder;
-use crate::config::{Cli, Commands};
+use hypervisor::app::ApplicationBuilder;
+use hypervisor::config::{Cli, Commands};
+use hypervisor::{logging, tui};
 
 /// Sets up global panic hooks.
 fn setup_panic() {
@@ -54,7 +33,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run_daemon(daemon_args: crate::config::DaemonArgs) -> Result<()> {
+async fn run_daemon(daemon_args: hypervisor::config::DaemonArgs) -> Result<()> {
     let _guard = logging::init(daemon_args.gpu_metrics_file.clone());
 
     tracing::info!("Starting hypervisor daemon {}", &**version::VERSION);
@@ -67,7 +46,7 @@ async fn run_daemon(daemon_args: crate::config::DaemonArgs) -> Result<()> {
     Ok(())
 }
 
-async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
+async fn run_show_shm(show_shm_args: hypervisor::config::ShowShmArgs) -> Result<()> {
     use utils::shared_memory::handle::SharedMemoryHandle;
     utils::logging::init();
 
@@ -153,7 +132,7 @@ async fn run_show_shm(show_shm_args: crate::config::ShowShmArgs) -> Result<()> {
     Ok(())
 }
 
-async fn run_mount_shm(mount_shm_args: crate::config::MountShmArgs) -> Result<()> {
+async fn run_mount_shm(mount_shm_args: hypervisor::config::MountShmArgs) -> Result<()> {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
@@ -304,7 +283,7 @@ fn cleanup_all_shared_memory_files(prefix_pattern: &str) -> Result<Vec<String>> 
     Ok(cleaned_files)
 }
 
-async fn run_show_tui_workers(args: crate::config::ShowTuiWorkersArgs) -> Result<()> {
+async fn run_show_tui_workers(args: hypervisor::config::ShowTuiWorkersArgs) -> Result<()> {
     utils::logging::init_with_log_path(args.log_path);
 
     tracing::info!("Starting TUI worker monitor with pattern: {}", args.glob);
