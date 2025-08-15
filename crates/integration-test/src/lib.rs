@@ -393,9 +393,9 @@ impl TestCoordinatorManager {
         ) = calculate_device_limits_from_gpu_info(
             nvml,
             self.gpu_index as u32,
-            None,                 // tflops_limit - custom up_limit
-            Some(TEST_MEMORY_MB), // vram_limit
-            None,                 // tflops_capacity - not needed for tests
+            None,                     // tflops_limit - custom up_limit
+            Some(TEST_MEMORY_MB * 2), // vram_limit
+            None,                     // tflops_capacity - not needed for tests
         )
         .map_err(|e| {
             Report::new(IntegrationTestError::GpuUuidFailed)
@@ -406,7 +406,7 @@ impl TestCoordinatorManager {
             device_idx: self.gpu_index as u32,
             device_uuid,
             up_limit, // custom up_limit
-            mem_limit: TEST_MEMORY_MB,
+            mem_limit: TEST_MEMORY_MB * 2,
             total_cuda_cores: (total_cuda_cores as f64 * (up_limit as f64 / 100.0)).round() as u32,
             sm_count,
             max_thread_per_sm,

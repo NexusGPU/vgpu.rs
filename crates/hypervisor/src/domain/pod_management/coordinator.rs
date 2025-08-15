@@ -270,22 +270,6 @@ where
         let pod_utilization = device_snapshot.get_pod_utilization(host_pids);
         let pod_memory = device_snapshot.get_pod_memory(host_pids);
 
-        if pod_memory == 0 {
-            for (pid, memory) in device_snapshot.process_memories.iter() {
-                tracing::info!(
-                    "Pod {} has 0 memory, pid:{} memory:{}",
-                    pod_identifier,
-                    pid,
-                    memory
-                );
-            }
-            tracing::info!(
-                "Pod {} has 0 memory, host_pids: {:?}",
-                pod_identifier,
-                host_pids
-            );
-        }
-
         let new_share = calculate_delta(
             device_config,
             pod_utilization.total_utilization,
@@ -312,7 +296,8 @@ where
         let restored_pids = match self.shared_memory.get_shared_memory(pod_identifier) {
             Ok(ptr) => {
                 debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
-                let restored_pids = unsafe { &*ptr }.get_all_pids();
+                let state = unsafe { &*ptr };
+                let restored_pids = state.get_all_pids();
 
                 if !restored_pids.is_empty() {
                     debug!(
@@ -322,6 +307,15 @@ where
                         restored_pids.len()
                     );
                 }
+                // update limit info
+                for config in configs {
+                    state.with_device(config.device_idx as usize, |device| {
+                        device.device_info.set_total_cores(config.total_cuda_cores);
+                        device.device_info.set_up_limit(config.up_limit);
+                        device.device_info.set_mem_limit(config.mem_limit);
+                    });
+                }
+
                 restored_pids
             }
             Err(e) => {
