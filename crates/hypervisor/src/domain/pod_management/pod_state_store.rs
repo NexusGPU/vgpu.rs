@@ -199,13 +199,14 @@ impl PodStateStore {
         device_idx: u32,
     ) -> Option<DeviceConfigRef<'_>> {
         let guard = self.pods.get(pod_identifier)?;
-        
+
         // Check if device config exists before creating the wrapper
-        if guard.device_configs.iter().any(|cfg| cfg.device_idx == device_idx) {
-            Some(DeviceConfigRef {
-                guard,
-                device_idx,
-            })
+        if guard
+            .device_configs
+            .iter()
+            .any(|cfg| cfg.device_idx == device_idx)
+        {
+            Some(DeviceConfigRef { guard, device_idx })
         } else {
             None
         }
