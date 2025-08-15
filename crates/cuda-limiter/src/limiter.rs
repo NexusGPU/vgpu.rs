@@ -105,8 +105,11 @@ impl Limiter {
     /// Get or initialize the shared memory handle (lazy initialization)
     fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
         self.shared_memory_handle.get_or_try_init(|| {
-            if crate::is_mock_mode() {
-                Ok(SharedMemoryHandle::mock(self.gpu_idx_uuids.clone()))
+            if let Some(shm_name) = crate::mock_shm_name() {
+                Ok(SharedMemoryHandle::mock(
+                    shm_name,
+                    self.gpu_idx_uuids.clone(),
+                ))
             } else {
                 let pod_identifier = get_pod_identifier()?;
                 SharedMemoryHandle::open(&pod_identifier).map_err(Error::SharedMemory)

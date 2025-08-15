@@ -55,7 +55,7 @@ where
 }
 
 /// initiate the global tracing subscriber
-pub(crate) fn init<P: AsRef<Path>>(
+pub fn init<P: AsRef<Path>>(
     gpu_metrics_file: Option<P>,
 ) -> tracing_appender::non_blocking::WorkerGuard {
     let log_path = env::var(LOG_PATH_ENV_VAR).ok();

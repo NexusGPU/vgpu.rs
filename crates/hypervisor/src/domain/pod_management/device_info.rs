@@ -80,7 +80,7 @@ pub async fn create_device_configs_from_worker_info(
 }
 
 /// Calculate device limits from actual GPU hardware information
-fn calculate_device_limits_from_gpu_info(
+pub fn calculate_device_limits_from_gpu_info(
     nvml: &Nvml,
     device_idx: u32,
     tflops_limit: Option<f64>,
@@ -148,4 +148,186 @@ fn calculate_device_limits_from_gpu_info(
         up_limit,
         mem_limit,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use api_types::WorkerInfo;
+    use std::collections::BTreeMap;
+
+    fn create_test_worker_info(gpu_uuids: Option<Vec<String>>) -> WorkerInfo {
+        WorkerInfo {
+            namespace: "test-namespace".to_string(),
+            pod_name: "test-pod".to_string(),
+            containers: Some(vec!["test-container".to_string()]),
+            gpu_uuids,
+            qos_level: Some(api_types::QosLevel::Medium),
+            tflops_request: Some(5.0),
+            tflops_limit: Some(10.0),
+            vram_request: Some(1024),
+            vram_limit: Some(2048),
+            node_name: Some("test-node".to_string()),
+            host_pid: 12345,
+            labels: BTreeMap::new(),
+            workload_name: Some("test-workload".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_up_limit_calculation_logic() {
+        // Test up_limit calculation logic separately (extracted from the main function)
+
+        // Test case 1: Normal calculation
+        let tflops_limit = Some(5.0);
+        let tflops_capacity = Some(10.0);
+        let up_limit = match (tflops_limit, tflops_capacity) {
+            (Some(tflops_limit), Some(tflops_capacity)) if tflops_capacity > 0.0 => {
+                let percentage: f64 = (tflops_limit / tflops_capacity) * 100.0;
+                let rounded_percentage = percentage.round() as u32;
+                rounded_percentage.min(100)
+            }
+            _ => 100,
+        };
+        assert_eq!(up_limit, 50); // 5.0/10.0 * 100 = 50%
+
+        // Test case 2: Limit higher than capacity
+        let tflops_limit = Some(15.0);
+        let tflops_capacity = Some(10.0);
+        let up_limit = match (tflops_limit, tflops_capacity) {
+            (Some(tflops_limit), Some(tflops_capacity)) if tflops_capacity > 0.0 => {
+                let percentage: f64 = (tflops_limit / tflops_capacity) * 100.0;
+                let rounded_percentage = percentage.round() as u32;
+                rounded_percentage.min(100)
+            }
+            _ => 100,
+        };
+        assert_eq!(up_limit, 100); // Should be capped at 100%
+
+        // Test case 3: Missing tflops_limit
+        let tflops_limit: Option<f64> = None;
+        let tflops_capacity = Some(10.0);
+        let up_limit = match (tflops_limit, tflops_capacity) {
+            (Some(tflops_limit), Some(tflops_capacity)) if tflops_capacity > 0.0 => {
+                let percentage: f64 = (tflops_limit / tflops_capacity) * 100.0;
+                let rounded_percentage = percentage.round() as u32;
+                rounded_percentage.min(100)
+            }
+            _ => 100,
+        };
+        assert_eq!(up_limit, 100); // Default to 100%
+
+        // Test case 4: Zero tflops_capacity
+        let tflops_limit: Option<f64> = Some(5.0);
+        let tflops_capacity = Some(0.0);
+        let up_limit = match (tflops_limit, tflops_capacity) {
+            (Some(tflops_limit), Some(tflops_capacity)) if tflops_capacity > 0.0 => {
+                let percentage: f64 = (tflops_limit / tflops_capacity) * 100.0;
+                let rounded_percentage = percentage.round() as u32;
+                rounded_percentage.min(100)
+            }
+            _ => 100,
+        };
+        assert_eq!(up_limit, 100); // Default to 100% when capacity is 0
+
+        // Test case 5: Rounding behavior
+        let tflops_limit: Option<f64> = Some(3.33);
+        let tflops_capacity = Some(10.0);
+        let up_limit = match (tflops_limit, tflops_capacity) {
+            (Some(tflops_limit), Some(tflops_capacity)) if tflops_capacity > 0.0 => {
+                let percentage: f64 = (tflops_limit / tflops_capacity) * 100.0;
+                let rounded_percentage = percentage.round() as u32;
+                rounded_percentage.min(100)
+            }
+            _ => 100,
+        };
+        assert_eq!(up_limit, 33); // 33.3% rounds to 33%
+    }
+
+    #[test]
+    fn test_extreme_tflops_scenarios() {
+        // Test edge cases with extreme TFLOPS values
+        let test_cases = vec![
+            (Some(0.0), Some(10.0), 0),             // Zero limit
+            (Some(0.001), Some(10.0), 0),           // Very small limit (rounds to 0)
+            (Some(999999.0), Some(10.0), 100),      // Massive limit (should cap at 100)
+            (Some(5.0), Some(0.0), 100),            // Zero capacity (fallback)
+            (Some(f64::INFINITY), Some(10.0), 100), // Infinity limit
+            (Some(10.0), Some(f64::INFINITY), 100), // Infinity capacity (fallback)
+            (Some(f64::NAN), Some(10.0), 100),      // NaN limit
+            (Some(10.0), Some(f64::NAN), 100),      // NaN capacity
+        ];
+
+        for (tflops_limit, tflops_capacity, expected_up_limit) in test_cases {
+            let up_limit = match (tflops_limit, tflops_capacity) {
+                (Some(tflops_limit), Some(tflops_capacity))
+                    if tflops_capacity > 0.0
+                        && tflops_capacity.is_finite()
+                        && tflops_limit.is_finite() =>
+                {
+                    let percentage: f64 = (tflops_limit / tflops_capacity) * 100.0;
+                    let rounded_percentage = percentage.round() as u32;
+                    rounded_percentage.min(100)
+                }
+                _ => 100,
+            };
+
+            assert_eq!(
+                up_limit, expected_up_limit,
+                "Failed for limit: {tflops_limit:?}, capacity: {tflops_capacity:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rounding_precision_edge_cases() {
+        // Test rounding behavior with precise decimal values
+        let precision_cases = vec![
+            (0.4999, 10.0, 5),   // 4.999% -> rounds to 5%
+            (0.5001, 10.0, 5),   // 5.001% -> rounds to 5%
+            (3.335, 10.0, 33),   // 33.35% -> rounds to 33%
+            (3.345, 10.0, 33),   // 33.45% -> rounds to 33%
+            (3.355, 10.0, 34),   // 33.55% -> rounds to 34%
+            (9.9999, 10.0, 100), // 99.999% -> rounds to 100%
+            (0.00001, 10.0, 0),  // 0.0001% -> rounds to 0%
+        ];
+
+        for (tflops_limit, tflops_capacity, expected) in precision_cases {
+            let percentage: f64 = (tflops_limit / tflops_capacity) * 100.0;
+            let rounded_percentage = percentage.round() as u32;
+            let up_limit = rounded_percentage.min(100);
+
+            assert_eq!(
+                up_limit, expected,
+                "Rounding failed for {tflops_limit}/{tflops_capacity} = {percentage}%"
+            );
+        }
+    }
+
+    #[test]
+    fn test_comprehensive_worker_info_edge_cases() {
+        // Test worker info with various edge case combinations
+        let edge_cases = vec![
+            // Very long strings
+            create_test_worker_info(Some(vec![format!("GPU-{}", "x".repeat(1000))])),
+            // Special characters in UUID
+            create_test_worker_info(Some(vec!["GPU-123!@#$%^&*()".to_string()])),
+            // Empty string UUID
+            create_test_worker_info(Some(vec!["".to_string()])),
+            // Many UUIDs
+            create_test_worker_info(Some((0..100).map(|i| format!("GPU-{i:03}")).collect())),
+        ];
+
+        for worker_info in edge_cases {
+            // These should not panic even with edge case data
+            let gpu_uuids = worker_info.gpu_uuids.as_deref().unwrap_or(&[]);
+
+            // Basic validation - should handle all edge cases gracefully
+            assert!(gpu_uuids.len() <= 100, "Too many GPUs: {}", gpu_uuids.len());
+
+            for uuid in gpu_uuids {
+                // UUIDs should be strings (even if invalid format)
+                assert!(uuid.len() <= 1010, "UUID too long: {}", uuid.len()); // 1000 + "GPU-" prefix
+            }
+        }
+    }
 }

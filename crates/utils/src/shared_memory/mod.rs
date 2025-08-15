@@ -14,6 +14,7 @@ pub mod handle;
 pub mod manager;
 pub mod mutex;
 pub mod set;
+pub mod traits;
 
 const MAX_PROCESSES: usize = 2048;
 /// Maximum number of devices that can be stored in shared memory

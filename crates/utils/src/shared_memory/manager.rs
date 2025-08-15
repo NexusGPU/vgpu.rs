@@ -247,3 +247,58 @@ impl ThreadSafeSharedMemoryManager {
         memories.contains_key(identifier)
     }
 }
+
+// Implement SharedMemoryAccess trait directly
+impl super::traits::SharedMemoryAccess for ThreadSafeSharedMemoryManager {
+    type Error = anyhow::Error;
+
+    fn find_shared_memory_files(&self, glob: &str) -> Result<Vec<std::path::PathBuf>, Self::Error> {
+        self.find_shared_memory_files(glob)
+    }
+
+    fn extract_identifier_from_path(&self, path: &std::path::Path) -> Result<String, Self::Error> {
+        self.extract_identifier_from_path(path)
+    }
+
+    fn create_shared_memory(
+        &self,
+        pod_identifier: &str,
+        cfgs: &[super::DeviceConfig],
+    ) -> Result<(), Self::Error> {
+        self.create_shared_memory(pod_identifier, cfgs)
+    }
+
+    fn get_shared_memory(
+        &self,
+        pod_identifier: &str,
+    ) -> Result<*const super::SharedDeviceState, Self::Error> {
+        self.get_shared_memory(pod_identifier)
+            .map(|ptr| ptr as *const _)
+    }
+
+    fn add_pid(&self, pod_identifier: &str, host_pid: usize) -> Result<(), Self::Error> {
+        self.add_pid(pod_identifier, host_pid)
+    }
+
+    fn remove_pid(&self, pod_identifier: &str, host_pid: usize) -> Result<(), Self::Error> {
+        self.remove_pid(pod_identifier, host_pid)
+    }
+
+    fn cleanup_orphaned_files<F>(
+        &self,
+        glob: &str,
+        should_remove: F,
+    ) -> Result<Vec<String>, Self::Error>
+    where
+        F: Fn(&str) -> bool,
+    {
+        self.cleanup_orphaned_files(glob, should_remove)
+    }
+
+    fn cleanup_unused<F>(&self, should_keep: F) -> Result<Vec<String>, Self::Error>
+    where
+        F: Fn(&str) -> bool,
+    {
+        self.cleanup_unused(should_keep)
+    }
+}

@@ -2,19 +2,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
 
 use crate::app::{Application, ApplicationServices};
 use crate::config::DaemonArgs;
-use crate::domain::{HypervisorType, PodManagerType};
+use crate::domain::hypervisor::HypervisorType;
 use crate::gpu_device_state_watcher::GpuDeviceStateWatcher;
 use crate::gpu_init::initialize_gpu_system;
 use crate::gpu_init::GpuSystem;
 use crate::gpu_observer::GpuObserver;
 use crate::host_pid_probe::HostPidProbe;
-use crate::hypervisor::Hypervisor;
 use crate::k8s::PodInfoCache;
 use crate::limiter_comm::CommandDispatcher;
-use crate::pod_management::{LimiterCoordinator, PodManager, PodStateStore};
+use crate::pod_management::sampler::{NvmlDeviceSampler, SystemClock};
+use crate::pod_management::{
+    coordinator::LimiterCoordinator, manager::PodManager, pod_state_store::PodStateStore,
+};
 use crate::scheduler::weighted::WeightedScheduler;
 
 /// Application builder
@@ -62,7 +65,7 @@ impl ApplicationBuilder {
         let scheduler = WeightedScheduler::new();
 
         // Create hypervisor, set 1 second scheduling interval
-        let hypervisor = Arc::new(Hypervisor::new(scheduler, Duration::from_secs(1)));
+        let hypervisor = Arc::new(HypervisorType::new(scheduler, Duration::from_secs(1)));
 
         // Create pod state store
         let pod_state_store = Arc::new(PodStateStore::new());
@@ -77,11 +80,18 @@ impl ApplicationBuilder {
         let command_dispatcher = Arc::new(CommandDispatcher::new());
 
         // Create limiter coordinator
+        let shared_memory_manager = Arc::new(ThreadSafeSharedMemoryManager::new());
+        let snapshot = Arc::new(NvmlDeviceSampler::new());
+        let time = Arc::new(SystemClock::new());
+
         let limiter_coordinator = Arc::new(LimiterCoordinator::new(
             Duration::from_millis(100),
             gpu_system.device_count,
             self.daemon_args.shared_memory_glob_pattern.clone(),
+            shared_memory_manager,
             pod_state_store.clone(),
+            snapshot,
+            time,
         ));
 
         // create a GPU device state watcher
@@ -118,7 +128,16 @@ impl ApplicationBuilder {
         &self,
         components: &CoreComponents,
         gpu_system: &GpuSystem,
-    ) -> Result<Arc<PodManagerType>> {
+    ) -> Result<
+        Arc<
+            PodManager<
+                ThreadSafeSharedMemoryManager,
+                PodStateStore,
+                NvmlDeviceSampler,
+                SystemClock,
+            >,
+        >,
+    > {
         // Create worker manager with direct component dependencies
         let pod_manager = Arc::new(PodManager::new(
             components.host_pid_probe.clone(),
@@ -141,7 +160,14 @@ struct CoreComponents {
     gpu_observer: Arc<GpuObserver>,
     host_pid_probe: Arc<HostPidProbe>,
     command_dispatcher: Arc<CommandDispatcher>,
-    limiter_coordinator: Arc<LimiterCoordinator>,
+    limiter_coordinator: Arc<
+        LimiterCoordinator<
+            ThreadSafeSharedMemoryManager,
+            PodStateStore,
+            NvmlDeviceSampler,
+            SystemClock,
+        >,
+    >,
     gpu_device_state_watcher: Arc<GpuDeviceStateWatcher>,
     pod_info_cache: Arc<PodInfoCache>,
     pod_state_store: Arc<PodStateStore>,

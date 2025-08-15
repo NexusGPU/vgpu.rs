@@ -27,7 +27,7 @@ pub struct WorkerInfo {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum AppState {
+pub enum AppState {
     Normal,
     DetailDialog(WorkerDetailedInfo),
 }

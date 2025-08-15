@@ -20,7 +20,7 @@ pub struct SharedMemoryHandle {
 impl SharedMemoryHandle {
     /// Creates a mock SharedMemoryHandle with predefined test data.
     /// This function is useful for testing without requiring actual shared memory.
-    pub fn mock(gpu_idx_uuids: Vec<(usize, String)>) -> Self {
+    pub fn mock(shm_name: String, gpu_idx_uuids: Vec<(usize, String)>) -> Self {
         // Create mock configs for testing
         let mock_configs: Vec<_> = gpu_idx_uuids
             .iter()
@@ -37,27 +37,37 @@ impl SharedMemoryHandle {
             })
             .collect();
 
-        // Create a temporary shared memory segment for the mock
-        let mock_identifier = format!("mock_shm_{}", std::process::id());
-
         // Create actual shared memory to get a valid pointer
-        let shmem = ShmemConf::new()
+        let shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(&mock_identifier)
-            .create()
-            .expect("Failed to create mock shared memory");
+            .os_id(&shm_name)
+            .open()
+        {
+            Ok(shmem) => shmem,
+            Err(e) => {
+                tracing::warn!("failed to open shared memory: {:?}, creating new one", e);
+                let shmem = ShmemConf::new()
+                    .size(std::mem::size_of::<SharedDeviceState>())
+                    .os_id(&shm_name)
+                    .create()
+                    .expect("Failed to create mock shared memory");
+
+                let ptr = shmem.as_ptr() as *mut SharedDeviceState;
+
+                // Initialize with mock data
+                unsafe {
+                    ptr.write(SharedDeviceState::new(&mock_configs));
+                }
+                shmem
+            }
+        };
 
         let ptr = shmem.as_ptr() as *mut SharedDeviceState;
-
-        // Initialize with mock data
-        unsafe {
-            ptr.write(SharedDeviceState::new(&mock_configs));
-        }
 
         Self {
             shmem: RefCell::new(shmem),
             ptr,
-            identifier: mock_identifier,
+            identifier: shm_name,
         }
     }
 

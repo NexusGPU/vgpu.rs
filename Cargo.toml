@@ -9,14 +9,13 @@ members = [
   "crates/utils",
   "crates/trap",
   "crates/http-bidir-comm",
-  "crates/bootstrap"
-]
-exclude = [
-  "crates/integration-test",
+  "crates/bootstrap",
+  "crates/integration-test"
 ]
 
 [workspace.dependencies]
 api-types = { path = "crates/api-types" }
+hypervisor = { path = "crates/hypervisor" }
 trap = { path = "crates/trap" }
 utils = { path = "crates/utils" }
 tf-macro = { path = "crates/macro" }
