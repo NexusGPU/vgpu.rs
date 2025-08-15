@@ -17,6 +17,32 @@ use super::types::{PodManagementError, PodStatus, Result, SystemStats};
 // Re-export unified types for backward compatibility
 use super::types::PodState;
 
+/// A wrapper that holds a reference to a DeviceConfig through a DashMap guard
+/// This allows returning borrowed DeviceConfig without cloning
+pub struct DeviceConfigRef<'a> {
+    guard: dashmap::mapref::one::Ref<'a, String, PodState>,
+    device_idx: u32,
+}
+
+impl<'a> DeviceConfigRef<'a> {
+    /// Get the device config reference
+    pub fn get(&self) -> &DeviceConfig {
+        self.guard
+            .device_configs
+            .iter()
+            .find(|cfg| cfg.device_idx == self.device_idx)
+            .expect("DeviceConfig should exist since we found it during construction")
+    }
+}
+
+impl<'a> std::ops::Deref for DeviceConfigRef<'a> {
+    type Target = DeviceConfig;
+
+    fn deref(&self) -> &Self::Target {
+        self.get()
+    }
+}
+
 /// Centralized pod state store providing atomic operations
 ///
 /// This store maintains all pod-related state in a thread-safe manner,
@@ -165,19 +191,25 @@ impl PodStateStore {
         self.pods.get(pod_identifier).map(|pod| pod.get_host_pids())
     }
 
-    /// Get a device config for a pod and device index
-    // TODO: avoid cloning the device config
+    /// Get a borrowed device config for a pod and device index
+    /// Returns a wrapper that holds the DashMap guard and provides access to the DeviceConfig
     pub fn get_device_config_for_pod(
         &self,
         pod_identifier: &str,
         device_idx: u32,
-    ) -> Option<DeviceConfig> {
-        self.pods.get(pod_identifier).and_then(|pod| {
-            pod.device_configs
-                .iter()
-                .find(|cfg| cfg.device_idx == device_idx)
-                .cloned()
-        })
+    ) -> Option<DeviceConfigRef<'_>> {
+        let guard = self.pods.get(pod_identifier)?;
+
+        // Check if device config exists before creating the wrapper
+        if guard
+            .device_configs
+            .iter()
+            .any(|cfg| cfg.device_idx == device_idx)
+        {
+            Some(DeviceConfigRef { guard, device_idx })
+        } else {
+            None
+        }
     }
 
     /// Set shared memory handle for a pod
@@ -331,7 +363,7 @@ impl super::traits::PodStateRepository for PodStateStore {
         &self,
         pod_identifier: &str,
         device_idx: u32,
-    ) -> Option<utils::shared_memory::DeviceConfig> {
+    ) -> Option<DeviceConfigRef<'_>> {
         self.get_device_config_for_pod(pod_identifier, device_idx)
     }
 
@@ -478,5 +510,31 @@ mod tests {
         let stats = store.stats();
         assert_eq!(stats.total_pods, 1);
         assert_eq!(stats.total_processes, 1);
+    }
+
+    #[test]
+    fn test_device_config_ref() {
+        let store = PodStateStore::new();
+        let info = create_test_worker_info("test-pod");
+        let device_configs = vec![create_test_device_config()];
+
+        store.register_pod("pod-1", info, device_configs).unwrap();
+
+        // Test getting device config via reference (no cloning)
+        if let Some(config_ref) = store.get_device_config_for_pod("pod-1", 0) {
+            assert_eq!(config_ref.device_idx, 0);
+            assert_eq!(config_ref.device_uuid, "GPU-12345");
+            assert_eq!(config_ref.up_limit, 80);
+        } else {
+            panic!("Should find device config");
+        }
+
+        // Test getting non-existent device config
+        assert!(store.get_device_config_for_pod("pod-1", 999).is_none());
+        assert!(store.get_device_config_for_pod("non-existent", 0).is_none());
+
+        // Test callback approach
+        let result = store.get_device_config_for_pod("pod-1", 0).unwrap();
+        assert_eq!(result.device_uuid, "GPU-12345");
     }
 }

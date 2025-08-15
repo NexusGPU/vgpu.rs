@@ -100,6 +100,11 @@ impl SharedDeviceInfo {
         self.total_cuda_cores.load(Ordering::Acquire)
     }
 
+    /// Sets the total number of CUDA cores.
+    pub fn set_total_cores(&self, cores: u32) {
+        self.total_cuda_cores.store(cores, Ordering::Release)
+    }
+
     /// Gets the pod memory usage.
     pub fn get_pod_memory_used(&self) -> u64 {
         self.pod_memory_used.load(Ordering::Acquire)
