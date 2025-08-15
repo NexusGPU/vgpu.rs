@@ -219,7 +219,7 @@ impl Default for MockSharedMemoryAccess {
 }
 
 impl SharedMemoryAccess for MockSharedMemoryAccess {
-    type Error = String;
+    type Error = anyhow::Error;
 
     fn find_shared_memory_files(&self, glob: &str) -> Result<Vec<PathBuf>, Self::Error> {
         self.log_operation(format!("find_shared_memory_files({glob})"));

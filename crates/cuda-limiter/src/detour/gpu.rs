@@ -15,7 +15,6 @@ use utils::replace_symbol;
 use crate::command_handler;
 use crate::config;
 use crate::culib;
-use crate::is_mock_mode;
 use crate::limiter::Error;
 use crate::with_device;
 use crate::Limiter;
@@ -301,7 +300,7 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
     static WORKER_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static WORKER_INIT_MUTEX: Mutex<()> = Mutex::new(());
 
-    if is_mock_mode() {
+    if crate::mock_shm_name().is_some() {
         WORKER_INITIALIZED.store(true, Ordering::Release);
     }
 

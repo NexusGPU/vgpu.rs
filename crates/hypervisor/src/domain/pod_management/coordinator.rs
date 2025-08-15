@@ -293,11 +293,7 @@ where
         pod_identifier: &str,
         configs: &[DeviceConfig],
     ) -> Result<Vec<usize>> {
-        let restored_pids = match self
-            .shared_memory
-            .get_shared_memory(pod_identifier)
-            .map_err(|e| anyhow::anyhow!("{}", e))
-        {
+        let restored_pids = match self.shared_memory.get_shared_memory(pod_identifier) {
             Ok(ptr) => {
                 debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
                 let restored_pids = unsafe { &*ptr }.get_all_pids();
@@ -312,8 +308,8 @@ where
                 }
                 restored_pids
             }
-            Err(_) => {
-                debug!(pod_identifier = %pod_identifier, "Creating new shared memory for pod");
+            Err(e) => {
+                debug!(pod_identifier = %pod_identifier, error = %e, "Creating new shared memory for pod");
                 self.shared_memory
                     .create_shared_memory(pod_identifier, configs)
                     .map_err(|e| anyhow::anyhow!("{}", e))?;

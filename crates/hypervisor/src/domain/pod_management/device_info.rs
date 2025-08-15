@@ -80,7 +80,7 @@ pub async fn create_device_configs_from_worker_info(
 }
 
 /// Calculate device limits from actual GPU hardware information
-fn calculate_device_limits_from_gpu_info(
+pub fn calculate_device_limits_from_gpu_info(
     nvml: &Nvml,
     device_idx: u32,
     tflops_limit: Option<f64>,

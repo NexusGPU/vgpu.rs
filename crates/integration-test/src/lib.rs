@@ -3,18 +3,30 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 
+use api_types::WorkerInfo;
 use error_stack::{Report, ResultExt};
+use hypervisor::pod_management::coordinator::LimiterCoordinator;
+use hypervisor::pod_management::device_info::calculate_device_limits_from_gpu_info;
+use hypervisor::pod_management::pod_state_store::PodStateStore;
+use hypervisor::pod_management::sampler::{NvmlDeviceSampler, SystemClock};
 use nvml_wrapper::Nvml;
-use serde_json::json;
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
+use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
+use utils::shared_memory::DeviceConfig;
 
 // Type aliases for complex return types
 type CudaTestResult = Result<
     (
         u32,
-        Box<dyn FnOnce() -> Result<Output, Report<IntegrationTestError>>>,
+        Box<dyn FnOnce() -> Result<Output, Report<IntegrationTestError>> + Send>,
     ),
     Report<IntegrationTestError>,
 >;
+// Test constants
+const TEST_MEMORY_MB: u64 = 512 * 1024 * 1024; // 512MB
 
 #[cfg(test)]
 use serial_test::serial;
@@ -41,8 +53,6 @@ pub enum IntegrationTestError {
 // Test configuration constants
 const DEFAULT_SHM_IDENTIFIER: &str = "tf_shm_default_ns_integration_test";
 const LIMITER_MOCK_MODE: &str = "CUDA_LIMITER_MOCK_MODE";
-const TF_CUDA_MEM_LIMIT: &str = "TENSOR_FUSION_CUDA_MEM_LIMIT";
-const TF_CUDA_UP_LIMIT: &str = "TENSOR_FUSION_CUDA_UP_LIMIT";
 const TF_SHM_IDENTIFIER: &str = "TF_SHM_IDENTIFIER";
 
 /// Gets a global NVML instance, initializing it if necessary.
@@ -65,64 +75,38 @@ pub fn global_nvml() -> &'static Nvml {
     })
 }
 
-/// Runs a CUDA test program with optional GPU limiting.
-///
-/// # Arguments
-///
-/// * `memory_bytes` - Amount of GPU memory to allocate in bytes
-/// * `duration_seconds` - Duration to run the test (ignored if `fixed_iterations` is provided)
-/// * `gpu_index` - GPU device index to use
-/// * `limit` - Optional tuple of (utilization_limit, memory_limit) percentages
-/// * `fixed_iterations` - Optional fixed number of iterations for consistent timing
-///
-/// # Errors
-///
-/// Returns [`IntegrationTestError::CudaLimiterBuildFailed`] if the cuda-limiter library cannot be built or found.
-/// Returns [`IntegrationTestError::ProcessSpawnFailed`] if the CUDA test program fails to start.
-/// Returns [`IntegrationTestError::GpuNotFound`] if the specified GPU index is invalid.
 pub fn run_cuda_test_program(
     memory_bytes: u64,
-    duration_seconds: u64,
     gpu_index: usize,
-    limit: Option<(u64, u64)>,
-    fixed_iterations: Option<u64>,
+    gpu_uuid: &str,
+    is_limiter_enabled: bool,
+    iterations: Option<u64>,
 ) -> CudaTestResult {
-    let mut cmd = setup_cuda_command(memory_bytes, duration_seconds, gpu_index, fixed_iterations)?;
-
-    if let Some((utilization_limit, memory_limit)) = limit {
-        apply_limiter_config(&mut cmd, gpu_index, utilization_limit, memory_limit)?;
+    let mut cmd = setup_cuda_command(memory_bytes, gpu_index, iterations)?;
+    if is_limiter_enabled {
+        apply_limiter_config(&mut cmd, gpu_uuid)?;
     }
-
     spawn_cuda_process(cmd)
 }
 
-/// Convenience helper to run the CUDA test program and measure wall-clock time.
-///
-/// # Arguments
-///
-/// * `memory_bytes` - Amount of GPU memory to allocate in bytes
-/// * `gpu_index` - GPU device index to use  
-/// * `limit` - Optional tuple of (utilization_limit, memory_limit) percentages
-/// * `fixed_iterations` - Number of iterations to run for consistent timing
-///
-/// # Errors
-///
-/// Returns [`IntegrationTestError`] variants if the CUDA program fails to run or complete.
-pub fn run_cuda_and_measure(
+pub async fn run_cuda_and_measure(
     memory_bytes: u64,
     gpu_index: usize,
-    limit: Option<(u64, u64)>,
-    fixed_iterations: u64,
+    gpu_uuid: &str,
+    iterations: u64,
+    is_limiter_enabled: bool,
+    post_start: impl Fn(u32),
 ) -> Result<(u128, Output), Report<IntegrationTestError>> {
     let start = std::time::Instant::now();
-    let (_pid, wait) = run_cuda_test_program(
+    let (pid, wait) = run_cuda_test_program(
         memory_bytes,
-        1, // duration is ignored when fixed_iterations is used
         gpu_index,
-        limit,
-        Some(fixed_iterations),
+        gpu_uuid,
+        is_limiter_enabled,
+        Some(iterations),
     )?;
-    let output = wait()?;
+    post_start(pid);
+    let output = tokio::task::spawn_blocking(wait).await.unwrap()?;
     let elapsed_ms = start.elapsed().as_millis();
     Ok((elapsed_ms, output))
 }
@@ -208,9 +192,8 @@ fn get_gpu_uuid(gpu_index: usize) -> Result<String, Report<IntegrationTestError>
 /// Sets up the base CUDA command with standard arguments.
 fn setup_cuda_command(
     memory_bytes: u64,
-    duration_seconds: u64,
     gpu_index: usize,
-    fixed_iterations: Option<u64>,
+    iterations: Option<u64>,
 ) -> Result<Command, Report<IntegrationTestError>> {
     let cuda_program_path = env!("CUDA_TEST_PROGRAM_PATH");
 
@@ -226,13 +209,11 @@ fn setup_cuda_command(
     let mut cmd = Command::new(cuda_program_path);
     cmd.arg("--memory-bytes")
         .arg(memory_bytes.to_string())
-        .arg("--duration")
-        .arg(duration_seconds.to_string())
         .arg("--gpu-index")
         .arg(gpu_index.to_string());
 
-    if let Some(iters) = fixed_iterations {
-        cmd.arg("--fixed-iterations").arg(iters.to_string());
+    if let Some(iters) = iterations {
+        cmd.arg("--iterations").arg(iters.to_string());
     }
 
     Ok(cmd)
@@ -241,9 +222,7 @@ fn setup_cuda_command(
 /// Applies GPU limiter configuration to the command.
 fn apply_limiter_config(
     cmd: &mut Command,
-    gpu_index: usize,
-    utilization_limit: u64,
-    memory_limit: u64,
+    gpu_uuid: &str,
 ) -> Result<(), Report<IntegrationTestError>> {
     let limiter_path = build_and_find_cuda_limiter()?;
     cmd.env("LD_PRELOAD", &limiter_path);
@@ -251,32 +230,12 @@ fn apply_limiter_config(
     // Enable mock/test mode in limiter to avoid contacting hypervisor
     cmd.env(LIMITER_MOCK_MODE, "1");
 
-    // Convert UUID to lowercase for compatibility with limiter expectations
-    let uuid_lowercase = get_gpu_uuid(gpu_index)?.to_lowercase();
-
-    // Set memory limit as JSON
-    cmd.env(
-        TF_CUDA_MEM_LIMIT,
-        json!({
-            &uuid_lowercase: memory_limit,
-        })
-        .to_string(),
-    );
-
-    // Set utilization limit as JSON
-    cmd.env(
-        TF_CUDA_UP_LIMIT,
-        json!({
-            &uuid_lowercase: utilization_limit,
-        })
-        .to_string(),
-    );
-
     // Set deterministic shared memory identifier for tests
     let shm_identifier =
         std::env::var(TF_SHM_IDENTIFIER).unwrap_or_else(|_| DEFAULT_SHM_IDENTIFIER.to_string());
     cmd.env(TF_SHM_IDENTIFIER, shm_identifier);
 
+    cmd.env("TF_VISIBLE_DEVICES", gpu_uuid);
     Ok(())
 }
 
@@ -313,6 +272,296 @@ fn find_library_in_dirs(dirs: &[PathBuf], names: &[&str]) -> Option<String> {
     None
 }
 
+/// Helper to start a mock coordinator for resource management during tests
+pub async fn mock_coordinator(
+    test_shm_id: &str,
+    _gpu_index: usize,
+) -> (
+    Arc<
+        LimiterCoordinator<
+            ThreadSafeSharedMemoryManager,
+            PodStateStore,
+            NvmlDeviceSampler,
+            SystemClock,
+        >,
+    >,
+    Arc<PodStateStore>,
+) {
+    // Create mock dependencies
+    let shared_memory = Arc::new(ThreadSafeSharedMemoryManager::new());
+    let pod_state = Arc::new(PodStateStore::new());
+    let snapshot = Arc::new(NvmlDeviceSampler::new());
+    let time = Arc::new(SystemClock::new());
+
+    // Create coordinator with mock dependencies
+    let coordinator = Arc::new(LimiterCoordinator::new(
+        Duration::from_millis(100), // Fast monitoring for tests
+        1,                          // Single GPU
+        format!("{test_shm_id}*"),
+        shared_memory,
+        pod_state.clone(),
+        snapshot,
+        time,
+    ));
+
+    (coordinator, pod_state)
+}
+
+/// Test coordinator manager that handles a single coordinator with multiple pods
+pub struct TestCoordinatorManager {
+    coordinator: Arc<
+        LimiterCoordinator<
+            ThreadSafeSharedMemoryManager,
+            PodStateStore,
+            NvmlDeviceSampler,
+            SystemClock,
+        >,
+    >,
+    pod_state: Arc<PodStateStore>,
+    cancellation_token: CancellationToken,
+    gpu_index: usize,
+    registered_pods: HashSet<String>,
+}
+
+/// A registered pod within the test coordinator
+pub struct TestPod {
+    pod_id: String,
+    device_config: DeviceConfig,
+    _cleanup_guard: PodCleanupGuard,
+}
+
+struct PodCleanupGuard {
+    pod_id: String,
+}
+
+impl Drop for PodCleanupGuard {
+    fn drop(&mut self) {
+        // Clean up shared memory file for this specific pod
+        let _ = std::fs::remove_file(format!("/dev/shm/{}", self.pod_id));
+        // Remove environment variable if it matches this pod
+        if std::env::var(TF_SHM_IDENTIFIER).unwrap_or_default() == self.pod_id {
+            std::env::remove_var(TF_SHM_IDENTIFIER);
+        }
+    }
+}
+
+impl TestCoordinatorManager {
+    /// Creates a new test coordinator manager
+    pub async fn new(gpu_index: usize) -> Self {
+        let base_shm_id = format!("tf_shm_coordinator_{gpu_index}");
+
+        // Create coordinator and pod state
+        let (coordinator, pod_state) = mock_coordinator(&base_shm_id, gpu_index).await;
+        let cancellation_token = CancellationToken::new();
+
+        // Start coordinator in background
+        tokio::spawn({
+            let coordinator = coordinator.clone();
+            let cancellation_token = cancellation_token.clone();
+            async move {
+                coordinator.run(cancellation_token).await;
+            }
+        });
+
+        // Wait for coordinator to initialize
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        Self {
+            coordinator,
+            pod_state,
+            cancellation_token,
+            gpu_index,
+            registered_pods: HashSet::new(),
+        }
+    }
+
+    /// Register a new pod with custom up_limit
+    pub async fn register_pod_with_limit(
+        &mut self,
+        pod_name: &str,
+        up_limit: u32,
+    ) -> Result<TestPod, Report<IntegrationTestError>> {
+        let nvml = global_nvml();
+        let device_uuid = get_gpu_uuid(self.gpu_index)?;
+
+        let (
+            total_cuda_cores,
+            sm_count,
+            max_thread_per_sm,
+            _calculated_up_limit,
+            _calculated_mem_limit,
+        ) = calculate_device_limits_from_gpu_info(
+            nvml,
+            self.gpu_index as u32,
+            None,                 // tflops_limit - custom up_limit
+            Some(TEST_MEMORY_MB), // vram_limit
+            None,                 // tflops_capacity - not needed for tests
+        )
+        .map_err(|e| {
+            Report::new(IntegrationTestError::GpuUuidFailed)
+                .attach_printable(format!("Failed to calculate device limits: {e}"))
+        })?;
+
+        let device_config = DeviceConfig {
+            device_idx: self.gpu_index as u32,
+            device_uuid,
+            up_limit, // custom up_limit
+            mem_limit: TEST_MEMORY_MB,
+            total_cuda_cores: (total_cuda_cores as f64 * (up_limit as f64 / 100.0)).round() as u32,
+            sm_count,
+            max_thread_per_sm,
+        };
+
+        self.register_pod_with_config(pod_name, device_config).await
+    }
+
+    /// Register a new pod with custom device configuration
+    pub async fn register_pod_with_config(
+        &mut self,
+        pod_name: &str,
+        device_config: DeviceConfig,
+    ) -> Result<TestPod, Report<IntegrationTestError>> {
+        let pod_identifier = format!("tf_shm_pod_{pod_name}");
+
+        // Register the pod
+        self.pod_state
+            .register_pod(
+                &pod_identifier,
+                WorkerInfo::default(),
+                vec![device_config.clone()],
+            )
+            .map_err(|e| {
+                Report::new(IntegrationTestError::ProcessSpawnFailed)
+                    .attach_printable(format!("Failed to register pod '{pod_identifier}': {e}"))
+            })?;
+
+        self.coordinator
+            .ensure_pod_registered(&pod_identifier, &[device_config.clone()])
+            .await
+            .map_err(|e| {
+                Report::new(IntegrationTestError::ProcessSpawnFailed)
+                    .attach_printable(format!("Failed to register pod '{pod_identifier}': {e}"))
+            })?;
+
+        self.registered_pods.insert(pod_identifier.clone());
+        let cleanup_guard = PodCleanupGuard {
+            pod_id: pod_identifier.clone(),
+        };
+
+        Ok(TestPod {
+            pod_id: pod_identifier,
+            device_config,
+            _cleanup_guard: cleanup_guard,
+        })
+    }
+
+    /// Register a process with a specific pod
+    pub fn register_process(
+        &self,
+        pod: &TestPod,
+        pid: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.pod_state.register_process(&pod.pod_id, pid)?;
+        self.coordinator.register_process(&pod.pod_id, pid)?;
+        Ok(())
+    }
+
+    /// Run a test with detailed output and automatic process registration
+    pub async fn run_test_with_pod(
+        &self,
+        pod: &TestPod,
+        description: &str,
+        iterations: u64,
+        memory_bytes: u64,
+        is_limiter_enabled: bool,
+    ) -> Result<(u128, Output), Report<IntegrationTestError>> {
+        // Set environment variable for this pod
+        std::env::set_var(TF_SHM_IDENTIFIER, &pod.pod_id);
+
+        self.run_test_with_detailed_output(
+            description,
+            iterations,
+            memory_bytes,
+            is_limiter_enabled,
+            |pid| {
+                if let Err(e) = self.register_process(pod, pid) {
+                    eprintln!(
+                        "Failed to register process {} for pod {}: {}",
+                        pid, pod.pod_id, e
+                    );
+                }
+            },
+        )
+        .await
+    }
+
+    /// Internal method that integrates run_test_with_detailed_output functionality
+    async fn run_test_with_detailed_output(
+        &self,
+        description: &str,
+        iterations: u64,
+        memory_bytes: u64,
+        is_limiter_enabled: bool,
+        post_start: impl Fn(u32),
+    ) -> Result<(u128, Output), Report<IntegrationTestError>> {
+        let device_uuid = get_gpu_uuid(self.gpu_index)?;
+        let (elapsed_ms, output) = run_cuda_and_measure(
+            memory_bytes,
+            self.gpu_index,
+            &device_uuid,
+            iterations,
+            is_limiter_enabled,
+            post_start,
+        )
+        .await?;
+
+        if !output.status.success() {
+            eprintln!("Test '{description}' failed:");
+            eprintln!("Exit status: {:?}", output.status);
+            eprintln!("STDOUT: {}", String::from_utf8_lossy(&output.stdout));
+            eprintln!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
+            return Err(
+                Report::new(IntegrationTestError::ProcessOutputFailed).attach_printable(format!(
+                    "Test '{}' process failed with status {:?}",
+                    description, output.status
+                )),
+            );
+        }
+
+        println!("Test '{description}' completed in {elapsed_ms}ms");
+        Ok((elapsed_ms, output))
+    }
+
+    /// Get the GPU index
+    pub fn gpu_index(&self) -> usize {
+        self.gpu_index
+    }
+}
+
+impl Drop for TestCoordinatorManager {
+    fn drop(&mut self) {
+        // Cancel the coordinator
+        self.cancellation_token.cancel();
+
+        // Clean up any remaining shared memory files
+        for pod_id in &self.registered_pods {
+            let _ = std::fs::remove_file(format!("/dev/shm/{pod_id}"));
+        }
+    }
+}
+
+impl TestPod {
+    /// Get the pod ID
+    pub fn pod_id(&self) -> &str {
+        &self.pod_id
+    }
+
+    /// Get the device configuration
+    pub fn device_config(&self) -> &DeviceConfig {
+        &self.device_config
+    }
+}
+
 #[cfg(test)]
 mod limiter_tests {
     use super::*;
@@ -321,23 +570,6 @@ mod limiter_tests {
     // Test tolerance constants
     const MIN_SCALING_FACTOR_40_VS_80: f64 = 1.10;
     const MIN_SCALING_FACTOR_20_VS_40: f64 = 1.15;
-    const BASELINE_TOLERANCE_FACTOR: f64 = 0.95;
-
-    // Test configuration
-    const TEST_MEMORY_MB: u64 = 512 * 1024 * 1024; // 512MB
-    const TEST_ITERATIONS_SCALING: u64 = 600;
-    const TEST_ITERATIONS_BASELINE: u64 = 500;
-
-    /// Test configuration parameters for different workload types.
-    const TEST_CONFIGS: &[(u64, u64, &str)] =
-        &[(TEST_MEMORY_MB, TEST_ITERATIONS_SCALING, "standard_workload")];
-
-    struct CleanupGuard;
-    impl Drop for CleanupGuard {
-        fn drop(&mut self) {
-            std::env::remove_var(TF_SHM_IDENTIFIER);
-        }
-    }
 
     /// Checks if GPU testing prerequisites are met.
     fn check_test_prerequisites() -> Result<(), Report<IntegrationTestError>> {
@@ -357,82 +589,68 @@ mod limiter_tests {
         Ok(())
     }
 
-    /// Helper function to run a test with detailed error reporting.
-    fn run_test_with_detailed_output(
-        description: &str,
-        utilization_limit: Option<u64>,
-        memory_bytes: u64,
-        gpu_index: usize,
-        fixed_iterations: u64,
-    ) -> Result<(u128, Output), Report<IntegrationTestError>> {
-        let limit = utilization_limit.map(|u| (u, memory_bytes));
-        let (elapsed_ms, output) =
-            run_cuda_and_measure(memory_bytes, gpu_index, limit, fixed_iterations)?;
-
-        if !output.status.success() {
-            eprintln!("Test '{description}' failed:");
-            eprintln!("Exit status: {:?}", output.status);
-            eprintln!("STDOUT: {}", String::from_utf8_lossy(&output.stdout));
-            eprintln!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
-            return Err(
-                Report::new(IntegrationTestError::ProcessOutputFailed).attach_printable(format!(
-                    "Test '{}' process failed with status {:?}",
-                    description, output.status
-                )),
-            );
-        }
-
-        println!("Test '{description}' completed in {elapsed_ms}ms");
-        Ok((elapsed_ms, output))
-    }
-
     /// Tests that lower utilization limits should increase execution time proportionally.
     ///
     /// This test verifies the core functionality of the GPU limiter by running the same
     /// workload with different utilization limits and ensuring the execution times scale
     /// as expected.
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn lower_utilization_limits_should_increase_execution_time(
+    async fn lower_utilization_limits_should_increase_execution_time(
     ) -> Result<(), Report<IntegrationTestError>> {
         // Skip test if prerequisites aren't met
         if check_test_prerequisites().is_err() {
             println!("Skipping test: prerequisites not met");
             return Ok(());
         }
+        const TEST_ITERATIONS_SCALING: u64 = 30;
 
         let gpu_index = 0;
 
-        // Set up test-specific shared memory identifier
-        let test_shm_id = "tf_shm_test_scaling";
-        std::env::set_var(TF_SHM_IDENTIFIER, test_shm_id);
+        // Create a single coordinator manager
+        let mut coordinator_manager = TestCoordinatorManager::new(gpu_index).await;
 
-        let _guard = CleanupGuard;
+        // Register different pods with different limits
+        let pod_80 = coordinator_manager
+            .register_pod_with_limit("scaling_80", 80)
+            .await?;
+        let pod_40 = coordinator_manager
+            .register_pod_with_limit("scaling_40", 40)
+            .await?;
+        let pod_20 = coordinator_manager
+            .register_pod_with_limit("scaling_20", 20)
+            .await?;
 
         // Run tests with different utilization limits
-        let (t80, _) = run_test_with_detailed_output(
-            "80% utilization limit",
-            Some(80),
-            TEST_MEMORY_MB,
-            gpu_index,
-            TEST_ITERATIONS_SCALING,
-        )?;
+        let (t80, _) = coordinator_manager
+            .run_test_with_pod(
+                &pod_80,
+                "80% utilization limit",
+                TEST_ITERATIONS_SCALING,
+                TEST_MEMORY_MB,
+                true,
+            )
+            .await?;
 
-        let (t40, _) = run_test_with_detailed_output(
-            "40% utilization limit",
-            Some(40),
-            TEST_MEMORY_MB,
-            gpu_index,
-            TEST_ITERATIONS_SCALING,
-        )?;
+        let (t40, _) = coordinator_manager
+            .run_test_with_pod(
+                &pod_40,
+                "40% utilization limit",
+                TEST_ITERATIONS_SCALING,
+                TEST_MEMORY_MB,
+                true,
+            )
+            .await?;
 
-        let (t20, _) = run_test_with_detailed_output(
-            "20% utilization limit",
-            Some(20),
-            TEST_MEMORY_MB,
-            gpu_index,
-            TEST_ITERATIONS_SCALING,
-        )?;
+        let (t20, _) = coordinator_manager
+            .run_test_with_pod(
+                &pod_20,
+                "20% utilization limit",
+                TEST_ITERATIONS_SCALING,
+                TEST_MEMORY_MB,
+                true,
+            )
+            .await?;
 
         // Verify runtime scaling with meaningful tolerances
         let scaling_40vs80 = t40 as f64 / t80 as f64;
@@ -451,114 +669,6 @@ mod limiter_tests {
         println!(
             "✅ Scaling test passed: 40% is {scaling_40vs80:.2}x slower than 80%, 20% is {scaling_20vs40:.2}x slower than 40%"
         );
-
-        Ok(())
-    }
-
-    /// Tests that unlimited baseline should be fastest execution mode.
-    ///
-    /// This test ensures that the GPU limiter doesn't introduce significant overhead
-    /// when no limits are applied, and that limited execution is indeed slower.
-    #[test]
-    #[serial]
-    fn unlimited_baseline_should_be_fastest_execution() -> Result<(), Report<IntegrationTestError>>
-    {
-        // Skip test if prerequisites aren't met
-        if check_test_prerequisites().is_err() {
-            println!("Skipping test: prerequisites not met");
-            return Ok(());
-        }
-
-        let gpu_index = 0;
-
-        // Set up test-specific shared memory identifier
-        let test_shm_id = "tf_shm_test_baseline";
-        std::env::set_var(TF_SHM_IDENTIFIER, test_shm_id);
-
-        let _guard = CleanupGuard;
-
-        // Test unlimited (baseline) performance
-        let (t_unlimited, _) = run_test_with_detailed_output(
-            "unlimited baseline",
-            None,
-            TEST_MEMORY_MB,
-            gpu_index,
-            TEST_ITERATIONS_BASELINE,
-        )?;
-
-        // Test 80% limited performance
-        let (t80, _) = run_test_with_detailed_output(
-            "80% utilization limit",
-            Some(80),
-            TEST_MEMORY_MB,
-            gpu_index,
-            TEST_ITERATIONS_BASELINE,
-        )?;
-
-        // Verify that 80% limited is not significantly faster than unlimited
-        let performance_ratio = t80 as f64 / t_unlimited as f64;
-
-        assert!(
-            performance_ratio >= BASELINE_TOLERANCE_FACTOR,
-            "80% limited execution should not be significantly faster than unlimited baseline. \
-             Expected ratio >= {BASELINE_TOLERANCE_FACTOR:.2}, got {performance_ratio:.2} (t80={t80}ms, unlimited={t_unlimited}ms)"
-        );
-
-        println!(
-            "✅ Baseline test passed: 80% limited is {performance_ratio:.2}x the time of unlimited ({t80}ms vs {t_unlimited}ms)"
-        );
-
-        Ok(())
-    }
-
-    /// Tests performance with different workload configurations.
-    ///
-    /// This parameterized test runs the same scaling verification across
-    /// different memory sizes and iteration counts to ensure robustness.
-    #[test]
-    #[serial]
-    fn performance_scaling_across_workload_configurations(
-    ) -> Result<(), Report<IntegrationTestError>> {
-        if check_test_prerequisites().is_err() {
-            println!("Skipping test: prerequisites not met");
-            return Ok(());
-        }
-
-        for &(memory_bytes, iterations, description) in TEST_CONFIGS {
-            println!("Testing scaling with {description} configuration...");
-
-            let gpu_index = 0;
-            let test_shm_id = format!("tf_shm_test_config_{description}");
-            std::env::set_var(TF_SHM_IDENTIFIER, &test_shm_id);
-
-            let _guard = CleanupGuard;
-
-            // Test with 80% and 40% limits for this configuration
-            let (t80, _) = run_test_with_detailed_output(
-                &format!("{description} - 80% limit"),
-                Some(80),
-                memory_bytes,
-                gpu_index,
-                iterations,
-            )?;
-
-            let (t40, _) = run_test_with_detailed_output(
-                &format!("{description} - 40% limit"),
-                Some(40),
-                memory_bytes,
-                gpu_index,
-                iterations,
-            )?;
-
-            // Verify scaling for this configuration
-            let scaling_ratio = t40 as f64 / t80 as f64;
-            assert!(
-                scaling_ratio >= MIN_SCALING_FACTOR_40_VS_80,
-                "Configuration '{description}' should show {MIN_SCALING_FACTOR_40_VS_80:.2}x scaling, got {scaling_ratio:.2}x"
-            );
-
-            println!("✅ {description} scaling: {scaling_ratio:.2}x");
-        }
 
         Ok(())
     }

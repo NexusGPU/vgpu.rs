@@ -154,7 +154,7 @@ pub(crate) async fn run_metrics<M, P, D, T>(
                             .read()
                             .expect("should not be poisoned")
                             .get(gpu_uuid)
-                            .unwrap_or(&0.0);
+                            .unwrap_or(&0.0) / 100.0;
                     acc.count += 1;
                 }
 
@@ -195,7 +195,7 @@ pub(crate) async fn run_metrics<M, P, D, T>(
                                 .read()
                                 .expect("should not be poisoned")
                                 .get(&gpu_uuid)
-                                .unwrap_or(&0.0);
+                                .unwrap_or(&0.0) / 100.0;
                         acc.count += 1;
                     }
                 }

@@ -1,18 +1,21 @@
 //! Traits for shared memory access and related operations
 
-use std::path::PathBuf;
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use super::{DeviceConfig, SharedDeviceState};
 
 /// Trait for shared memory access operations  
 pub trait SharedMemoryAccess: Send + Sync {
-    type Error: std::fmt::Debug + std::fmt::Display + Send + Sync + 'static;
+    type Error: fmt::Debug + fmt::Display + Send + Sync + 'static;
 
     /// Find shared memory files matching a glob pattern
     fn find_shared_memory_files(&self, glob: &str) -> Result<Vec<PathBuf>, Self::Error>;
 
     /// Extract identifier from a shared memory file path
-    fn extract_identifier_from_path(&self, path: &std::path::Path) -> Result<String, Self::Error>;
+    fn extract_identifier_from_path(&self, path: &Path) -> Result<String, Self::Error>;
 
     /// Create shared memory for a pod with given device configurations
     fn create_shared_memory(

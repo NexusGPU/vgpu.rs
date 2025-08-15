@@ -67,8 +67,8 @@ fn are_hooks_enabled() -> (bool, bool) {
     (enable_nvml_hooks, enable_cuda_hooks)
 }
 
-pub(crate) fn is_mock_mode() -> bool {
-    std::env::var("TF_SHM_IDENTIFIER").is_ok()
+pub(crate) fn mock_shm_name() -> Option<String> {
+    std::env::var("TF_SHM_IDENTIFIER").ok()
 }
 
 fn init_ngpu_library() {
@@ -88,7 +88,7 @@ fn init_ngpu_library() {
                 }
             };
 
-        let config = if !is_mock_mode() {
+        let config = if mock_shm_name().is_none() {
             let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
                 Some((ip, port)) => (ip, port),
                 None => {
@@ -110,15 +110,15 @@ fn init_ngpu_library() {
             config
         } else {
             // In mock/test mode, derive UUIDs from either CUDA_VISIBLE_DEVICES or list all devices
-            let mut uuids = Vec::new();
-            let total = nvml.device_count().unwrap_or_default();
-            for i in 0..total {
-                if let Ok(dev) = nvml.device_by_index(i) {
-                    if let Ok(uuid) = dev.uuid() {
-                        uuids.push(uuid.to_string());
-                    }
-                }
-            }
+            let uuids = if let Ok(visible_devices) = std::env::var("TF_VISIBLE_DEVICES") {
+                visible_devices
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect::<Vec<_>>()
+            } else {
+                panic!("TF_VISIBLE_DEVICES not set");
+            };
+
             config::DeviceConfigResult {
                 gpu_uuids: uuids,
                 host_pid: 0,
