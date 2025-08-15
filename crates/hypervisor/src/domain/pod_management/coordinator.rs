@@ -270,6 +270,13 @@ where
         let pod_utilization = device_snapshot.get_pod_utilization(host_pids);
         let pod_memory = device_snapshot.get_pod_memory(host_pids);
 
+        if pod_memory == 0 {
+            for (pid, memory) in device_snapshot.process_memories.iter() {
+                tracing::info!("Pod {} has 0 memory, pid:{} memory:{}", pod_identifier, pid, memory);
+            }
+           tracing::info!("Pod {} has 0 memory, host_pids: {:?}", pod_identifier, host_pids);
+        }
+
         let new_share = calculate_delta(
             device_config,
             pod_utilization.total_utilization,
