@@ -47,7 +47,7 @@ impl DeviceSnapshotProvider for NvmlDeviceSampler {
         let process_utilization_samples = match device.process_utilization_stats(last_seen_ts) {
             Ok(process_utilization_samples) => process_utilization_samples,
             Err(NvmlError::NotFound) => {
-                return Ok(device_snapshot);
+                vec![]
             }
             Err(e) => {
                 return Err(e.into());

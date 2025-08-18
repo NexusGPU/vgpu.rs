@@ -1,7 +1,6 @@
 //! Traits for pod state management and device operations
 
-use super::utilization::DeviceSnapshot;
-use utils::shared_memory::DeviceConfig;
+use super::{pod_state_store::DeviceConfigRef, utilization::DeviceSnapshot};
 
 /// Trait for accessing pod state information
 pub trait PodStateRepository: Send + Sync {
@@ -16,7 +15,7 @@ pub trait PodStateRepository: Send + Sync {
         &self,
         pod_identifier: &str,
         device_idx: u32,
-    ) -> Option<DeviceConfig>;
+    ) -> Option<DeviceConfigRef<'_>>;
 
     /// Check if a pod exists in the store
     fn contains_pod(&self, pod_identifier: &str) -> bool;

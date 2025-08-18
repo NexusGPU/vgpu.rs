@@ -296,7 +296,8 @@ where
         let restored_pids = match self.shared_memory.get_shared_memory(pod_identifier) {
             Ok(ptr) => {
                 debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
-                let restored_pids = unsafe { &*ptr }.get_all_pids();
+                let state = unsafe { &*ptr };
+                let restored_pids = state.get_all_pids();
 
                 if !restored_pids.is_empty() {
                     debug!(
@@ -306,6 +307,15 @@ where
                         restored_pids.len()
                     );
                 }
+                // update limit info
+                for config in configs {
+                    state.with_device(config.device_idx as usize, |device| {
+                        device.device_info.set_total_cores(config.total_cuda_cores);
+                        device.device_info.set_up_limit(config.up_limit);
+                        device.device_info.set_mem_limit(config.mem_limit);
+                    });
+                }
+
                 restored_pids
             }
             Err(e) => {
@@ -893,8 +903,8 @@ mod tests {
     async fn test_coordinator_full_lifecycle_integration() {
         let (coordinator, shared_memory, pod_state, snapshot, time) =
             TestLimiterCoordinator::new_test(
-                Duration::from_millis(50), // Fast interval for testing
-                2,                         // Multiple devices
+                Duration::from_millis(100), // Fast interval for testing
+                2,                          // Multiple devices
                 "test_lifecycle_*.shm".to_string(),
             );
 
