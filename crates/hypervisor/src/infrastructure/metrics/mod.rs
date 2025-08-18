@@ -179,6 +179,18 @@ pub(crate) async fn run_metrics<M, P, D, T>(
                         .collect()
                 }; // RwLockReadGuard is dropped here
 
+                let pod_store = pod_mgr.pod_state_store();
+                for identifier in pod_store.list_pod_identifiers().iter() {
+                    if let Some(pod_state) = pod_store.get_pod(identifier) {
+                        if let Some(gpu_uuids) = pod_state.info.gpu_uuids {
+                            for uuid in gpu_uuids {
+                                let acc = worker_acc.entry(uuid).or_default();
+                                acc.entry(identifier.to_string()).or_default();
+                            }
+                        }
+                    }
+                }
+
                 // Now process the collected data with async operations
                 for (gpu_uuid, process_metrics) in process_metrics_snapshot {
                     let worker_acc = worker_acc.entry(gpu_uuid.to_string()).or_default();
