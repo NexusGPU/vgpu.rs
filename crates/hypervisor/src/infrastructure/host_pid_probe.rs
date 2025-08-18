@@ -96,8 +96,7 @@ impl HostPidProbe {
     ///
     /// ```rust
     /// use std::time::Duration;
-    ///
-    /// use hostpidprobe::HostPidProbe;
+    /// # use hypervisor::host_pid_probe::HostPidProbe;
     ///
     /// let probe = HostPidProbe::new(Duration::from_secs(1));
     /// ```
@@ -123,7 +122,7 @@ impl HostPidProbe {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use hostpidprobe::{HostPidProbe, SubscriptionRequest};
+    /// # use hypervisor::host_pid_probe::{HostPidProbe, SubscriptionRequest};
     /// # use std::time::Duration;
     /// # async fn example() {
     /// let probe = HostPidProbe::new(Duration::from_secs(1));

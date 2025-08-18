@@ -11,7 +11,7 @@
 //! # Authentication
 //!
 //! All requests must include a JWT token in the Authorization header:
-//! ```
+//! ```text
 //! Authorization: Bearer <JWT_TOKEN>
 //! ```
 //!
