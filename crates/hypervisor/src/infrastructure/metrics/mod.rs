@@ -100,13 +100,17 @@ pub(crate) async fn run_metrics<M, P, D, T>(
 
     let metrics_extra_labels: HashMap<String, String> = metrics_extra_labels
         .map(|labels_json| {
-            serde_json::from_str(labels_json).unwrap_or_else(|e| {
-                tracing::warn!(
-                    "Failed to parse metrics_extra_labels JSON: {}, using empty map",
-                    e
-                );
+            if labels_json == "null" {
                 HashMap::new()
-            })
+            } else {
+                serde_json::from_str(labels_json).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "Failed to parse metrics_extra_labels JSON: {}, using empty map",
+                        e
+                    );
+                    HashMap::new()
+                })
+            }
         })
         .unwrap_or_default();
     let has_dynamic_metrics_labels = !metrics_extra_labels.is_empty();

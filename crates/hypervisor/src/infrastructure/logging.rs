@@ -73,7 +73,7 @@ pub fn init<P: AsRef<Path>>(
         .from_env_lossy();
 
     let fmt_layer = fmt_layer.with_filter(env_filter.and(filter::filter_fn(|metadata| {
-        !metadata.target().contains("metrics")
+        !metadata.target().eq("metrics")
     })));
 
     let appender = RollingFileAppender::builder()
