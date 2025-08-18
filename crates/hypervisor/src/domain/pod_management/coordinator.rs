@@ -903,8 +903,8 @@ mod tests {
     async fn test_coordinator_full_lifecycle_integration() {
         let (coordinator, shared_memory, pod_state, snapshot, time) =
             TestLimiterCoordinator::new_test(
-                Duration::from_millis(50), // Fast interval for testing
-                2,                         // Multiple devices
+                Duration::from_millis(100), // Fast interval for testing
+                2,                          // Multiple devices
                 "test_lifecycle_*.shm".to_string(),
             );
 

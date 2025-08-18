@@ -5,8 +5,10 @@ use cudarc::driver::sys::CUarray_format;
 use cudarc::driver::sys::CUdevice;
 use cudarc::driver::sys::CUdeviceptr;
 use cudarc::driver::sys::CUmemGenericAllocationHandle;
+use cudarc::driver::sys::CUmemoryPool;
 use cudarc::driver::sys::CUmipmappedArray;
 use cudarc::driver::sys::CUresult;
+use cudarc::driver::sys::CUstream;
 use cudarc::driver::sys::CUDA_ARRAY3D_DESCRIPTOR;
 use cudarc::driver::sys::CUDA_ARRAY_DESCRIPTOR;
 use tf_macro::hook_fn;
@@ -243,6 +245,31 @@ pub(crate) unsafe fn cu_mem_create_detour(
 }
 
 #[hook_fn]
+pub(crate) unsafe fn cu_mem_alloc_async_detour(
+    dptr: *mut CUdeviceptr,
+    bytesize: usize,
+    h_stream: CUstream,
+) -> CUresult {
+    let request_size = bytesize;
+    check_and_alloc!(request_size as u64, "cuMemAllocAsync", || {
+        FN_CU_MEM_ALLOC_ASYNC(dptr, bytesize, h_stream)
+    })
+}
+
+#[hook_fn]
+pub(crate) unsafe fn cu_mem_alloc_from_pool_async_detour(
+    dptr: *mut CUdeviceptr,
+    bytesize: usize,
+    pool: CUmemoryPool,
+    h_stream: CUstream,
+) -> CUresult {
+    let request_size = bytesize;
+    check_and_alloc!(request_size as u64, "cuMemAllocFromPoolAsync", || {
+        FN_CU_MEM_ALLOC_FROM_POOL_ASYNC(dptr, bytesize, pool, h_stream)
+    })
+}
+
+#[hook_fn]
 pub(crate) unsafe fn cu_device_total_mem_v2_detour(bytes: *mut u64, device: CUdevice) -> CUresult {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
     match limiter.get_pod_memory_usage_cu(device) {
@@ -408,6 +435,22 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_device_total_mem_detour,
         FnCu_device_total_mem,
         FN_CU_DEVICE_TOTAL_MEM
+    );
+    replace_symbol!(
+        hook_manager,
+        Some("libcuda."),
+        "cuMemAllocAsync",
+        cu_mem_alloc_async_detour,
+        FnCu_mem_alloc_async,
+        FN_CU_MEM_ALLOC_ASYNC
+    );
+    replace_symbol!(
+        hook_manager,
+        Some("libcuda."),
+        "cuMemAllocFromPoolAsync",
+        cu_mem_alloc_from_pool_async_detour,
+        FnCu_mem_alloc_from_pool_async,
+        FN_CU_MEM_ALLOC_FROM_POOL_ASYNC
     );
     replace_symbol!(
         hook_manager,

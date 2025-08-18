@@ -293,8 +293,8 @@ pub async fn mock_coordinator(
 
     // Create coordinator with mock dependencies
     let coordinator = Arc::new(LimiterCoordinator::new(
-        Duration::from_millis(100), // Fast monitoring for tests
-        1,                          // Single GPU
+        Duration::from_millis(50), // Fast monitoring for tests
+        1,                         // Single GPU
         format!("{test_shm_id}*"),
         shared_memory,
         pod_state.clone(),
@@ -306,7 +306,7 @@ pub async fn mock_coordinator(
 }
 
 // Test constants
-const TEST_MEMORY_MB: u64 = 512 * 1024; // 512KB
+const TEST_MEMORY: u64 = 256 * 1024 * 1024; // 256MB
 
 /// Test coordinator manager that handles a single coordinator with multiple pods
 pub struct TestCoordinatorManager {
@@ -394,9 +394,9 @@ impl TestCoordinatorManager {
         ) = calculate_device_limits_from_gpu_info(
             nvml,
             self.gpu_index as u32,
-            None,                     // tflops_limit - custom up_limit
-            Some(TEST_MEMORY_MB * 2), // vram_limit
-            None,                     // tflops_capacity - not needed for tests
+            None,                   // tflops_limit - custom up_limit
+            Some(TEST_MEMORY * 10), // vram_limit
+            None,                   // tflops_capacity - not needed for tests
         )
         .map_err(|e| {
             Report::new(IntegrationTestError::GpuUuidFailed)
@@ -407,7 +407,7 @@ impl TestCoordinatorManager {
             device_idx: self.gpu_index as u32,
             device_uuid,
             up_limit, // custom up_limit
-            mem_limit: TEST_MEMORY_MB * 2,
+            mem_limit: TEST_MEMORY * 10,
             total_cuda_cores: (total_cuda_cores as f64 * (up_limit as f64 / 100.0)).round() as u32,
             sm_count,
             max_thread_per_sm,
@@ -628,7 +628,7 @@ mod limiter_tests {
                 &pod_80,
                 "80% utilization limit",
                 TEST_ITERATIONS_SCALING,
-                TEST_MEMORY_MB,
+                TEST_MEMORY,
                 true,
             )
             .await?;
@@ -638,7 +638,7 @@ mod limiter_tests {
                 &pod_40,
                 "40% utilization limit",
                 TEST_ITERATIONS_SCALING,
-                TEST_MEMORY_MB,
+                TEST_MEMORY,
                 true,
             )
             .await?;
@@ -648,7 +648,7 @@ mod limiter_tests {
                 &pod_20,
                 "20% utilization limit",
                 TEST_ITERATIONS_SCALING,
-                TEST_MEMORY_MB,
+                TEST_MEMORY,
                 true,
             )
             .await?;
