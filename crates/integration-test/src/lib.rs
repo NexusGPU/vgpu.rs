@@ -25,8 +25,6 @@ type CudaTestResult = Result<
     ),
     Report<IntegrationTestError>,
 >;
-// Test constants
-const TEST_MEMORY_MB: u64 = 512 * 1024 * 1024; // 512MB
 
 #[cfg(test)]
 use serial_test::serial;
@@ -306,6 +304,9 @@ pub async fn mock_coordinator(
 
     (coordinator, pod_state)
 }
+
+// Test constants
+const TEST_MEMORY_MB: u64 = 512 * 1024; // 512KB
 
 /// Test coordinator manager that handles a single coordinator with multiple pods
 pub struct TestCoordinatorManager {

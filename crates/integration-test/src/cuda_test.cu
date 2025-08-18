@@ -152,5 +152,3 @@ int run_iterations(size_t memory_bytes, long iterations) {
 
     return 0;
 }
-
-// Removed other experimental patterns; not needed for limiter validation
