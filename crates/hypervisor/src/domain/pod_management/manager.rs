@@ -1,5 +1,6 @@
 //! Simplified pod manager that handles worker lifecycle with unified state management.
 
+use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -101,15 +102,26 @@ where
                 );
                 continue;
             };
-            if let Err(e) = self.ensure_pod_registered(namespace, pod_name).await {
-                tracing::error!(
-                    "Failed to restore pod from shared memory: {}: {}",
-                    identifier,
-                    e
-                );
+            match self.ensure_pod_registered(namespace, pod_name).await {
+                Err(PodManagementError::PodNotFound {
+                    namespace,
+                    pod_name,
+                }) => {
+                    tracing::warn!("Pod {namespace}/{pod_name} not found in cache, skipping");
+                    if let Err(e) = fs::remove_file(&file) {
+                        tracing::error!(
+                            "Failed to remove shared memory file: {}: {e}",
+                            file.display()
+                        );
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to restore pod from shared memory: {identifier}: {e}");
+                }
+                _ => {}
             }
         }
-
         Ok(())
     }
 
