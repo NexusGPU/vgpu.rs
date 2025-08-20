@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -14,7 +15,6 @@ use super::{DeviceConfig, SharedDeviceState};
 pub struct SharedMemoryHandle {
     shmem: RefCell<Shmem>,
     ptr: *mut SharedDeviceState,
-    identifier: String,
 }
 
 impl SharedMemoryHandle {
@@ -67,15 +67,15 @@ impl SharedMemoryHandle {
         Self {
             shmem: RefCell::new(shmem),
             ptr,
-            identifier: shm_name,
         }
     }
 
     /// Opens an existing shared memory segment.
-    pub fn open(identifier: &str) -> Result<Self> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let shmem = ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
+            .use_tmpfs_with_dir(path.as_ref())
+            .os_id("shm")
             .open()
             .context("Failed to open shared memory")?;
 
@@ -84,17 +84,17 @@ impl SharedMemoryHandle {
         Ok(Self {
             shmem: RefCell::new(shmem),
             ptr,
-            identifier: identifier.to_string(),
         })
     }
 
     /// Creates a new shared memory segment.
-    pub fn create(identifier: &str, configs: &[DeviceConfig]) -> Result<Self> {
+    pub fn create(path: impl AsRef<Path>, configs: &[DeviceConfig]) -> Result<Self> {
         let old_umask = unsafe { libc::umask(0) };
 
         let shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
+            .use_tmpfs_with_dir(path.as_ref())
+            .os_id("shm")
             .mode(
                 Mode::S_IRUSR
                     | Mode::S_IWUSR
@@ -110,7 +110,8 @@ impl SharedMemoryHandle {
                 // If it already exists, try to open it.
                 ShmemConf::new()
                     .size(std::mem::size_of::<SharedDeviceState>())
-                    .os_id(identifier)
+                    .use_tmpfs_with_dir(path.as_ref())
+                    .os_id("shm")
                     .open()
                     .context("Failed to open existing shared memory")?
             }
@@ -129,14 +130,13 @@ impl SharedMemoryHandle {
         }
 
         info!(
-            identifier = %identifier,
+            path = ?path.as_ref(),
             "Created shared memory segment"
         );
 
         Ok(Self {
             shmem: RefCell::new(shmem),
             ptr,
-            identifier: identifier.to_string(),
         })
     }
 
@@ -153,11 +153,6 @@ impl SharedMemoryHandle {
     pub fn get_state(&self) -> &SharedDeviceState {
         unsafe { &*self.ptr }
     }
-
-    /// Gets the shared memory identifier.
-    pub fn get_identifier(&self) -> &str {
-        &self.identifier
-    }
 }
 
 // Implement Send and Sync because SharedDeviceState uses atomic operations.
@@ -170,16 +165,12 @@ impl Drop for SharedMemoryHandle {
             let need_cleanup = self.get_state().get_all_pids().is_empty();
 
             if !need_cleanup {
-                info!(
-                    identifier = %self.identifier,
-                    pid_count = self.get_state().get_all_pids().len(),
-                    "Other processes still using shared memory, preserving it"
-                );
                 // Don't clean up - other processes are still using it
                 self.shmem.borrow_mut().set_owner(false);
             } else {
+                let path = self.shmem.borrow().get_tmpfs_file_path();
                 info!(
-                    identifier = %self.identifier,
+                    path = ?path,
                     "No other processes using shared memory, allowing cleanup"
                 );
                 // Clean up - no other processes are using it
