@@ -25,6 +25,7 @@ use super::auth::JwtAuthMiddleware;
 use super::ApiError;
 use super::JwtAuthConfig;
 use crate::api::handlers::get_pod_info;
+use crate::api::handlers::ping;
 use crate::api::handlers::process_init;
 use crate::limiter_comm::CommandDispatcher;
 use crate::pod_management::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
@@ -77,6 +78,9 @@ where
         let limiter_routes = self.command_dispatcher.create_routes();
 
         let app = Route::new()
+            // Check endpoints (unprotected)
+            .at("/healthz", get(ping))
+            .at("/readyz", get(ping))
             // Protected routes with JWT middleware
             .at(
                 "/api/v1/pod",
