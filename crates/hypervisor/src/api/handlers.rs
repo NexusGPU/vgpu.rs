@@ -185,3 +185,8 @@ where
         message: "Process initialized successfully".to_string(),
     }))
 }
+
+#[handler]
+pub async fn ping() -> &'static str {
+    "ok"
+}
