@@ -24,4 +24,4 @@ serde_json = { workspace = true, optional = true }
 http-bidir-comm = { workspace = true, optional = true }
 
 [dev-dependencies]
-wiremock = "0.6.0"
+wiremock = "0.6.5"
