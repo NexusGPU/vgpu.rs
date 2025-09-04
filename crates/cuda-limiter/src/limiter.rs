@@ -177,6 +177,17 @@ impl Limiter {
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
 
+        match state.with_device(raw_device_index, |device| device.device_info.get_up_limit()) {
+            Some(up_limit) => {
+                if up_limit >= 100 {
+                    return Ok(());
+                }
+            }
+            None => {
+                return Err(Error::DeviceNotConfigured(raw_device_index));
+            }
+        }
+
         // Check if device exists, return error instead of panic
         if !state.has_device(raw_device_index) {
             return Err(Error::DeviceNotConfigured(raw_device_index));
