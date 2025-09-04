@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
@@ -15,6 +16,44 @@ pub mod manager;
 pub mod mutex;
 pub mod set;
 pub mod traits;
+
+/// Pod identifier structure containing namespace and name
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PodIdentifier {
+    pub namespace: String,
+    pub name: String,
+}
+
+impl PodIdentifier {
+    /// Create a new PodIdentifier
+    pub fn new(namespace: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            namespace: namespace.into(),
+            name: name.into(),
+        }
+    }
+
+    /// Generate a path for shared memory operations
+    pub fn to_path(&self) -> impl AsRef<Path> {
+        format!("tf_shm_{}_{}", self.namespace, self.name)
+    }
+
+    /// Parse a PodIdentifier from a shared memory path
+    /// Path format: tf_shm_{namespace}_{name}
+    pub fn from_path(path: &str) -> Option<Self> {
+        let path = path.strip_prefix("tf_shm_")?;
+        let mut parts = path.splitn(2, '_');
+        let namespace = parts.next()?.to_string();
+        let name = parts.next()?.to_string();
+        Some(Self::new(namespace, name))
+    }
+}
+
+impl std::fmt::Display for PodIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.namespace, self.name)
+    }
+}
 
 const MAX_PROCESSES: usize = 2048;
 /// Maximum number of devices that can be stored in shared memory

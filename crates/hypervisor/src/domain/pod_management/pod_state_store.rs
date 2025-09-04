@@ -10,7 +10,7 @@ use api_types::WorkerInfo;
 use dashmap::DashMap;
 use tracing::debug;
 use tracing::info;
-use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig};
+use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, PodIdentifier};
 
 use super::types::{PodManagementError, PodStatus, Result, SystemStats};
 
@@ -49,9 +49,9 @@ impl<'a> std::ops::Deref for DeviceConfigRef<'a> {
 /// eliminating the need for multiple synchronized registries.
 #[derive(Debug)]
 pub struct PodStateStore {
-    /// All pod states, keyed by pod identifier
+    /// All pod states, keyed by path
     pods: DashMap<String, PodState>,
-    /// Reverse mapping from host PID to pod identifier
+    /// Reverse mapping from host PID to pod path
     pid_to_pod: DashMap<u32, String>,
 }
 
@@ -75,18 +75,17 @@ impl PodStateStore {
     /// This operation is idempotent - if the pod already exists, it will be updated.
     pub fn register_pod(
         &self,
-        pod_identifier: &str,
+        pod_path: &str,
         info: WorkerInfo,
         device_configs: Vec<DeviceConfig>,
     ) -> Result<()> {
         let mut pod_state = PodState::new(info.clone(), device_configs);
-        let pod_identifier = pod_identifier.to_string();
         // If pod already exists, preserve existing processes and shared memory handle
-        if let Some(existing) = self.pods.get(&pod_identifier) {
+        if let Some(existing) = self.pods.get(pod_path) {
             pod_state.processes = existing.processes.clone();
             pod_state.shared_memory_handle = existing.shared_memory_handle.clone();
             debug!(
-                pod_identifier = %pod_identifier,
+                pod_path = %pod_path,
                 existing_processes = existing.processes.len(),
                 "Updated existing pod registration"
             );
@@ -94,12 +93,12 @@ impl PodStateStore {
 
         let device_count = pod_state.device_configs.len();
         info!(
-            pod_identifier = %pod_identifier,
+            pod_path = %pod_path,
             device_count = device_count,
             "Pod registered in state store"
         );
 
-        self.pods.insert(pod_identifier.to_string(), pod_state);
+        self.pods.insert(pod_path.to_string(), pod_state);
 
         Ok(())
     }
@@ -107,18 +106,18 @@ impl PodStateStore {
     /// Register a process within a pod
     ///
     /// If the pod doesn't exist, this will return an error.
-    pub fn register_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
-        let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
+    pub fn register_process(&self, pod_path: &str, host_pid: u32) -> Result<()> {
+        let mut pod_ref = self.pods.get_mut(pod_path).ok_or_else(|| {
             PodManagementError::PodIdentifierNotFound {
-                pod_identifier: pod_identifier.to_string(),
+                pod_identifier: pod_path.to_string(),
             }
         })?;
 
         pod_ref.add_process(host_pid);
-        self.pid_to_pod.insert(host_pid, pod_identifier.to_string());
+        self.pid_to_pod.insert(host_pid, pod_path.to_string());
 
         info!(
-            pod_identifier = %pod_identifier,
+            pod_path = %pod_path,
             host_pid = host_pid,
             "Process registered in pod state store"
         );
@@ -129,14 +128,14 @@ impl PodStateStore {
     /// Unregister a process from a pod
     ///
     /// Returns true if the pod should be removed (no more processes).
-    pub fn unregister_process(&self, pod_identifier: &str, host_pid: u32) -> Result<bool> {
+    pub fn unregister_process(&self, pod_path: &str, host_pid: u32) -> Result<bool> {
         // Remove PID mapping first
         self.pid_to_pod.remove(&host_pid);
 
         let should_remove_pod = {
-            let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
+            let mut pod_ref = self.pods.get_mut(pod_path).ok_or_else(|| {
                 PodManagementError::PodIdentifierNotFound {
-                    pod_identifier: pod_identifier.to_string(),
+                    pod_identifier: pod_path.to_string(),
                 }
             })?;
 
@@ -145,15 +144,15 @@ impl PodStateStore {
         };
 
         if should_remove_pod {
-            self.pods.remove(pod_identifier);
+            self.pods.remove(pod_path);
             info!(
-                pod_identifier = %pod_identifier,
+                pod_path = %pod_path,
                 host_pid = host_pid,
                 "Process unregistered and pod removed (no more processes)"
             );
         } else {
             info!(
-                pod_identifier = %pod_identifier,
+                pod_path = %pod_path,
                 host_pid = host_pid,
                 "Process unregistered from pod"
             );
@@ -162,19 +161,19 @@ impl PodStateStore {
         Ok(should_remove_pod)
     }
 
-    /// Get pod state by identifier
-    pub fn get_pod(&self, pod_identifier: &str) -> Option<PodState> {
-        self.pods.get(pod_identifier).map(|entry| entry.clone())
+    /// Get pod state by path
+    pub fn get_pod(&self, pod_path: &str) -> Option<PodState> {
+        self.pods.get(pod_path).map(|entry| entry.clone())
     }
 
-    /// Get pod identifier by process PID
+    /// Get pod path by process PID
     pub fn get_pod_by_pid(&self, host_pid: u32) -> Option<String> {
         self.pid_to_pod.get(&host_pid).map(|entry| entry.clone())
     }
 
     /// Check if a pod exists
-    pub fn contains_pod(&self, pod_identifier: &str) -> bool {
-        self.pods.contains_key(pod_identifier)
+    pub fn contains_pod(&self, pod_path: &str) -> bool {
+        self.pods.contains_key(pod_path)
     }
 
     /// Get all pod identifiers using a specific device
@@ -186,9 +185,19 @@ impl PodStateStore {
             .collect()
     }
 
+    /// Get pods using a specific device as PodIdentifier structs (for new trait interface)
+    pub fn get_pods_using_device_v2(&self, device_idx: u32) -> Vec<PodIdentifier> {
+        self.pods
+            .iter()
+            .filter(|entry| entry.value().uses_device(device_idx))
+            .map(|entry| entry.key().clone())
+            .filter_map(|path| PodIdentifier::from_path(&path))
+            .collect()
+    }
+
     /// Get host PIDs for a specific pod
-    pub fn get_host_pids_for_pod(&self, pod_identifier: &str) -> Option<Vec<u32>> {
-        self.pods.get(pod_identifier).map(|pod| pod.get_host_pids())
+    pub fn get_host_pids_for_pod(&self, pod_path: &str) -> Option<Vec<u32>> {
+        self.pods.get(pod_path).map(|pod| pod.get_host_pids())
     }
 
     /// Get a borrowed device config for a pod and device index
@@ -215,19 +224,19 @@ impl PodStateStore {
     /// Set shared memory handle for a pod
     pub fn set_shared_memory_handle(
         &self,
-        pod_identifier: &str,
+        pod_path: &str,
         handle: Arc<SharedMemoryHandle>,
     ) -> Result<()> {
-        let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
+        let mut pod_ref = self.pods.get_mut(pod_path).ok_or_else(|| {
             PodManagementError::PodIdentifierNotFound {
-                pod_identifier: pod_identifier.to_string(),
+                pod_identifier: pod_path.to_string(),
             }
         })?;
 
         pod_ref.shared_memory_handle = Some(handle);
 
         debug!(
-            pod_identifier = %pod_identifier,
+            pod_path = %pod_path,
             "Shared memory handle set for pod"
         );
 
@@ -235,17 +244,17 @@ impl PodStateStore {
     }
 
     /// Update pod status
-    pub fn update_pod_status(&self, pod_identifier: &str, status: PodStatus) -> Result<()> {
-        let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
+    pub fn update_pod_status(&self, pod_path: &str, status: PodStatus) -> Result<()> {
+        let mut pod_ref = self.pods.get_mut(pod_path).ok_or_else(|| {
             PodManagementError::PodIdentifierNotFound {
-                pod_identifier: pod_identifier.to_string(),
+                pod_identifier: pod_path.to_string(),
             }
         })?;
 
         pod_ref.status = status;
 
         debug!(
-            pod_identifier = %pod_identifier,
+            pod_path = %pod_path,
             status = ?pod_ref.status,
             "Pod status updated"
         );
@@ -289,10 +298,19 @@ impl PodStateStore {
         self.pods.iter().map(|entry| entry.key().clone()).collect()
     }
 
-    /// Get all processes for a pod
-    pub fn get_pod_processes(&self, pod_identifier: &str) -> Vec<u32> {
+    /// Get all pod identifiers as PodIdentifier structs (for new trait interface)
+    pub fn list_pod_identifiers_v2(&self) -> Vec<PodIdentifier> {
         self.pods
-            .get(pod_identifier)
+            .iter()
+            .map(|entry| entry.key().clone())
+            .filter_map(|path| PodIdentifier::from_path(&path))
+            .collect()
+    }
+
+    /// Get all processes for a pod
+    pub fn get_pod_processes(&self, pod_path: &str) -> Vec<u32> {
+        self.pods
+            .get(pod_path)
             .map(|pod| pod.processes.iter().copied().collect())
             .unwrap_or_default()
     }
@@ -355,20 +373,20 @@ impl super::traits::PodStateRepository for PodStateStore {
         self.get_pods_using_device(device_idx)
     }
 
-    fn get_host_pids_for_pod(&self, pod_identifier: &str) -> Option<Vec<u32>> {
-        self.get_host_pids_for_pod(pod_identifier)
+    fn get_host_pids_for_pod(&self, pod_path: &str) -> Option<Vec<u32>> {
+        self.get_host_pids_for_pod(pod_path)
     }
 
     fn get_device_config_for_pod(
         &self,
-        pod_identifier: &str,
+        pod_path: &str,
         device_idx: u32,
     ) -> Option<DeviceConfigRef<'_>> {
-        self.get_device_config_for_pod(pod_identifier, device_idx)
+        self.get_device_config_for_pod(pod_path, device_idx)
     }
 
-    fn contains_pod(&self, pod_identifier: &str) -> bool {
-        self.contains_pod(pod_identifier)
+    fn contains_pod(&self, pod_path: &str) -> bool {
+        self.contains_pod(pod_path)
     }
 
     fn list_pod_identifiers(&self) -> Vec<String> {

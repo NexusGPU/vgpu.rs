@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -13,8 +15,8 @@ use super::{handle::SharedMemoryHandle, DeviceConfig, SharedDeviceState};
 
 /// A thread-safe shared memory manager.
 pub struct ThreadSafeSharedMemoryManager {
-    /// Active shared memory segments: identifier -> Shmem
-    active_memories: RwLock<HashMap<String, SharedMemoryHandle>>,
+    /// Active shared memory segments: path -> Shmem
+    active_memories: RwLock<HashMap<PathBuf, SharedMemoryHandle>>,
 }
 
 impl Default for ThreadSafeSharedMemoryManager {
@@ -32,47 +34,50 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Creates a shared memory segment.
-    pub fn create_shared_memory(&self, identifier: &str, configs: &[DeviceConfig]) -> Result<()> {
+    pub fn create_shared_memory(
+        &self,
+        path: impl AsRef<Path>,
+        configs: &[DeviceConfig],
+    ) -> Result<()> {
         let mut memories = self.active_memories.write();
-
         // Check if the segment already exists.
-        if memories.contains_key(identifier) {
+        if memories.contains_key(path.as_ref()) {
             return Ok(());
         }
         // Create a new shared memory segment.
-        let shmem = SharedMemoryHandle::create(identifier, configs)?;
+        let shmem = SharedMemoryHandle::create(&path, configs)?;
 
         // Store the Shmem object and configuration.
-        memories.insert(identifier.to_string(), shmem);
+        memories.insert(path.as_ref().to_path_buf(), shmem);
 
         Ok(())
     }
 
     /// Gets a pointer to the shared memory by its identifier.
-    pub fn get_shared_memory(&self, identifier: &str) -> Result<*mut SharedDeviceState> {
+    pub fn get_shared_memory(&self, path: impl AsRef<Path>) -> Result<*mut SharedDeviceState> {
         let memories = self.active_memories.read();
-        if let Some(shmem) = memories.get(identifier) {
+        if let Some(shmem) = memories.get(path.as_ref()) {
             Ok(shmem.get_ptr())
         } else {
             drop(memories);
             let mut memories = self.active_memories.write();
-            let handle = SharedMemoryHandle::open(identifier)?;
+            let handle = SharedMemoryHandle::open(path.as_ref())?;
             let ptr = handle.get_ptr();
-            memories.insert(identifier.to_string(), handle);
+            memories.insert(path.as_ref().to_path_buf(), handle);
             Ok(ptr)
         }
     }
 
-    pub fn add_pid(&self, identifier: &str, pid: usize) -> Result<()> {
-        self.with_memory_handle(identifier, |shmem| {
+    pub fn add_pid(&self, path: impl AsRef<Path>, pid: usize) -> Result<()> {
+        self.with_memory_handle(path, |shmem| {
             let state = shmem.get_state();
             state.add_pid(pid);
             Ok(())
         })
     }
 
-    pub fn remove_pid(&self, identifier: &str, pid: usize) -> Result<()> {
-        self.with_memory_handle(identifier, |shmem| {
+    pub fn remove_pid(&self, path: impl AsRef<Path>, pid: usize) -> Result<()> {
+        self.with_memory_handle(path, |shmem| {
             let state = shmem.get_state();
             state.remove_pid(pid);
             Ok(())
@@ -80,27 +85,28 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Helper method to safely access shared memory handles with error handling
-    fn with_memory_handle<T, F>(&self, identifier: &str, f: F) -> Result<T>
+    fn with_memory_handle<T, F>(&self, path: impl AsRef<Path>, f: F) -> Result<T>
     where
         F: FnOnce(&SharedMemoryHandle) -> Result<T>,
     {
         let memories = self.active_memories.read();
-        let shmem = memories
-            .get(identifier)
-            .context(format!("Shared memory not found: {identifier}"))?;
+        let shmem = memories.get(path.as_ref()).context(format!(
+            "Shared memory not found: {}",
+            path.as_ref().display()
+        ))?;
         f(shmem)
     }
 
     /// Cleans up a shared memory segment.
-    pub fn cleanup(&self, identifier: &str) -> Result<()> {
+    pub fn cleanup(&self, path: impl AsRef<Path>) -> Result<()> {
         let mut memories = self.active_memories.write();
 
-        if let Some(shmem) = memories.remove(identifier) {
+        if let Some(shmem) = memories.remove(path.as_ref()) {
             // Drop the Shmem object to release the shared memory.
             drop(shmem);
-            info!(identifier = %identifier, "Cleaned up shared memory segment");
+            info!(path = %path.as_ref().display(), "Cleaned up shared memory segment");
         } else {
-            warn!(identifier = %identifier, "Attempted to cleanup non-existent shared memory");
+            warn!(path = %path.as_ref().display(), "Attempted to cleanup non-existent shared memory");
         }
 
         Ok(())
@@ -121,7 +127,7 @@ impl ThreadSafeSharedMemoryManager {
             if is_pod_tracking(&identifier) {
                 continue;
             }
-            if self.is_shared_memory_orphaned(&identifier)? {
+            if self.is_shared_memory_orphaned(&file_path)? {
                 if let Err(e) = self.remove_orphaned_file(&file_path, &identifier) {
                     warn!(
                         "Failed to remove orphaned file {}: {}",
@@ -154,7 +160,7 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Extract identifier from file path by removing /dev/shm/ prefix
-    pub fn extract_identifier_from_path(&self, file_path: &std::path::Path) -> Result<String> {
+    pub fn extract_identifier_from_path(&self, file_path: &Path) -> Result<String> {
         file_path
             .strip_prefix("/dev/shm/")
             .map(|relative_path| relative_path.to_string_lossy().to_string())
@@ -165,10 +171,10 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Check if a shared memory segment is orphaned
-    fn is_shared_memory_orphaned(&self, identifier: &str) -> Result<bool> {
+    fn is_shared_memory_orphaned(&self, path: impl AsRef<Path>) -> Result<bool> {
         match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
+            .flink(path.as_ref())
             .open()
         {
             Ok(shmem) => {
@@ -193,8 +199,12 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Remove an orphaned shared memory file
-    fn remove_orphaned_file(&self, file_path: &std::path::Path, identifier: &str) -> Result<()> {
-        self.active_memories.write().remove(identifier);
+    fn remove_orphaned_file(
+        &self,
+        file_path: &std::path::Path,
+        path: impl AsRef<Path>,
+    ) -> Result<()> {
+        self.active_memories.write().remove(path.as_ref());
         std::fs::remove_file(file_path)
             .context(format!("Failed to remove file {}", file_path.display()))?;
         info!(
@@ -206,8 +216,8 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Checks if a shared memory segment should be cleaned up based on reference count.
     /// Returns true if the segment exists and has zero references.
-    pub fn should_cleanup(&self, identifier: &str) -> bool {
-        self.with_memory_handle(identifier, |shmem| {
+    pub fn should_cleanup(&self, path: impl AsRef<Path>) -> bool {
+        self.with_memory_handle(path, |shmem| {
             Ok(shmem.get_state().get_all_pids().is_empty())
         })
         .unwrap_or(false)
@@ -216,23 +226,24 @@ impl ThreadSafeSharedMemoryManager {
     /// Attempt to cleanup shared memory segments with zero reference count.
     pub fn cleanup_unused(&self, is_pod_tracking: impl Fn(&str) -> bool) -> Result<Vec<String>> {
         let mut cleaned_up = Vec::new();
-        let identifiers: Vec<String> = {
+        let paths: Vec<PathBuf> = {
             let memories = self.active_memories.read();
             memories.keys().cloned().collect()
         };
 
-        for identifier in identifiers {
-            if is_pod_tracking(&identifier) {
+        for path in paths {
+            let path_str = path.to_string_lossy();
+            if is_pod_tracking(&path_str) {
                 continue;
             }
-            if self.should_cleanup(&identifier) {
-                match self.cleanup(&identifier) {
+            if self.should_cleanup(&path) {
+                match self.cleanup(&path) {
                     Ok(_) => {
-                        cleaned_up.push(identifier.clone());
-                        info!(identifier = %identifier, "Cleaned up unused shared memory segment");
+                        cleaned_up.push(path_str.to_string());
+                        info!(path = %path.display(), "Cleaned up unused shared memory segment");
                     }
                     Err(e) => {
-                        warn!(identifier = %identifier, error = %e, "Failed to cleanup unused shared memory segment");
+                        warn!(path = %path.display(), error = %e, "Failed to cleanup unused shared memory segment");
                     }
                 }
             }
@@ -242,9 +253,9 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Checks if a shared memory segment exists.
-    pub fn contains(&self, identifier: &str) -> bool {
+    pub fn contains(&self, path: impl AsRef<Path>) -> bool {
         let memories = self.active_memories.read();
-        memories.contains_key(identifier)
+        memories.contains_key(path.as_ref())
     }
 }
 
@@ -262,26 +273,26 @@ impl super::traits::SharedMemoryAccess for ThreadSafeSharedMemoryManager {
 
     fn create_shared_memory(
         &self,
-        pod_identifier: &str,
+        pod_path: &str,
         cfgs: &[super::DeviceConfig],
     ) -> Result<(), Self::Error> {
-        self.create_shared_memory(pod_identifier, cfgs)
+        self.create_shared_memory(std::path::Path::new(pod_path), cfgs)
     }
 
     fn get_shared_memory(
         &self,
-        pod_identifier: &str,
+        pod_path: &str,
     ) -> Result<*const super::SharedDeviceState, Self::Error> {
-        self.get_shared_memory(pod_identifier)
+        self.get_shared_memory(std::path::Path::new(pod_path))
             .map(|ptr| ptr as *const _)
     }
 
-    fn add_pid(&self, pod_identifier: &str, host_pid: usize) -> Result<(), Self::Error> {
-        self.add_pid(pod_identifier, host_pid)
+    fn add_pid(&self, pod_path: &str, host_pid: usize) -> Result<(), Self::Error> {
+        self.add_pid(std::path::Path::new(pod_path), host_pid)
     }
 
-    fn remove_pid(&self, pod_identifier: &str, host_pid: usize) -> Result<(), Self::Error> {
-        self.remove_pid(pod_identifier, host_pid)
+    fn remove_pid(&self, pod_path: &str, host_pid: usize) -> Result<(), Self::Error> {
+        self.remove_pid(std::path::Path::new(pod_path), host_pid)
     }
 
     fn cleanup_orphaned_files<F>(

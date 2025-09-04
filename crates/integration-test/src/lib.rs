@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
-use utils::shared_memory::DeviceConfig;
+use utils::shared_memory::{DeviceConfig, PodIdentifier};
 
 // Type aliases for complex return types
 type CudaTestResult = Result<
@@ -321,26 +321,31 @@ pub struct TestCoordinatorManager {
     pod_state: Arc<PodStateStore>,
     cancellation_token: CancellationToken,
     gpu_index: usize,
-    registered_pods: HashSet<String>,
+    registered_pods: HashSet<PodIdentifier>,
 }
 
 /// A registered pod within the test coordinator
 pub struct TestPod {
-    pod_id: String,
+    pub pod_id: PodIdentifier,
     device_config: DeviceConfig,
     _cleanup_guard: PodCleanupGuard,
 }
 
 struct PodCleanupGuard {
-    pod_id: String,
+    pod_id: PodIdentifier,
 }
 
 impl Drop for PodCleanupGuard {
     fn drop(&mut self) {
         // Clean up shared memory file for this specific pod
-        let _ = std::fs::remove_file(format!("/dev/shm/{}", self.pod_id));
+        let _ = std::fs::remove_file(format!(
+            "/dev/shm/{}",
+            self.pod_id.to_path().as_ref().display()
+        ));
         // Remove environment variable if it matches this pod
-        if std::env::var(TF_SHM_IDENTIFIER).unwrap_or_default() == self.pod_id {
+        if std::env::var(TF_SHM_IDENTIFIER).unwrap_or_default()
+            == self.pod_id.to_path().as_ref().to_string_lossy()
+        {
             std::env::remove_var(TF_SHM_IDENTIFIER);
         }
     }
@@ -422,18 +427,20 @@ impl TestCoordinatorManager {
         pod_name: &str,
         device_config: DeviceConfig,
     ) -> Result<TestPod, Report<IntegrationTestError>> {
-        let pod_identifier = format!("tf_shm_pod_{pod_name}");
+        let pod_identifier_str = format!("tf_shm_pod_{pod_name}");
+        let pod_identifier = PodIdentifier::new("test", pod_name);
 
         // Register the pod
         self.pod_state
             .register_pod(
-                &pod_identifier,
+                &pod_identifier_str,
                 WorkerInfo::default(),
                 vec![device_config.clone()],
             )
             .map_err(|e| {
-                Report::new(IntegrationTestError::ProcessSpawnFailed)
-                    .attach_printable(format!("Failed to register pod '{pod_identifier}': {e}"))
+                Report::new(IntegrationTestError::ProcessSpawnFailed).attach_printable(format!(
+                    "Failed to register pod '{pod_identifier_str}': {e}"
+                ))
             })?;
 
         self.coordinator
@@ -462,7 +469,8 @@ impl TestCoordinatorManager {
         pod: &TestPod,
         pid: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.pod_state.register_process(&pod.pod_id, pid)?;
+        self.pod_state
+            .register_process(&pod.pod_id.to_path().as_ref().to_string_lossy(), pid)?;
         self.coordinator.register_process(&pod.pod_id, pid)?;
         Ok(())
     }
@@ -477,7 +485,7 @@ impl TestCoordinatorManager {
         is_limiter_enabled: bool,
     ) -> Result<(u128, Output), Report<IntegrationTestError>> {
         // Set environment variable for this pod
-        std::env::set_var(TF_SHM_IDENTIFIER, &pod.pod_id);
+        std::env::set_var(TF_SHM_IDENTIFIER, pod.pod_id.to_path().as_ref());
 
         self.run_test_with_detailed_output(
             description,
@@ -553,8 +561,8 @@ impl Drop for TestCoordinatorManager {
 
 impl TestPod {
     /// Get the pod ID
-    pub fn pod_id(&self) -> &str {
-        &self.pod_id
+    pub fn pod_id(&self) -> String {
+        self.pod_id.to_path().as_ref().to_string_lossy().to_string()
     }
 
     /// Get the device configuration

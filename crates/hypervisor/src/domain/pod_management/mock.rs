@@ -237,29 +237,29 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
 
     fn create_shared_memory(
         &self,
-        pod_identifier: &str,
+        pod_path: &str,
         _cfgs: &[DeviceConfig],
     ) -> Result<(), Self::Error> {
-        self.log_operation(format!("create_shared_memory({pod_identifier})"));
+        self.log_operation(format!("create_shared_memory({})", pod_path));
         Ok(())
     }
 
     fn get_shared_memory(
         &self,
-        pod_identifier: &str,
+        pod_path: &str,
     ) -> Result<*const utils::shared_memory::SharedDeviceState, Self::Error> {
-        self.log_operation(format!("get_shared_memory({pod_identifier})"));
+        self.log_operation(format!("get_shared_memory({})", pod_path));
         // Return a null pointer for testing - real tests would need proper shared memory
         Ok(std::ptr::null())
     }
 
-    fn add_pid(&self, pod_identifier: &str, host_pid: usize) -> Result<(), Self::Error> {
-        self.log_operation(format!("add_pid({pod_identifier}, {host_pid})"));
+    fn add_pid(&self, pod_path: &str, host_pid: usize) -> Result<(), Self::Error> {
+        self.log_operation(format!("add_pid({}, {host_pid})", pod_path));
         Ok(())
     }
 
-    fn remove_pid(&self, pod_identifier: &str, host_pid: usize) -> Result<(), Self::Error> {
-        self.log_operation(format!("remove_pid({pod_identifier}, {host_pid})"));
+    fn remove_pid(&self, pod_path: &str, host_pid: usize) -> Result<(), Self::Error> {
+        self.log_operation(format!("remove_pid({}, {host_pid})", pod_path));
         Ok(())
     }
 

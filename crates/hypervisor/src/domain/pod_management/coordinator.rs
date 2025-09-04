@@ -16,7 +16,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, SharedDeviceState};
+use utils::shared_memory::{
+    handle::SharedMemoryHandle, DeviceConfig, PodIdentifier, SharedDeviceState,
+};
 
 use super::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
 use super::utilization::DeviceSnapshot;
@@ -290,10 +292,13 @@ where
     /// Ensures a pod is registered with device configurations (idempotent operation)
     pub async fn ensure_pod_registered(
         &self,
-        pod_identifier: &str,
+        pod_identifier: &PodIdentifier,
         configs: &[DeviceConfig],
     ) -> Result<Vec<usize>> {
-        let restored_pids = match self.shared_memory.get_shared_memory(pod_identifier) {
+        let restored_pids = match self
+            .shared_memory
+            .get_shared_memory(&pod_identifier.to_path().as_ref().to_string_lossy())
+        {
             Ok(ptr) => {
                 debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
                 let state = unsafe { &*ptr };
@@ -321,7 +326,10 @@ where
             Err(e) => {
                 debug!(pod_identifier = %pod_identifier, error = %e, "Creating new shared memory for pod");
                 self.shared_memory
-                    .create_shared_memory(pod_identifier, configs)
+                    .create_shared_memory(
+                        &pod_identifier.to_path().as_ref().to_string_lossy(),
+                        configs,
+                    )
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
                 Vec::new()
             }
@@ -340,10 +348,13 @@ where
     }
 
     /// Registers a process within a pod (Process-level operation)
-    pub fn register_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
+    pub fn register_process(&self, pod_identifier: &PodIdentifier, host_pid: u32) -> Result<()> {
         // Add PID to shared memory
         self.shared_memory
-            .add_pid(pod_identifier, host_pid as usize)
+            .add_pid(
+                &pod_identifier.to_path().as_ref().to_string_lossy(),
+                host_pid as usize,
+            )
             .map_err(|e| anyhow::anyhow!("{}", e))
             .context("Failed to add PID to shared memory")?;
 
@@ -357,10 +368,17 @@ where
     }
 
     /// Unregisters a single process from the coordinator.
-    pub async fn unregister_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
+    pub async fn unregister_process(
+        &self,
+        pod_identifier: &PodIdentifier,
+        host_pid: u32,
+    ) -> Result<()> {
         // Remove PID from shared memory
         self.shared_memory
-            .remove_pid(pod_identifier, host_pid as usize)
+            .remove_pid(
+                &pod_identifier.to_path().as_ref().to_string_lossy(),
+                host_pid as usize,
+            )
             .map_err(|e| anyhow::anyhow!("{}", e))
             .context("Failed to remove PID from shared memory")?;
 
@@ -381,7 +399,7 @@ where
         new_share: Option<i32>,
         timestamp: u64,
     ) -> Result<()> {
-        Self::with_shared_memory_handle(pod_identifier, move |state, pod_identifier: &str| {
+        Self::with_shared_memory_handle(pod_identifier, move |state, pod_identifier| {
             if !state.has_device(device_index) {
                 anyhow::bail!(
                     "Device {} not found in shared memory for pod {}",
@@ -413,7 +431,7 @@ where
 
     /// Gets available cores for a device efficiently
     async fn get_available_cores(pod_identifier: &str, device_index: usize) -> Result<i32> {
-        Self::with_shared_memory_handle(pod_identifier, move |state, pod_identifier: &str| {
+        Self::with_shared_memory_handle(pod_identifier, move |state, pod_identifier| {
             state
                 .with_device(device_index, |device| device.device_info.get_available_cores())
                 .context(format!(
@@ -428,8 +446,8 @@ where
         F: FnOnce(&SharedDeviceState, &str) -> Result<R> + Send + 'static,
         R: Send + 'static,
     {
-        let handle =
-            SharedMemoryHandle::open(pod_identifier).context("Failed to open shared memory")?;
+        let handle = SharedMemoryHandle::open(std::path::Path::new(pod_identifier))
+            .context("Failed to open shared memory")?;
         let state = handle.get_state();
         f(state, pod_identifier)
     }
@@ -741,24 +759,25 @@ mod tests {
         );
 
         // Test process registration
-        let result = coordinator.register_process("test-pod", 1234);
+        let pod_id = PodIdentifier::new("test-namespace", "test-pod");
+        let result = coordinator.register_process(&pod_id, 1234);
         assert!(result.is_ok());
 
         // Verify operation was logged in mock
         let operations = shared_memory.get_operations();
         assert!(operations
             .iter()
-            .any(|op| op.contains("add_pid(test-pod, 1234)")));
+            .any(|op| op.contains("add_pid(test-namespace/test-pod, 1234)")));
 
         // Test process unregistration
-        let result = coordinator.unregister_process("test-pod", 1234).await;
+        let result = coordinator.unregister_process(&pod_id, 1234).await;
         assert!(result.is_ok());
 
         // Verify operation was logged in mock
         let operations = shared_memory.get_operations();
         assert!(operations
             .iter()
-            .any(|op| op.contains("remove_pid(test-pod, 1234)")));
+            .any(|op| op.contains("remove_pid(test-namespace/test-pod, 1234)")));
     }
 
     #[tokio::test]

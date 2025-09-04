@@ -20,21 +20,18 @@ pub trait SharedMemoryAccess: Send + Sync {
     /// Create shared memory for a pod with given device configurations
     fn create_shared_memory(
         &self,
-        pod_identifier: &str,
+        pod_path: &str,
         cfgs: &[DeviceConfig],
     ) -> Result<(), Self::Error>;
 
     /// Get shared memory pointer for a pod
-    fn get_shared_memory(
-        &self,
-        pod_identifier: &str,
-    ) -> Result<*const SharedDeviceState, Self::Error>;
+    fn get_shared_memory(&self, pod_path: &str) -> Result<*const SharedDeviceState, Self::Error>;
 
     /// Add a PID to shared memory for a pod
-    fn add_pid(&self, pod_identifier: &str, host_pid: usize) -> Result<(), Self::Error>;
+    fn add_pid(&self, pod_path: &str, host_pid: usize) -> Result<(), Self::Error>;
 
     /// Remove a PID from shared memory for a pod
-    fn remove_pid(&self, pod_identifier: &str, host_pid: usize) -> Result<(), Self::Error>;
+    fn remove_pid(&self, pod_path: &str, host_pid: usize) -> Result<(), Self::Error>;
 
     /// Cleanup orphaned shared memory files
     fn cleanup_orphaned_files<F>(

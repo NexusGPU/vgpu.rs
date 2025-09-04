@@ -9,6 +9,7 @@ use nvml_wrapper::Nvml;
 use tracing::{info, warn};
 use utils::shared_memory::handle::SharedMemoryHandle;
 use utils::shared_memory::traits::SharedMemoryAccess;
+use utils::shared_memory::PodIdentifier;
 
 use crate::domain::hypervisor::HypervisorType;
 use crate::gpu_observer::GpuObserver;
@@ -25,7 +26,6 @@ use super::device_info::create_device_configs_from_worker_info;
 use super::pod_state_store::PodStateStore;
 use super::types::{PodManagementError, Result};
 
-const IDENTIFIER_PREFIX: &str = "tf_shm_";
 /// Simplified pod manager with unified state management
 pub struct PodManager<M, P, D, T> {
     /// Centralized pod state store
@@ -47,6 +47,11 @@ impl<M, P, D, T> PodManager<M, P, D, T> {
     /// Find a pod by worker PID.
     pub fn find_pod_by_worker_pid(&self, pid: u32) -> Option<String> {
         self.pod_state_store.get_pod_by_pid(pid)
+    }
+
+    /// Parse namespace and pod name from a shared memory path identifier
+    pub fn pod_name_namespace(&self, identifier: &str) -> Option<(String, String)> {
+        PodIdentifier::from_path(identifier).map(|id| (id.namespace, id.name))
     }
 }
 
@@ -102,7 +107,7 @@ where
                 );
                 continue;
             };
-            match self.ensure_pod_registered(namespace, pod_name).await {
+            match self.ensure_pod_registered(&namespace, &pod_name).await {
                 Err(PodManagementError::PodNotFound {
                     namespace,
                     pod_name,
@@ -134,7 +139,10 @@ where
         let pod_identifier = self.pod_identifier(namespace, pod_name);
 
         // Check local state first
-        if let Some(pod_state) = self.pod_state_store.get_pod(&pod_identifier) {
+        if let Some(pod_state) = self
+            .pod_state_store
+            .get_pod(&pod_identifier.to_path().as_ref().to_string_lossy())
+        {
             return Ok(Some(pod_state.info));
         }
 
@@ -212,23 +220,18 @@ where
     }
 
     // Private helper methods
-    fn pod_identifier(&self, namespace: &str, pod_name: &str) -> String {
-        format!("{IDENTIFIER_PREFIX}{namespace}_{pod_name}")
-    }
-
-    fn pod_name_namespace<'s>(&self, pod_identifier: &'s str) -> Option<(&'s str, &'s str)> {
-        let rest = pod_identifier.strip_prefix(IDENTIFIER_PREFIX)?;
-        let mut parts = rest.splitn(2, '_');
-        let namespace = parts.next()?;
-        let pod_name = parts.next().unwrap_or("");
-        Some((namespace, pod_name))
+    fn pod_identifier(&self, namespace: &str, pod_name: &str) -> PodIdentifier {
+        PodIdentifier::new(namespace, pod_name)
     }
 
     /// Ensure pod is registered in all components (lazy loading)
     pub async fn ensure_pod_registered(&self, namespace: &str, pod_name: &str) -> Result<()> {
         let pod_identifier = self.pod_identifier(namespace, pod_name);
         // Check if already registered
-        if self.pod_state_store.contains_pod(&pod_identifier) {
+        if self
+            .pod_state_store
+            .contains_pod(&pod_identifier.to_path().as_ref().to_string_lossy())
+        {
             return Ok(());
         }
 
@@ -262,8 +265,11 @@ where
         };
 
         // Register in state store
-        self.pod_state_store
-            .register_pod(&pod_identifier, pod_info.0, device_configs.clone())?;
+        self.pod_state_store.register_pod(
+            &pod_identifier.to_path().as_ref().to_string_lossy(),
+            pod_info.0,
+            device_configs.clone(),
+        )?;
 
         let restored_pids = self
             .limiter_coordinator
@@ -275,8 +281,10 @@ where
 
         if !restored_pids.is_empty() {
             for pid in restored_pids {
-                self.pod_state_store
-                    .register_process(&pod_identifier, pid as u32)?;
+                self.pod_state_store.register_process(
+                    &pod_identifier.to_path().as_ref().to_string_lossy(),
+                    pid as u32,
+                )?;
             }
         }
 
@@ -333,9 +341,9 @@ where
         // Get pod state to extract worker info
         let pod_state = self
             .pod_state_store
-            .get_pod(&pod_identifier)
+            .get_pod(&pod_identifier.to_path().as_ref().to_string_lossy())
             .ok_or_else(|| PodManagementError::PodIdentifierNotFound {
-                pod_identifier: pod_identifier.clone(),
+                pod_identifier: pod_identifier.to_string(),
             })?;
 
         let WorkerInfo {
@@ -360,8 +368,10 @@ where
         ));
 
         // 1. Register process in state store
-        self.pod_state_store
-            .register_process(&pod_identifier, host_pid)?;
+        self.pod_state_store.register_process(
+            &pod_identifier.to_path().as_ref().to_string_lossy(),
+            host_pid,
+        )?;
 
         // 2. Register with limiter coordinator
         // Register process with the limiter coordinator.
@@ -372,15 +382,18 @@ where
             })?;
 
         // 3. Set up shared memory handle
-        let shared_memory_handle =
-            Arc::new(SharedMemoryHandle::open(&pod_identifier).map_err(|e| {
+        let shared_memory_handle = Arc::new(
+            SharedMemoryHandle::open(pod_identifier.to_path().as_ref()).map_err(|e| {
                 PodManagementError::SharedMemoryError {
                     message: format!("Failed to open shared memory for {pod_identifier}: {e}"),
                 }
-            })?);
+            })?,
+        );
 
-        self.pod_state_store
-            .set_shared_memory_handle(&pod_identifier, shared_memory_handle)?;
+        self.pod_state_store.set_shared_memory_handle(
+            &pod_identifier.to_path().as_ref().to_string_lossy(),
+            shared_memory_handle,
+        )?;
 
         // 4. Add worker to hypervisor
         if !self.hypervisor.process_exists(host_pid).await {
@@ -405,9 +418,13 @@ where
             let mut pids = Vec::with_capacity(stats.total_processes);
 
             for pod_id in self.pod_state_store.list_pod_identifiers() {
-                let processes = self.pod_state_store.get_pod_processes(&pod_id);
-                for process in processes {
-                    pids.push(process);
+                if let Some(pod_identifier) = PodIdentifier::from_path(&pod_id) {
+                    let processes = self
+                        .pod_state_store
+                        .get_pod_processes(&pod_identifier.to_path().as_ref().to_string_lossy());
+                    for process in processes {
+                        pids.push(process);
+                    }
                 }
             }
             pids
@@ -463,16 +480,18 @@ where
         }
 
         // 2. Unregister from limiter coordinator
-        if let Err(e) = self
-            .limiter_coordinator
-            .unregister_process(&pod_identifier, host_pid)
-            .await
-        {
-            tracing::error!(
-                "Failed to unregister process {} from limiter coordinator: {}",
-                host_pid,
-                e
-            );
+        if let Some(pod_id) = PodIdentifier::from_path(&pod_identifier) {
+            if let Err(e) = self
+                .limiter_coordinator
+                .unregister_process(&pod_id, host_pid)
+                .await
+            {
+                tracing::error!(
+                    "Failed to unregister process {} from limiter coordinator: {}",
+                    host_pid,
+                    e
+                );
+            }
         } else {
             info!("Unregistered process {} from limiter coordinator", host_pid);
         }
@@ -562,7 +581,7 @@ mod tests {
 
         for (identifier, expected) in edge_cases {
             let result = identifier
-                .strip_prefix(IDENTIFIER_PREFIX)
+                .strip_prefix("tf_shm_")
                 .and_then(|s| s.split_once('_'));
 
             assert_eq!(result, expected, "Failed for identifier: {identifier}");
@@ -582,11 +601,11 @@ mod tests {
         ];
 
         for (namespace, pod_name) in special_cases {
-            let identifier = format!("{IDENTIFIER_PREFIX}{namespace}_{pod_name}");
+            let identifier = format!("tf_shm_{namespace}_{pod_name}");
 
             // Test parsing back
             let parsed = identifier
-                .strip_prefix(IDENTIFIER_PREFIX)
+                .strip_prefix("tf_shm_")
                 .and_then(|s| s.split_once('_'));
 
             if namespace.is_empty() {
