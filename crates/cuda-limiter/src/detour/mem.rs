@@ -34,30 +34,38 @@ use crate::GLOBAL_LIMITER;
 /// Returns a CUDA result code
 macro_rules! check_and_alloc {
     ($request_size:expr, $alloc_name:expr, $alloc_fn:expr) => {{
-        let (result, device_idx) = with_device!(|limiter: &crate::limiter::Limiter, device_idx: usize| {
+        let device_result = with_device!(|limiter: &crate::limiter::Limiter, device_idx: usize| {
             (limiter.get_pod_memory_usage(device_idx), device_idx)
         });
 
-        match result {
-            Ok((used, mem_limit)) if used.saturating_add($request_size) > mem_limit => {
-                tracing::warn!(
-                    "Allocation denied by limiter ({}): used ({}) + request ({}) > limit ({}) device_idx: {}",
-                    $alloc_name,
-                    used,
-                    $request_size,
-                    mem_limit,
-                    device_idx
-                );
-                CUresult::CUDA_ERROR_OUT_OF_MEMORY
-            }
-            Ok(_) => cuda_alloc_with_retry($request_size, || $alloc_fn()),
-            Err(Error::DeviceNotHealthy(device_uuid)) => {
-                tracing::warn!("Device {device_uuid} is not healthy");
-                $alloc_fn()
+        match device_result {
+            Ok((result, device_idx)) => {
+                match result {
+                    Ok((used, mem_limit)) if used.saturating_add($request_size) > mem_limit => {
+                        tracing::warn!(
+                            "Allocation denied by limiter ({}): used ({}) + request ({}) > limit ({}) device_idx: {}",
+                            $alloc_name,
+                            used,
+                            $request_size,
+                            mem_limit,
+                            device_idx
+                        );
+                        CUresult::CUDA_ERROR_OUT_OF_MEMORY
+                    }
+                    Ok(_) => cuda_alloc_with_retry($request_size, || $alloc_fn()),
+                    Err(Error::DeviceNotHealthy(device_uuid)) => {
+                        tracing::warn!("Device {device_uuid} is not healthy");
+                        $alloc_fn()
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to get pod memory usage: {e}");
+                        CUresult::CUDA_ERROR_UNKNOWN
+                    }
+                }
             }
             Err(e) => {
-                tracing::error!("Failed to get pod memory usage: {e}");
-                CUresult::CUDA_ERROR_UNKNOWN
+                tracing::warn!("Device context error: {e}, falling back to native call");
+                $alloc_fn()
             }
         }
     }};
@@ -298,44 +306,64 @@ pub(crate) unsafe fn cu_device_total_mem_detour(bytes: *mut u64, device: CUdevic
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    with_device!(|limiter: &Limiter, device_idx: usize| {
-        match limiter.get_pod_memory_usage(device_idx) {
-            Ok((used, mem_limit)) => {
-                *total = mem_limit;
-                *free = mem_limit - used;
-                CUresult::CUDA_SUCCESS
+    let result = {
+        with_device!(|limiter: &Limiter, device_idx: usize| {
+            match limiter.get_pod_memory_usage(device_idx) {
+                Ok((used, mem_limit)) => {
+                    *total = mem_limit;
+                    *free = mem_limit - used;
+                    CUresult::CUDA_SUCCESS
+                }
+                Err(Error::DeviceNotHealthy(device_idx)) => {
+                    tracing::warn!("Device {device_idx} is not healthy");
+                    CUresult::CUDA_ERROR_UNKNOWN
+                }
+                Err(e) => {
+                    tracing::error!("Failed to get pod memory usage: {e}");
+                    CUresult::CUDA_ERROR_UNKNOWN
+                }
             }
-            Err(Error::DeviceNotHealthy(device_idx)) => {
-                tracing::warn!("Device {device_idx} is not healthy");
-                CUresult::CUDA_ERROR_UNKNOWN
-            }
-            Err(e) => {
-                tracing::error!("Failed to get pod memory usage: {e}");
-                CUresult::CUDA_ERROR_UNKNOWN
-            }
+        })
+    };
+
+    match result {
+        Ok(cuda_result) => cuda_result,
+        Err(e) => {
+            tracing::warn!("Device context error: {e}, falling back to native call");
+            FN_CU_MEM_GET_INFO_V2(free, total)
         }
-    })
+    }
 }
 
 #[hook_fn]
 pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> CUresult {
-    with_device!(|limiter: &Limiter, device_idx: usize| {
-        match limiter.get_pod_memory_usage(device_idx) {
-            Ok((used, mem_limit)) => {
-                *total = mem_limit;
-                *free = mem_limit - used;
-                CUresult::CUDA_SUCCESS
+    let result = {
+        with_device!(|limiter: &Limiter, device_idx: usize| {
+            match limiter.get_pod_memory_usage(device_idx) {
+                Ok((used, mem_limit)) => {
+                    *total = mem_limit;
+                    *free = mem_limit - used;
+                    CUresult::CUDA_SUCCESS
+                }
+                Err(Error::DeviceNotHealthy(device_idx)) => {
+                    tracing::warn!("Device {device_idx} is not healthy");
+                    CUresult::CUDA_ERROR_UNKNOWN
+                }
+                Err(e) => {
+                    tracing::error!("Failed to get pod memory usage: {e}");
+                    CUresult::CUDA_ERROR_UNKNOWN
+                }
             }
-            Err(Error::DeviceNotHealthy(device_idx)) => {
-                tracing::warn!("Device {device_idx} is not healthy");
-                CUresult::CUDA_ERROR_UNKNOWN
-            }
-            Err(e) => {
-                tracing::error!("Failed to get pod memory usage: {e}");
-                CUresult::CUDA_ERROR_UNKNOWN
-            }
+        })
+    };
+
+    match result {
+        Ok(cuda_result) => cuda_result,
+        Err(e) => {
+            tracing::warn!("Device context error: {e}, falling back to native call");
+            FN_CU_MEM_GET_INFO(free, total)
         }
-    })
+    }
 }
 
 /// Enables hooks for CUDA memory management functions.

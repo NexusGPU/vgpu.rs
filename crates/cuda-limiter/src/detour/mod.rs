@@ -3,27 +3,25 @@ pub(crate) mod mem;
 pub(crate) mod nvml;
 
 /// macro: get current device UUID and execute expression
+/// Returns Result<T, Error> where T is the return type of the expression
 #[macro_export]
 macro_rules! with_device {
     ($expr:expr) => {{
         let mut device: i32 = 0;
-        unsafe {
+        let cuda_result = unsafe {
             // Call the CUDA API to get the current device
-            let result = ($crate::culib::culib().cuCtxGetDevice)(&mut device as *mut i32);
-            if result != ::cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
-                panic!("Failed to get current CUDA device: error code {:?}", result);
-            }
+            ($crate::culib::culib().cuCtxGetDevice)(&mut device as *mut i32)
+        };
 
-            let limiter: &$crate::limiter::Limiter = $crate::GLOBAL_LIMITER
-                .get()
-                .expect("Limiter not initialized");
-
-            let device_index = limiter.device_raw_index_by_cu_device(device);
-
-            if let Err(e) = device_index {
-                panic!("Failed to get device index: {}", e);
-            } else {
-                $expr(limiter, device_index.unwrap())
+        if cuda_result != ::cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
+            Err($crate::limiter::Error::Cuda(cuda_result))
+        } else {
+            match $crate::GLOBAL_LIMITER.get() {
+                Some(limiter) => match limiter.device_raw_index_by_cu_device(device) {
+                    Ok(device_index) => Ok($expr(limiter, device_index)),
+                    Err(e) => Err(e),
+                },
+                None => Err($crate::limiter::Error::LimiterNotInitialized),
             }
         }
     }};
