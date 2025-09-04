@@ -46,6 +46,9 @@ pub(crate) enum Error {
 
     #[error("CUDA error: {0:?}")]
     Cuda(cudarc::driver::sys::CUresult),
+
+    #[error("Limiter not initialized")]
+    LimiterNotInitialized,
 }
 
 #[derive(Debug)]

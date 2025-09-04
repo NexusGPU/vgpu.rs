@@ -35,8 +35,8 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_ptsz_detour(
     kernel_params: *mut *mut c_void,
     extra: *mut *mut c_void,
 ) -> CUresult {
-    // Use with_device macro directly
-    with_device!(|limiter: &Limiter, device_idx: usize| {
+    // Use with_device macro with error handling
+    if let Err(e) = with_device!(|limiter: &Limiter, device_idx: usize| {
         if let Err(e) = limiter.rate_limiter(
             device_idx,
             grid_dim_x * grid_dim_y * grid_dim_z,
@@ -44,7 +44,9 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_ptsz_detour(
         ) {
             tracing::error!("Rate limiter failed: {}", e);
         }
-    });
+    }) {
+        tracing::warn!("Device context error: {e}, falling back to native call");
+    }
 
     FN_CU_LAUNCH_KERNEL(
         f,
@@ -75,8 +77,8 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_detour(
     kernel_params: *mut *mut c_void,
     extra: *mut *mut c_void,
 ) -> CUresult {
-    // Use with_device macro directly
-    with_device!(|limiter: &Limiter, device_idx: usize| {
+    // Use with_device macro with error handling
+    if let Err(e) = with_device!(|limiter: &Limiter, device_idx: usize| {
         if let Err(e) = limiter.rate_limiter(
             device_idx,
             grid_dim_x * grid_dim_y * grid_dim_z,
@@ -84,7 +86,9 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_detour(
         ) {
             tracing::error!("Rate limiter failed: {}", e);
         }
-    });
+    }) {
+        tracing::warn!("Device context error: {e}, falling back to native call");
+    }
 
     FN_CU_LAUNCH_KERNEL(
         f,
@@ -103,8 +107,8 @@ pub(crate) unsafe extern "C" fn cu_launch_kernel_detour(
 
 #[hook_fn]
 pub(crate) unsafe extern "C" fn cu_launch_detour(f: CUfunction) -> CUresult {
-    // Use with_device macro directly
-    with_device!(|limiter: &Limiter, device_idx: usize| {
+    // Use with_device macro with error handling
+    if let Err(e) = with_device!(|limiter: &Limiter, device_idx: usize| {
         // Get block dimensions
         match limiter.get_block_dimensions(device_idx) {
             Ok((block_x, block_y, block_z)) => {
@@ -120,7 +124,9 @@ pub(crate) unsafe extern "C" fn cu_launch_detour(f: CUfunction) -> CUresult {
                 }
             }
         }
-    });
+    }) {
+        tracing::warn!("Device context error: {e}, falling back to native call");
+    }
 
     FN_CU_LAUNCH(f)
 }
@@ -138,8 +144,8 @@ pub(crate) unsafe extern "C" fn cu_launch_cooperative_kernel_ptsz_detour(
     h_stream: CUstream,
     kernel_params: *mut *mut c_void,
 ) -> CUresult {
-    // Use with_device macro directly
-    with_device!(|limiter: &Limiter, device_idx: usize| {
+    // Use with_device macro with error handling
+    if let Err(e) = with_device!(|limiter: &Limiter, device_idx: usize| {
         if let Err(e) = limiter.rate_limiter(
             device_idx,
             grid_dim_x * grid_dim_y * grid_dim_z,
@@ -147,7 +153,9 @@ pub(crate) unsafe extern "C" fn cu_launch_cooperative_kernel_ptsz_detour(
         ) {
             tracing::error!("Rate limiter failed: {}", e);
         }
-    });
+    }) {
+        tracing::warn!("Device context error: {e}, falling back to native call");
+    }
 
     FN_CU_LAUNCH_COOPERATIVE_KERNEL_PTSZ(
         f,
@@ -176,8 +184,8 @@ pub(crate) unsafe extern "C" fn cu_launch_cooperative_kernel_detour(
     h_stream: CUstream,
     kernel_params: *mut *mut c_void,
 ) -> CUresult {
-    // Use with_device macro directly
-    with_device!(|limiter: &Limiter, device_idx: usize| {
+    // Use with_device macro with error handling
+    if let Err(e) = with_device!(|limiter: &Limiter, device_idx: usize| {
         if let Err(e) = limiter.rate_limiter(
             device_idx,
             grid_dim_x * grid_dim_y * grid_dim_z,
@@ -185,7 +193,9 @@ pub(crate) unsafe extern "C" fn cu_launch_cooperative_kernel_detour(
         ) {
             tracing::error!("Rate limiter failed: {}", e);
         }
-    });
+    }) {
+        tracing::warn!("Device context error: {e}, falling back to native call");
+    }
 
     FN_CU_LAUNCH_COOPERATIVE_KERNEL(
         f,
@@ -207,8 +217,8 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_detour(
     grid_width: c_int,
     grid_height: c_int,
 ) -> CUresult {
-    // Use with_device macro directly
-    with_device!(|limiter: &Limiter, device_idx: usize| {
+    // Use with_device macro with error handling
+    if let Err(e) = with_device!(|limiter: &Limiter, device_idx: usize| {
         // Get block dimensions
         match limiter.get_block_dimensions(device_idx) {
             Ok((block_x, block_y, block_z)) => {
@@ -230,7 +240,9 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_detour(
                 }
             }
         }
-    });
+    }) {
+        tracing::warn!("Device context error: {e}, falling back to native call");
+    }
 
     FN_CU_LAUNCH_GRID(f, grid_width, grid_height)
 }
@@ -242,8 +254,8 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_async_detour(
     grid_height: c_int,
     h_stream: CUstream,
 ) -> CUresult {
-    // Use with_device macro directly
-    with_device!(|limiter: &Limiter, device_idx: usize| {
+    // Use with_device macro with error handling
+    if let Err(e) = with_device!(|limiter: &Limiter, device_idx: usize| {
         // Get block dimensions
         match limiter.get_block_dimensions(device_idx) {
             Ok((block_x, block_y, block_z)) => {
@@ -265,7 +277,9 @@ pub(crate) unsafe extern "C" fn cu_launch_grid_async_detour(
                 }
             }
         }
-    });
+    }) {
+        tracing::warn!("Device context error: {e}, falling back to native call");
+    }
 
     FN_CU_LAUNCH_GRID_ASYNC(f, grid_width, grid_height, h_stream)
 }
@@ -277,8 +291,8 @@ pub(crate) unsafe extern "C" fn cu_func_set_block_shape_detour(
     y: c_int,
     z: c_int,
 ) -> CUresult {
-    // Use with_device macro directly
-    with_device!(|limiter: &Limiter, device_idx: usize| {
+    // Use with_device macro with error handling
+    if let Err(e) = with_device!(|limiter: &Limiter, device_idx: usize| {
         // Set block dimensions
         if let Err(err) = limiter.set_block_dimensions(device_idx, x as u32, y as u32, z as u32) {
             tracing::warn!(
@@ -289,7 +303,9 @@ pub(crate) unsafe extern "C" fn cu_func_set_block_shape_detour(
                 err
             );
         }
-    });
+    }) {
+        tracing::warn!("Device context error: {e}, falling back to native call");
+    }
 
     FN_CU_FUNC_SET_BLOCK_SHAPE(hfunc, x, y, z)
 }
