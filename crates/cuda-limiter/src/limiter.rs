@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -28,9 +29,6 @@ pub(crate) enum Error {
 
     #[error("Shared memory access failed: {0}")]
     SharedMemory(#[from] anyhow::Error),
-
-    #[error("Pod name or namespace not found in environment")]
-    PodNameOrNamespaceNotFound,
 
     #[error("Device {0} not configured")]
     DeviceNotConfigured(usize),
@@ -108,14 +106,13 @@ impl Limiter {
     /// Get or initialize the shared memory handle (lazy initialization)
     fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
         self.shared_memory_handle.get_or_try_init(|| {
-            if let Some(shm_name) = crate::mock_shm_name() {
+            if let Some(shm_path) = crate::mock_shm_path() {
                 Ok(SharedMemoryHandle::mock(
-                    shm_name,
+                    shm_path,
                     self.gpu_idx_uuids.clone(),
                 ))
             } else {
-                let pod_identifier = get_pod_identifier()?;
-                SharedMemoryHandle::open(&pod_identifier).map_err(Error::SharedMemory)
+                SharedMemoryHandle::open(shm_path()).map_err(Error::SharedMemory)
             }
         })
     }
@@ -332,12 +329,8 @@ impl Limiter {
     }
 }
 
-/// Get pod name from environment variable
-fn get_pod_identifier() -> Result<String, Error> {
-    let name = std::env::var("POD_NAME").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
-    let namespace =
-        std::env::var("POD_NAMESPACE").map_err(|_| Error::PodNameOrNamespaceNotFound)?;
-    Ok(format!("tf_shm_{namespace}_{name}"))
+fn shm_path() -> PathBuf {
+    PathBuf::from(&std::env::var("SHM_PATH").unwrap_or_else(|_| "/tensor-fusion/shm".to_string()))
 }
 
 #[cfg(test)]

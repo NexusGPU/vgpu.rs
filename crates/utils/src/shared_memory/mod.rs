@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
@@ -33,18 +34,30 @@ impl PodIdentifier {
         }
     }
 
-    /// Generate a path for shared memory operations
-    pub fn to_path(&self) -> impl AsRef<Path> {
-        format!("tf_shm_{}_{}", self.namespace, self.name)
+    pub fn to_path(&self, base_path: impl AsRef<Path>) -> PathBuf {
+        base_path
+            .as_ref()
+            .join(format!("{}/{}", self.namespace, self.name))
     }
 
-    /// Parse a PodIdentifier from a shared memory path
-    /// Path format: tf_shm_{namespace}_{name}
+    /// Parse a PodIdentifier from a full shared memory path  
+    /// Path format: {base_path}/{namespace}/{name}
+    /// This method extracts namespace/name from any base path
     pub fn from_path(path: &str) -> Option<Self> {
-        let path = path.strip_prefix("tf_shm_")?;
-        let mut parts = path.splitn(2, '_');
-        let namespace = parts.next()?.to_string();
-        let name = parts.next()?.to_string();
+        let path = Path::new(path);
+        let components: Vec<_> = path
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+
+        if components.len() < 2 {
+            return None;
+        }
+
+        // Extract the last 3 components: {namespace}/{name}
+        let len = components.len();
+        let namespace = components[len - 2].to_string();
+        let name = components[len - 1].to_string();
         Some(Self::new(namespace, name))
     }
 }
@@ -517,17 +530,11 @@ mod tests {
 
     use super::*;
 
-    const TEST_IDENTIFIER: &str = "test_shared_memory";
+    const TEST_SHM_BASE_PATH: &str = "/tmp/shm";
     const TEST_DEVICE_IDX: u32 = 0;
     const TEST_TOTAL_CORES: u32 = 1024;
     const TEST_UP_LIMIT: u32 = 80;
     const TEST_MEM_LIMIT: u64 = 1024 * 1024 * 1024; // 1GB
-
-    /// Helper function to check if shared memory file exists in /dev/shm
-    fn shared_memory_file_exists(identifier: &str) -> bool {
-        let path = format!("/dev/shm/{identifier}");
-        std::path::Path::new(&path).exists()
-    }
 
     fn create_test_configs() -> Vec<DeviceConfig> {
         vec![DeviceConfig {
@@ -539,10 +546,6 @@ mod tests {
             sm_count: 10,
             max_thread_per_sm: 1024,
         }]
-    }
-
-    fn create_unique_identifier(test_name: &str) -> String {
-        format!("{}_{}_{}", TEST_IDENTIFIER, test_name, std::process::id())
     }
 
     #[test]
@@ -650,10 +653,11 @@ mod tests {
     #[test]
     fn shared_memory_handle_create_and_open() {
         let configs = create_test_configs();
-        let identifier = create_unique_identifier("handle_create_open");
+        let identifier = PodIdentifier::new("handle_create_open", "test");
 
+        let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
         // Create shared memory
-        let handle1 = SharedMemoryHandle::create(&identifier, &configs)
+        let handle1 = SharedMemoryHandle::create(&pod_path, &configs)
             .expect("should create shared memory successfully");
 
         let state1 = handle1.get_state();
@@ -661,10 +665,9 @@ mod tests {
         assert_eq!(state1.device_count(), 1);
 
         // Verify shared memory file exists after creation
-        assert!(shared_memory_file_exists(&identifier));
-
+        assert!(Path::new(&pod_path).exists());
         // Open existing shared memory
-        let handle2 = SharedMemoryHandle::open(&identifier)
+        let handle2 = SharedMemoryHandle::open(&pod_path)
             .expect("should open existing shared memory successfully");
 
         let state2 = handle2.get_state();
@@ -683,7 +686,7 @@ mod tests {
         assert_eq!(cores, Some(42));
 
         // File should still exist while handles are active
-        assert!(shared_memory_file_exists(&identifier));
+        assert!(Path::new(&pod_path).exists());
     }
 
     #[test]
@@ -695,10 +698,11 @@ mod tests {
     #[test]
     fn concurrent_device_access() {
         let configs = create_test_configs();
-        let identifier = create_unique_identifier("concurrent_access");
+        let identifier = PodIdentifier::new("concurrent_access", "test");
+        let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
 
         let handle = Arc::new(
-            SharedMemoryHandle::create(&identifier, &configs)
+            SharedMemoryHandle::create(&pod_path, &configs)
                 .expect("should create shared memory successfully"),
         );
 
@@ -744,17 +748,18 @@ mod tests {
     fn thread_safe_manager_basic_operations() {
         let manager = ThreadSafeSharedMemoryManager::new();
         let configs = create_test_configs();
-        let identifier = create_unique_identifier("manager_basic");
+        let identifier = PodIdentifier::new("manager_basic", "test");
+        let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
 
         // Test creation
-        manager.create_shared_memory(&identifier, &configs).unwrap();
-        assert!(manager.contains(&identifier));
+        manager.create_shared_memory(&pod_path, &configs).unwrap();
+        assert!(manager.contains(&pod_path));
 
         // Verify shared memory file exists
-        assert!(shared_memory_file_exists(&identifier));
+        assert!(Path::new(&pod_path).exists());
 
         // Test getting shared memory
-        let ptr = manager.get_shared_memory(&identifier).unwrap();
+        let ptr = manager.get_shared_memory(&pod_path).unwrap();
         assert!(!ptr.is_null());
 
         // Test accessing through pointer
@@ -765,16 +770,23 @@ mod tests {
         }
 
         // Test cleanup
-        manager.cleanup(&identifier).unwrap();
-        assert!(!manager.contains(&identifier));
-        assert!(!shared_memory_file_exists(&identifier));
+        manager.cleanup(&pod_path).unwrap();
+        assert!(!manager.contains(&pod_path));
+
+        // Check that the path exists but is an empty directory
+        let path = Path::new(&pod_path);
+        assert!(
+            path.read_dir().unwrap().next().is_none(),
+            "Directory should be empty"
+        );
     }
 
     #[test]
     fn thread_safe_manager_concurrent_creation() {
         let manager = Arc::new(ThreadSafeSharedMemoryManager::new());
         let configs = create_test_configs();
-        let identifier = create_unique_identifier("manager_concurrent");
+        let identifier = PodIdentifier::new("manager_concurrent", "test");
+        let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
 
         let mut handles = vec![];
 
@@ -782,10 +794,10 @@ mod tests {
         for _ in 0..5 {
             let manager_clone = Arc::clone(&manager);
             let configs_clone = configs.clone();
-            let identifier_clone = identifier.clone();
+            let pod_path_clone = pod_path.clone();
 
             let handle = thread::spawn(move || {
-                let result = manager_clone.create_shared_memory(&identifier_clone, &configs_clone);
+                let result = manager_clone.create_shared_memory(&pod_path_clone, &configs_clone);
                 assert!(result.is_ok());
             });
 
@@ -797,8 +809,8 @@ mod tests {
         }
 
         // Should have exactly one shared memory
-        assert!(manager.contains(&identifier));
-        manager.cleanup(&identifier).unwrap();
+        assert!(manager.contains(&pod_path));
+        manager.cleanup(&pod_path).unwrap();
     }
 
     #[test]
@@ -810,16 +822,16 @@ mod tests {
         std::fs::write(test_file, "fake shared memory data").unwrap();
 
         // Verify file exists
-        assert!(std::path::Path::new(test_file).exists());
+        assert!(Path::new(test_file).exists());
 
         // Test cleanup with a pattern that won't match
         let cleaned = manager
-            .cleanup_orphaned_files("nonexistent_pattern", |_| false)
+            .cleanup_orphaned_files("nonexistent_pattern", |_| false, Path::new("/"))
             .unwrap();
         assert_eq!(cleaned.len(), 0);
 
         // File should still exist since pattern didn't match
-        assert!(std::path::Path::new(test_file).exists());
+        assert!(Path::new(test_file).exists());
 
         // Clean up test file
         std::fs::remove_file(test_file).unwrap();

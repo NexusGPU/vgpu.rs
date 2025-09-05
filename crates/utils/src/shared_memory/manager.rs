@@ -11,6 +11,8 @@ use spin::RwLock;
 use tracing::info;
 use tracing::warn;
 
+use crate::shared_memory::PodIdentifier;
+
 use super::{handle::SharedMemoryHandle, DeviceConfig, SharedDeviceState};
 
 /// A thread-safe shared memory manager.
@@ -117,34 +119,35 @@ impl ThreadSafeSharedMemoryManager {
     pub fn cleanup_orphaned_files(
         &self,
         glob_pattern: &str,
-        is_pod_tracking: impl Fn(&str) -> bool,
-    ) -> Result<Vec<String>> {
-        let mut cleaned_files = Vec::new();
+        is_pod_tracking: impl Fn(&PodIdentifier) -> bool,
+        base_path: impl AsRef<Path>,
+    ) -> Result<Vec<PodIdentifier>> {
+        let mut cleaned_pid_ids = Vec::new();
         let file_paths = self.find_shared_memory_files(glob_pattern)?;
 
         for file_path in file_paths {
-            let identifier = self.extract_identifier_from_path(&file_path)?;
+            let identifier = self.extract_identifier_from_path(&base_path, &file_path)?;
             if is_pod_tracking(&identifier) {
                 continue;
             }
             if self.is_shared_memory_orphaned(&file_path)? {
-                if let Err(e) = self.remove_orphaned_file(&file_path, &identifier) {
+                if let Err(e) = self.remove_orphaned_file(&file_path) {
                     warn!(
                         "Failed to remove orphaned file {}: {}",
                         file_path.display(),
                         e
                     );
                 } else {
-                    cleaned_files.push(identifier);
+                    cleaned_pid_ids.push(identifier);
                 }
             }
         }
 
-        Ok(cleaned_files)
+        Ok(cleaned_pid_ids)
     }
 
     /// Find shared memory files matching the glob pattern
-    pub fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<std::path::PathBuf>> {
+    pub fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<PathBuf>> {
         let paths = glob::glob(&format!("/dev/shm/{glob_pattern}"))
             .context("Failed to compile glob pattern")?;
 
@@ -157,17 +160,6 @@ impl ThreadSafeSharedMemoryManager {
         }
 
         Ok(file_paths)
-    }
-
-    /// Extract identifier from file path by removing /dev/shm/ prefix
-    pub fn extract_identifier_from_path(&self, file_path: &Path) -> Result<String> {
-        file_path
-            .strip_prefix("/dev/shm/")
-            .map(|relative_path| relative_path.to_string_lossy().to_string())
-            .context(format!(
-                "Failed to strip /dev/shm/ prefix from {}",
-                file_path.display()
-            ))
     }
 
     /// Check if a shared memory segment is orphaned
@@ -199,12 +191,8 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Remove an orphaned shared memory file
-    fn remove_orphaned_file(
-        &self,
-        file_path: &std::path::Path,
-        path: impl AsRef<Path>,
-    ) -> Result<()> {
-        self.active_memories.write().remove(path.as_ref());
+    fn remove_orphaned_file(&self, file_path: &Path) -> Result<()> {
+        self.active_memories.write().remove(file_path);
         std::fs::remove_file(file_path)
             .context(format!("Failed to remove file {}", file_path.display()))?;
         info!(
@@ -224,7 +212,11 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Attempt to cleanup shared memory segments with zero reference count.
-    pub fn cleanup_unused(&self, is_pod_tracking: impl Fn(&str) -> bool) -> Result<Vec<String>> {
+    pub fn cleanup_unused(
+        &self,
+        is_pod_tracking: impl Fn(&PodIdentifier) -> bool,
+        base_path: impl AsRef<Path>,
+    ) -> Result<Vec<PodIdentifier>> {
         let mut cleaned_up = Vec::new();
         let paths: Vec<PathBuf> = {
             let memories = self.active_memories.read();
@@ -232,14 +224,14 @@ impl ThreadSafeSharedMemoryManager {
         };
 
         for path in paths {
-            let path_str = path.to_string_lossy();
-            if is_pod_tracking(&path_str) {
+            let identifier = self.extract_identifier_from_path(&base_path, &path)?;
+            if is_pod_tracking(&identifier) {
                 continue;
             }
             if self.should_cleanup(&path) {
                 match self.cleanup(&path) {
                     Ok(_) => {
-                        cleaned_up.push(path_str.to_string());
+                        cleaned_up.push(identifier.clone());
                         info!(path = %path.display(), "Cleaned up unused shared memory segment");
                     }
                     Err(e) => {
@@ -248,8 +240,22 @@ impl ThreadSafeSharedMemoryManager {
                 }
             }
         }
-
         Ok(cleaned_up)
+    }
+
+    fn extract_identifier_from_path(
+        &self,
+        base_path: impl AsRef<Path>,
+        path: impl AsRef<Path>,
+    ) -> Result<PodIdentifier> {
+        let relative_path = path
+            .as_ref()
+            .strip_prefix(base_path.as_ref())
+            .with_context(|| format!("Failed to strip prefix from {}", path.as_ref().display()))?;
+        let identifier = relative_path.to_string_lossy().to_string();
+        PodIdentifier::from_path(&identifier).ok_or_else(|| {
+            anyhow::anyhow!("Failed to parse PodIdentifier from path: {}", identifier)
+        })
     }
 
     /// Checks if a shared memory segment exists.
@@ -263,53 +269,105 @@ impl ThreadSafeSharedMemoryManager {
 impl super::traits::SharedMemoryAccess for ThreadSafeSharedMemoryManager {
     type Error = anyhow::Error;
 
-    fn find_shared_memory_files(&self, glob: &str) -> Result<Vec<std::path::PathBuf>, Self::Error> {
+    fn find_shared_memory_files(&self, glob: &str) -> Result<Vec<PathBuf>, Self::Error> {
         self.find_shared_memory_files(glob)
-    }
-
-    fn extract_identifier_from_path(&self, path: &std::path::Path) -> Result<String, Self::Error> {
-        self.extract_identifier_from_path(path)
     }
 
     fn create_shared_memory(
         &self,
-        pod_path: &str,
+        pod_path: impl AsRef<Path>,
         cfgs: &[super::DeviceConfig],
     ) -> Result<(), Self::Error> {
-        self.create_shared_memory(std::path::Path::new(pod_path), cfgs)
+        self.create_shared_memory(pod_path.as_ref(), cfgs)
     }
 
     fn get_shared_memory(
         &self,
-        pod_path: &str,
+        pod_path: impl AsRef<Path>,
     ) -> Result<*const super::SharedDeviceState, Self::Error> {
-        self.get_shared_memory(std::path::Path::new(pod_path))
+        self.get_shared_memory(pod_path.as_ref())
             .map(|ptr| ptr as *const _)
     }
 
-    fn add_pid(&self, pod_path: &str, host_pid: usize) -> Result<(), Self::Error> {
-        self.add_pid(std::path::Path::new(pod_path), host_pid)
+    fn add_pid(&self, pod_path: impl AsRef<Path>, host_pid: usize) -> Result<(), Self::Error> {
+        self.add_pid(pod_path.as_ref(), host_pid)
     }
 
-    fn remove_pid(&self, pod_path: &str, host_pid: usize) -> Result<(), Self::Error> {
-        self.remove_pid(std::path::Path::new(pod_path), host_pid)
+    fn remove_pid(&self, pod_path: impl AsRef<Path>, host_pid: usize) -> Result<(), Self::Error> {
+        self.remove_pid(pod_path.as_ref(), host_pid)
     }
 
-    fn cleanup_orphaned_files<F>(
+    fn cleanup_orphaned_files<F, P>(
         &self,
         glob: &str,
         should_remove: F,
-    ) -> Result<Vec<String>, Self::Error>
+        base_path: P,
+    ) -> Result<Vec<PodIdentifier>, Self::Error>
     where
-        F: Fn(&str) -> bool,
+        F: Fn(&PodIdentifier) -> bool,
+        P: AsRef<Path>,
     {
-        self.cleanup_orphaned_files(glob, should_remove)
+        self.cleanup_orphaned_files(glob, should_remove, base_path)
     }
 
-    fn cleanup_unused<F>(&self, should_keep: F) -> Result<Vec<String>, Self::Error>
+    fn cleanup_unused<F, P>(
+        &self,
+        should_keep: F,
+        base_path: P,
+    ) -> Result<Vec<PodIdentifier>, Self::Error>
     where
-        F: Fn(&str) -> bool,
+        F: Fn(&PodIdentifier) -> bool,
+        P: AsRef<Path>,
     {
-        self.cleanup_unused(should_keep)
+        self.cleanup_unused(should_keep, base_path)
+    }
+
+    fn extract_identifier_from_path(
+        &self,
+        base_path: impl AsRef<Path>,
+        path: impl AsRef<Path>,
+    ) -> Result<PodIdentifier, Self::Error> {
+        self.extract_identifier_from_path(base_path, path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared_memory::PodIdentifier;
+    use std::path::Path;
+
+    #[test]
+    fn extract_identifier_from_path_basic() {
+        let manager = ThreadSafeSharedMemoryManager::new();
+        let base_path = Path::new("/dev/shm");
+
+        // Success case
+        let full_path = Path::new("/dev/shm/kube-system/my-pod");
+        let result = manager
+            .extract_identifier_from_path(base_path, full_path)
+            .unwrap();
+        assert_eq!(result.namespace, "kube-system");
+        assert_eq!(result.name, "my-pod");
+
+        // Error: insufficient components
+        let full_path = Path::new("/dev/shm/namespace");
+        assert!(manager
+            .extract_identifier_from_path(base_path, full_path)
+            .is_err());
+    }
+
+    #[test]
+    fn extract_identifier_consistent_with_pod_identifier() {
+        let manager = ThreadSafeSharedMemoryManager::new();
+        let base_path = Path::new("/dev/shm");
+
+        let original = PodIdentifier::new("test-namespace", "test-pod");
+        let full_path = original.to_path(base_path);
+
+        let extracted = manager
+            .extract_identifier_from_path(base_path, &full_path)
+            .unwrap();
+        assert_eq!(extracted, original);
     }
 }

@@ -5,6 +5,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use tokio_util::sync::CancellationToken;
+use utils::shared_memory::PodIdentifier;
 
 use crate::config::GPU_CAPACITY_MAP;
 use crate::gpu_observer::GpuObserver;
@@ -94,7 +95,7 @@ pub(crate) async fn run_metrics<M, P, D, T>(
         // gpu_uuid
         String,
         // pod_identifier -> pid -> metrics
-        HashMap<String, HashMap<u32, AccumulatedWorkerMetrics>>,
+        HashMap<PodIdentifier, HashMap<u32, AccumulatedWorkerMetrics>>,
     > = HashMap::new();
     let mut counter = 0;
 
@@ -180,12 +181,12 @@ pub(crate) async fn run_metrics<M, P, D, T>(
                 }; // RwLockReadGuard is dropped here
 
                 let pod_store = pod_mgr.pod_state_store();
-                for identifier in pod_store.list_pod_identifiers().iter() {
-                    if let Some(pod_state) = pod_store.get_pod(identifier) {
+                for pod_identifier in pod_store.list_pod_identifiers() {
+                    if let Some(pod_state) = pod_store.get_pod(&pod_identifier) {
                         if let Some(gpu_uuids) = pod_state.info.gpu_uuids {
                             for uuid in gpu_uuids {
                                 let acc = worker_acc.entry(uuid).or_default();
-                                acc.entry(identifier.to_string()).or_default();
+                                acc.entry(pod_identifier.clone()).or_default();
                             }
                         }
                     }
@@ -254,11 +255,11 @@ pub(crate) async fn run_metrics<M, P, D, T>(
 
                 // Output averaged worker metrics
                 for (gpu_uuid, pod_metrics) in &worker_acc {
-                    for (pod_identifier, acc_map) in pod_metrics {
-                        let Some(pod_state) = pod_mgr.pod_state_store().get_pod(pod_identifier) else {
+                    for (pod_id, acc_map) in pod_metrics {
+                        let Some(pod_state) = pod_mgr.pod_state_store().get_pod(pod_id) else {
                             tracing::warn!(
                                 msg = "Failed to find pod",
-                                pod_identifier = %pod_identifier,
+                                pod_identifier = %pod_id,
                             );
                             continue;
                         };

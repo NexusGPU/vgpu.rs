@@ -1,11 +1,11 @@
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 
 use api_types::WorkerInfo;
 use error_stack::{Report, ResultExt};
-use hypervisor::pod_management::coordinator::LimiterCoordinator;
+use hypervisor::pod_management::coordinator::{CoordinatorConfig, LimiterCoordinator};
 use hypervisor::pod_management::device_info::calculate_device_limits_from_gpu_info;
 use hypervisor::pod_management::pod_state_store::PodStateStore;
 use hypervisor::pod_management::sampler::{NvmlDeviceSampler, SystemClock};
@@ -13,6 +13,7 @@ use nvml_wrapper::Nvml;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
+use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
 use utils::shared_memory::{DeviceConfig, PodIdentifier};
@@ -49,9 +50,8 @@ pub enum IntegrationTestError {
 }
 
 // Test configuration constants
-const DEFAULT_SHM_IDENTIFIER: &str = "tf_shm_default_ns_integration_test";
 const LIMITER_MOCK_MODE: &str = "CUDA_LIMITER_MOCK_MODE";
-const TF_SHM_IDENTIFIER: &str = "TF_SHM_IDENTIFIER";
+const TF_SHM_FILE: &str = "TF_SHM_FILE";
 
 /// Gets a global NVML instance, initializing it if necessary.
 ///
@@ -120,7 +120,7 @@ pub async fn run_cuda_and_measure(
 fn build_and_find_cuda_limiter() -> Result<String, Report<IntegrationTestError>> {
     // Allow override via env for flexibility
     if let Ok(explicit) = std::env::var("TF_CUDA_LIMITER_PATH") {
-        if std::path::Path::new(&explicit).exists() {
+        if Path::new(&explicit).exists() {
             return Ok(explicit);
         }
     }
@@ -196,7 +196,7 @@ fn setup_cuda_command(
     let cuda_program_path = env!("CUDA_TEST_PROGRAM_PATH");
 
     // Verify CUDA program exists
-    if !std::path::Path::new(cuda_program_path).exists() {
+    if !Path::new(cuda_program_path).exists() {
         return Err(
             Report::new(IntegrationTestError::CudaProgramNotFound).attach_printable(format!(
                 "CUDA test program not found at: {cuda_program_path}"
@@ -228,10 +228,11 @@ fn apply_limiter_config(
     // Enable mock/test mode in limiter to avoid contacting hypervisor
     cmd.env(LIMITER_MOCK_MODE, "1");
 
-    // Set deterministic shared memory identifier for tests
-    let shm_identifier =
-        std::env::var(TF_SHM_IDENTIFIER).unwrap_or_else(|_| DEFAULT_SHM_IDENTIFIER.to_string());
-    cmd.env(TF_SHM_IDENTIFIER, shm_identifier);
+    // Set shared memory file environment variable
+    // In mock mode, the limiter expects TF_SHM_FILE to contain the shared memory path
+    if let Ok(shm_file) = std::env::var(TF_SHM_FILE) {
+        cmd.env(TF_SHM_FILE, shm_file);
+    }
 
     cmd.env("TF_VISIBLE_DEVICES", gpu_uuid);
     Ok(())
@@ -286,16 +287,23 @@ pub async fn mock_coordinator(
     Arc<PodStateStore>,
 ) {
     // Create mock dependencies
+    let tmpdir = tempdir().expect("Failed to create temporary directory");
     let shared_memory = Arc::new(ThreadSafeSharedMemoryManager::new());
-    let pod_state = Arc::new(PodStateStore::new());
+    let base_path = tmpdir.path().to_path_buf();
+    let pod_state = Arc::new(PodStateStore::new(base_path.clone()));
     let snapshot = Arc::new(NvmlDeviceSampler::new());
     let time = Arc::new(SystemClock::new());
 
     // Create coordinator with mock dependencies
+    let config = CoordinatorConfig {
+        watch_interval: Duration::from_millis(50), // Fast monitoring for tests
+        device_count: 1,                           // Single GPU
+        shared_memory_glob_pattern: format!("{test_shm_id}*"),
+        base_path,
+    };
+
     let coordinator = Arc::new(LimiterCoordinator::new(
-        Duration::from_millis(50), // Fast monitoring for tests
-        1,                         // Single GPU
-        format!("{test_shm_id}*"),
+        config,
         shared_memory,
         pod_state.clone(),
         snapshot,
@@ -332,21 +340,18 @@ pub struct TestPod {
 }
 
 struct PodCleanupGuard {
+    base_path: PathBuf,
     pod_id: PodIdentifier,
 }
 
 impl Drop for PodCleanupGuard {
     fn drop(&mut self) {
+        let pod_path = self.pod_id.to_path(&self.base_path);
         // Clean up shared memory file for this specific pod
-        let _ = std::fs::remove_file(format!(
-            "/dev/shm/{}",
-            self.pod_id.to_path().as_ref().display()
-        ));
+        let _ = std::fs::remove_file(&pod_path);
         // Remove environment variable if it matches this pod
-        if std::env::var(TF_SHM_IDENTIFIER).unwrap_or_default()
-            == self.pod_id.to_path().as_ref().to_string_lossy()
-        {
-            std::env::remove_var(TF_SHM_IDENTIFIER);
+        if std::env::var(TF_SHM_FILE).unwrap_or_default() == pod_path.to_string_lossy() {
+            std::env::remove_var(TF_SHM_FILE);
         }
     }
 }
@@ -427,20 +432,18 @@ impl TestCoordinatorManager {
         pod_name: &str,
         device_config: DeviceConfig,
     ) -> Result<TestPod, Report<IntegrationTestError>> {
-        let pod_identifier_str = format!("tf_shm_pod_{pod_name}");
         let pod_identifier = PodIdentifier::new("test", pod_name);
 
         // Register the pod
         self.pod_state
             .register_pod(
-                &pod_identifier_str,
+                &pod_identifier,
                 WorkerInfo::default(),
                 vec![device_config.clone()],
             )
             .map_err(|e| {
-                Report::new(IntegrationTestError::ProcessSpawnFailed).attach_printable(format!(
-                    "Failed to register pod '{pod_identifier_str}': {e}"
-                ))
+                Report::new(IntegrationTestError::ProcessSpawnFailed)
+                    .attach_printable(format!("Failed to register pod '{pod_identifier}': {e}"))
             })?;
 
         self.coordinator
@@ -453,6 +456,7 @@ impl TestCoordinatorManager {
 
         self.registered_pods.insert(pod_identifier.clone());
         let cleanup_guard = PodCleanupGuard {
+            base_path: self.pod_state.base_path().clone(),
             pod_id: pod_identifier.clone(),
         };
 
@@ -469,8 +473,7 @@ impl TestCoordinatorManager {
         pod: &TestPod,
         pid: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.pod_state
-            .register_process(&pod.pod_id.to_path().as_ref().to_string_lossy(), pid)?;
+        self.pod_state.register_process(&pod.pod_id, pid)?;
         self.coordinator.register_process(&pod.pod_id, pid)?;
         Ok(())
     }
@@ -484,8 +487,9 @@ impl TestCoordinatorManager {
         memory_bytes: u64,
         is_limiter_enabled: bool,
     ) -> Result<(u128, Output), Report<IntegrationTestError>> {
-        // Set environment variable for this pod
-        std::env::set_var(TF_SHM_IDENTIFIER, pod.pod_id.to_path().as_ref());
+        // Set environment variable for this pod - use the full path
+        let pod_path = self.pod_state.pod_path(&pod.pod_id);
+        std::env::set_var(TF_SHM_FILE, pod_path.to_string_lossy().as_ref());
 
         self.run_test_with_detailed_output(
             description,
@@ -552,17 +556,18 @@ impl Drop for TestCoordinatorManager {
         // Cancel the coordinator
         self.cancellation_token.cancel();
 
-        // Clean up any remaining shared memory files
+        // Clean up any remaining shared memory files using proper paths
         for pod_id in &self.registered_pods {
-            let _ = std::fs::remove_file(format!("/dev/shm/{pod_id}"));
+            let pod_path = self.pod_state.pod_path(pod_id);
+            let _ = std::fs::remove_file(&pod_path);
         }
     }
 }
 
 impl TestPod {
-    /// Get the pod ID
+    /// Get the pod ID as a display string
     pub fn pod_id(&self) -> String {
-        self.pod_id.to_path().as_ref().to_string_lossy().to_string()
+        format!("{}", self.pod_id)
     }
 
     /// Get the device configuration
@@ -573,6 +578,8 @@ impl TestPod {
 
 #[cfg(test)]
 mod limiter_tests {
+    use std::path::Path;
+
     use super::*;
     use error_stack::Report;
 
@@ -589,7 +596,7 @@ mod limiter_tests {
         }
         // Check if CUDA test program exists
         let cuda_program_path = env!("CUDA_TEST_PROGRAM_PATH");
-        if !std::path::Path::new(cuda_program_path).exists() {
+        if !Path::new(cuda_program_path).exists() {
             eprintln!("CUDA test program not found at: {cuda_program_path}");
             return Err(Report::new(IntegrationTestError::CudaProgramNotFound)
                 .attach_printable(format!("CUDA test program missing: {cuda_program_path}")));

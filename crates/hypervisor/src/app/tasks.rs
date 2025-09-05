@@ -267,7 +267,7 @@ impl Tasks {
 
         tokio::spawn(async move {
             tracing::info!("Restoring pods from shared memory");
-            if let Err(e) = pod_manager.restore_pod_from_shared_memory("tf_shm_*").await {
+            if let Err(e) = pod_manager.restore_pod_from_shared_memory().await {
                 panic!("Failed to restore pods from shared memory: {e}");
             }
 

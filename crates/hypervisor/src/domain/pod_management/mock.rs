@@ -4,10 +4,11 @@
 //! in testing environments and integration tests.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use utils::shared_memory::DeviceConfig;
+use utils::shared_memory::PodIdentifier;
 
 use super::pod_state_store::PodStateStore;
 use super::traits::{DeviceSnapshotProvider, TimeSource};
@@ -226,60 +227,99 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
         Ok(vec![]) // Return empty list for testing
     }
 
-    fn extract_identifier_from_path(&self, path: &std::path::Path) -> Result<String, Self::Error> {
-        let identifier = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown");
-        self.log_operation(format!("extract_identifier_from_path({path:?})"));
-        Ok(identifier.to_string())
+    fn extract_identifier_from_path(
+        &self,
+        base_path: impl AsRef<Path>,
+        path: impl AsRef<Path>,
+    ) -> Result<PodIdentifier, Self::Error> {
+        let path = path.as_ref();
+        let base_path = base_path.as_ref();
+        self.log_operation(format!(
+            "extract_identifier_from_path({base_path:?}, {path:?})"
+        ));
+
+        // Try to extract relative path, fallback to filename if path doesn't start with base_path
+        let identifier = if let Ok(relative_path) = path.strip_prefix(base_path) {
+            relative_path.to_string_lossy().to_string()
+        } else {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        };
+
+        PodIdentifier::from_path(&identifier).ok_or_else(|| {
+            anyhow::anyhow!("Failed to parse PodIdentifier from path: {}", identifier)
+        })
     }
 
     fn create_shared_memory(
         &self,
-        pod_path: &str,
+        pod_path: impl AsRef<Path>,
         _cfgs: &[DeviceConfig],
     ) -> Result<(), Self::Error> {
-        self.log_operation(format!("create_shared_memory({pod_path})"));
+        self.log_operation(format!(
+            "create_shared_memory({})",
+            pod_path.as_ref().display()
+        ));
         Ok(())
     }
 
     fn get_shared_memory(
         &self,
-        pod_path: &str,
+        pod_path: impl AsRef<Path>,
     ) -> Result<*const utils::shared_memory::SharedDeviceState, Self::Error> {
-        self.log_operation(format!("get_shared_memory({pod_path})"));
+        self.log_operation(format!(
+            "get_shared_memory({})",
+            pod_path.as_ref().display()
+        ));
         // Return a null pointer for testing - real tests would need proper shared memory
         Ok(std::ptr::null())
     }
 
-    fn add_pid(&self, pod_path: &str, host_pid: usize) -> Result<(), Self::Error> {
-        self.log_operation(format!("add_pid({pod_path}, {host_pid})"));
+    fn add_pid(&self, pod_path: impl AsRef<Path>, host_pid: usize) -> Result<(), Self::Error> {
+        self.log_operation(format!(
+            "add_pid({}, {host_pid})",
+            pod_path.as_ref().display()
+        ));
         Ok(())
     }
 
-    fn remove_pid(&self, pod_path: &str, host_pid: usize) -> Result<(), Self::Error> {
-        self.log_operation(format!("remove_pid({pod_path}, {host_pid})"));
+    fn remove_pid(&self, pod_path: impl AsRef<Path>, host_pid: usize) -> Result<(), Self::Error> {
+        self.log_operation(format!(
+            "remove_pid({}, {host_pid})",
+            pod_path.as_ref().display()
+        ));
         Ok(())
     }
 
-    fn cleanup_orphaned_files<F>(
+    fn cleanup_orphaned_files<F, P>(
         &self,
         glob: &str,
         _should_remove: F,
-    ) -> Result<Vec<String>, Self::Error>
+        base_path: P,
+    ) -> Result<Vec<PodIdentifier>, Self::Error>
     where
-        F: Fn(&str) -> bool,
+        F: Fn(&PodIdentifier) -> bool,
+        P: AsRef<Path>,
     {
-        self.log_operation(format!("cleanup_orphaned_files({glob})"));
+        self.log_operation(format!(
+            "cleanup_orphaned_files({glob}, {:?})",
+            base_path.as_ref()
+        ));
         Ok(vec![]) // Return empty list for testing
     }
 
-    fn cleanup_unused<F>(&self, _should_keep: F) -> Result<Vec<String>, Self::Error>
+    fn cleanup_unused<F, P>(
+        &self,
+        _should_keep: F,
+        base_path: P,
+    ) -> Result<Vec<PodIdentifier>, Self::Error>
     where
-        F: Fn(&str) -> bool,
+        F: Fn(&PodIdentifier) -> bool,
+        P: AsRef<Path>,
     {
-        self.log_operation("cleanup_unused()".to_string());
+        self.log_operation(format!("cleanup_unused({:?})", base_path.as_ref()));
         Ok(vec![]) // Return empty list for testing
     }
 }
@@ -306,14 +346,20 @@ impl TestLimiterCoordinator {
         Arc<MockTime>,
     ) {
         let shared_memory = Arc::new(MockSharedMemoryAccess::new());
-        let pod_state = Arc::new(PodStateStore::new());
+        let base_path = PathBuf::from("/tmp/test_shm");
+        let pod_state = Arc::new(PodStateStore::new(base_path.clone()));
         let snapshot = Arc::new(MockDeviceSnapshotProvider::new());
         let time = Arc::new(MockTime::default());
 
-        let coordinator = Self::new(
+        let config = super::coordinator::CoordinatorConfig {
             watch_interval,
             device_count,
             shared_memory_glob_pattern,
+            base_path,
+        };
+
+        let coordinator = Self::new(
+            config,
             shared_memory.clone(),
             pod_state.clone(),
             snapshot.clone(),
