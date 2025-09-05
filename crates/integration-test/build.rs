@@ -34,9 +34,6 @@ fn main() {
         .arg(cuda_src_path)
         .arg("-o")
         .arg(target_dir.join("cuda_test_program"))
-        // add appropriate CUDA architecture flags, e.g. compute_60 and sm_60 for Pascal architecture
-        .arg("--gpu-architecture=sm_60")
-        // optional: add optimization flags
         .arg("-O3")
         .status()
         .expect("Failed to execute nvcc");
