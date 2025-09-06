@@ -16,7 +16,9 @@ use crate::k8s::PodInfoCache;
 use crate::limiter_comm::CommandDispatcher;
 use crate::pod_management::sampler::{NvmlDeviceSampler, SystemClock};
 use crate::pod_management::{
-    coordinator::LimiterCoordinator, manager::PodManager, pod_state_store::PodStateStore,
+    coordinator::{CoordinatorConfig, LimiterCoordinator},
+    manager::PodManager,
+    pod_state_store::PodStateStore,
 };
 use crate::scheduler::weighted::WeightedScheduler;
 
@@ -67,8 +69,9 @@ impl ApplicationBuilder {
         // Create hypervisor, set 1 second scheduling interval
         let hypervisor = Arc::new(HypervisorType::new(scheduler, Duration::from_secs(1)));
 
-        // Create pod state store
-        let pod_state_store = Arc::new(PodStateStore::new());
+        // Create pod state store with shared memory base path
+        let shm_base_path = self.daemon_args.shared_memory_base_path.clone();
+        let pod_state_store = Arc::new(PodStateStore::new(shm_base_path.clone()));
 
         // Create GPU observer
         let gpu_observer = GpuObserver::create(gpu_system.nvml.clone(), pod_state_store.clone());
@@ -84,10 +87,19 @@ impl ApplicationBuilder {
         let snapshot = Arc::new(NvmlDeviceSampler::new());
         let time = Arc::new(SystemClock::new());
 
+        let config = CoordinatorConfig {
+            watch_interval: Duration::from_millis(100),
+            device_count: gpu_system.device_count,
+            shared_memory_glob_pattern: format!(
+                "{}/*/*/{}",
+                self.daemon_args.shared_memory_base_path.to_string_lossy(),
+                utils::shared_memory::handle::SHM_PATH_SUFFIX
+            ),
+            base_path: shm_base_path,
+        };
+
         let limiter_coordinator = Arc::new(LimiterCoordinator::new(
-            Duration::from_millis(100),
-            gpu_system.device_count,
-            self.daemon_args.shared_memory_glob_pattern.clone(),
+            config,
             shared_memory_manager,
             pod_state_store.clone(),
             snapshot,
@@ -148,6 +160,7 @@ impl ApplicationBuilder {
             components.pod_info_cache.clone(),
             components.pod_state_store.clone(),
             components.gpu_observer.clone(),
+            self.daemon_args.shared_memory_base_path.clone(),
         ));
 
         Ok(pod_manager)

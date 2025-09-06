@@ -120,9 +120,10 @@ pub struct DaemonArgs {
 
     #[arg(
         long,
-        help = "Glob pattern for shared memory files, should be without /dev/shm/ prefix",
-        default_value = "tf_shm_*",
-        value_hint = clap::ValueHint::FilePath,
+        help = "Base path for shared memory files, should be without /dev/shm/ prefix",
+        default_value = "tf_shm",
+        env = "SHM_BASE_PATH",
+        value_hint = clap::ValueHint::DirPath,
     )]
-    pub shared_memory_glob_pattern: String,
+    pub shared_memory_base_path: PathBuf,
 }

@@ -12,7 +12,7 @@ pub struct ShowTuiWorkersArgs {
     #[arg(
         long,
         help = "Glob pattern for worker shared memory files",
-        default_value = "/tf_shm_*"
+        default_value = "/dev/shm/tf_shm_*"
     )]
     pub glob: String,
 
@@ -46,7 +46,7 @@ pub struct MountShmArgs {
 
     #[arg(
         long,
-        help = "Cleanup all shared memory files with this prefix (e.g., 'tf_shm_*')",
+        help = "Cleanup all shared memory files with this base path (e.g., 'tf_shm', 'my_app')",
         value_hint = clap::ValueHint::Other,
     )]
     pub cleanup_prefix: Option<String>,

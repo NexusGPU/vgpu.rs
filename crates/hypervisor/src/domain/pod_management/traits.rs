@@ -1,27 +1,33 @@
 //! Traits for pod state management and device operations
 
+use std::path::PathBuf;
+
 use super::{pod_state_store::DeviceConfigRef, utilization::DeviceSnapshot};
+use utils::shared_memory::PodIdentifier;
 
 /// Trait for accessing pod state information
 pub trait PodStateRepository: Send + Sync {
-    /// Get list of pod identifiers using a specific device
-    fn get_pods_using_device(&self, device_idx: u32) -> Vec<String>;
+    /// Get list of pod paths using a specific device
+    fn get_pods_using_device(&self, device_idx: u32) -> Vec<PodIdentifier>;
 
     /// Get host PIDs for a specific pod
-    fn get_host_pids_for_pod(&self, pod_identifier: &str) -> Option<Vec<u32>>;
+    fn get_host_pids_for_pod(&self, pod_identifier: &PodIdentifier) -> Option<Vec<u32>>;
 
     /// Get device configuration for a pod and device index
     fn get_device_config_for_pod(
         &self,
-        pod_identifier: &str,
+        pod_identifier: &PodIdentifier,
         device_idx: u32,
     ) -> Option<DeviceConfigRef<'_>>;
 
     /// Check if a pod exists in the store
-    fn contains_pod(&self, pod_identifier: &str) -> bool;
+    fn contains_pod(&self, pod_identifier: &PodIdentifier) -> bool;
 
     /// List all pod identifiers
-    fn list_pod_identifiers(&self) -> Vec<String>;
+    fn list_pod_identifiers(&self) -> Vec<PodIdentifier>;
+
+    /// Get pod path for a pod identifier
+    fn pod_path(&self, pod_identifier: &PodIdentifier) -> PathBuf;
 }
 
 /// Trait for getting device snapshots
