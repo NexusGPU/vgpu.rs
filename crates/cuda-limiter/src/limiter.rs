@@ -341,7 +341,9 @@ impl Limiter {
 }
 
 fn shm_path() -> PathBuf {
-    PathBuf::from(&std::env::var("SHM_PATH").unwrap_or_else(|_| "/run/tensor-fusion/shm".to_string()))
+    PathBuf::from(
+        &std::env::var("SHM_PATH").unwrap_or_else(|_| "/run/tensor-fusion/shm".to_string()),
+    )
 }
 
 #[cfg(test)]
