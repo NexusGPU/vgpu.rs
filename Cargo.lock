@@ -3628,7 +3628,7 @@ dependencies = [
 [[package]]
 name = "shared_memory"
 version = "0.12.5"
-source = "git+https://github.com/NexusGPU/shared_memory.git?rev=17735f3#17735f3ab8a107713e3906b9ca5d7494f52035b6"
+source = "git+https://github.com/NexusGPU/shared_memory.git?rev=d679661#d6796611ec7bf21eafa6c7084240a7e3b439b60d"
 dependencies = [
  "cfg-if",
  "libc",
