@@ -120,8 +120,8 @@ pub struct DaemonArgs {
 
     #[arg(
         long,
-        help = "Base path for shared memory files, should be without /dev/shm/ prefix",
-        default_value = "tf_shm",
+        help = "Base path for shared memory files",
+        default_value = "/run/tensor-fusion",
         env = "SHM_BASE_PATH",
         value_hint = clap::ValueHint::DirPath,
     )]
