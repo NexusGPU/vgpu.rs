@@ -12,12 +12,10 @@ use cudarc::driver::sys::CUstream;
 use cudarc::driver::sys::CUDA_ARRAY3D_DESCRIPTOR;
 use cudarc::driver::sys::CUDA_ARRAY_DESCRIPTOR;
 use tf_macro::hook_fn;
-use trap::{Trap, TrapFrame};
 use utils::hooks::HookManager;
 use utils::replace_symbol;
 
 use crate::detour::round_up;
-use crate::global_trap;
 use crate::limiter::Error;
 use crate::with_device;
 use crate::Limiter;
@@ -76,48 +74,49 @@ unsafe fn cuda_alloc_with_retry<F>(request_size: u64, alloc_fn: F) -> CUresult
 where
     F: Fn() -> CUresult,
 {
-    loop {
-        let result = alloc_fn();
-        match result {
-            CUresult::CUDA_SUCCESS => {
-                // Assuming limiter state is tracked elsewhere or doesn't need update here
-                return result;
-            }
-            CUresult::CUDA_ERROR_OUT_OF_MEMORY => {
-                tracing::info!(
-                    "cuda memory allocation pending, request size: {}",
-                    request_size
-                );
-                let trap = global_trap();
-                // OOM: enter trap and wait
-                match trap.enter_trap_and_wait(TrapFrame::OutOfMemory {
-                    requested_bytes: request_size,
-                }) {
-                    Ok(_) => {
-                        // Wait succeeded, loop to retry allocation
-                        tracing::debug!(
-                            "OOM trap wait succeeded for request size {}, retrying allocation.",
-                            request_size
-                        );
-                        continue;
-                    }
-                    Err(e) => {
-                        // Wait failed or interrupted
-                        tracing::warn!(
-                            "OOM trap wait failed or interrupted for request size {}, err: {}.",
-                            request_size,
-                            e
-                        );
-                        return CUresult::CUDA_ERROR_OUT_OF_MEMORY;
-                    }
-                }
-            }
-            _ => {
-                // Other CUDA error
-                return result;
-            }
+    // loop {
+    let result = alloc_fn();
+    match result {
+        CUresult::CUDA_SUCCESS => {
+            // Assuming limiter state is tracked elsewhere or doesn't need update here
+            result
+        }
+        CUresult::CUDA_ERROR_OUT_OF_MEMORY => {
+            tracing::info!(
+                "cuda memory allocation pending, request size: {}",
+                request_size
+            );
+            result
+            // let trap = global_trap();
+            // // OOM: enter trap and wait
+            // match trap.enter_trap_and_wait(TrapFrame::OutOfMemory {
+            //     requested_bytes: request_size,
+            // }) {
+            //     Ok(_) => {
+            //         // Wait succeeded, loop to retry allocation
+            //         tracing::debug!(
+            //             "OOM trap wait succeeded for request size {}, retrying allocation.",
+            //             request_size
+            //         );
+            //         continue;
+            //     }
+            //     Err(e) => {
+            //         // Wait failed or interrupted
+            //         tracing::warn!(
+            //             "OOM trap wait failed or interrupted for request size {}, err: {}.",
+            //             request_size,
+            //             e
+            //         );
+            //         return CUresult::CUDA_ERROR_OUT_OF_MEMORY;
+            //     }
+            // }
+        }
+        _ => {
+            // Other CUDA error
+            result
         }
     }
+    // }
 }
 
 #[hook_fn]
