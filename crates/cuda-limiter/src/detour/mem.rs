@@ -88,29 +88,30 @@ where
                     "cuda memory allocation pending, request size: {}",
                     request_size
                 );
-                let trap = global_trap();
-                // OOM: enter trap and wait
-                match trap.enter_trap_and_wait(TrapFrame::OutOfMemory {
-                    requested_bytes: request_size,
-                }) {
-                    Ok(_) => {
-                        // Wait succeeded, loop to retry allocation
-                        tracing::debug!(
-                            "OOM trap wait succeeded for request size {}, retrying allocation.",
-                            request_size
-                        );
-                        continue;
-                    }
-                    Err(e) => {
-                        // Wait failed or interrupted
-                        tracing::warn!(
-                            "OOM trap wait failed or interrupted for request size {}, err: {}.",
-                            request_size,
-                            e
-                        );
-                        return CUresult::CUDA_ERROR_OUT_OF_MEMORY;
-                    }
-                }
+                return result;
+                // let trap = global_trap();
+                // // OOM: enter trap and wait
+                // match trap.enter_trap_and_wait(TrapFrame::OutOfMemory {
+                //     requested_bytes: request_size,
+                // }) {
+                //     Ok(_) => {
+                //         // Wait succeeded, loop to retry allocation
+                //         tracing::debug!(
+                //             "OOM trap wait succeeded for request size {}, retrying allocation.",
+                //             request_size
+                //         );
+                //         continue;
+                //     }
+                //     Err(e) => {
+                //         // Wait failed or interrupted
+                //         tracing::warn!(
+                //             "OOM trap wait failed or interrupted for request size {}, err: {}.",
+                //             request_size,
+                //             e
+                //         );
+                //         return CUresult::CUDA_ERROR_OUT_OF_MEMORY;
+                //     }
+                // }
             }
             _ => {
                 // Other CUDA error
