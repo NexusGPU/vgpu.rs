@@ -55,11 +55,4 @@ pub struct MountShmArgs {
 
     #[arg(long, help = "Shared memory size in MB", default_value = "64")]
     pub size_mb: u64,
-
-    #[arg(
-        long,
-        help = "Cleanup all shared memory files with this base path (e.g., 'tf_shm', 'my_app')",
-        value_hint = clap::ValueHint::Other,
-    )]
-    pub cleanup_prefix: Option<String>,
 }

@@ -4511,6 +4511,7 @@ dependencies = [
  "shared_memory",
  "similar-asserts",
  "spin",
+ "tempfile",
  "test-log",
  "thiserror 2.0.16",
  "tokio",

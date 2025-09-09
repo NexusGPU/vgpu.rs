@@ -149,35 +149,10 @@ async fn run_mount_shm(mount_shm_args: hypervisor::config::MountShmArgs) -> Resu
     tracing::info!("mount point: {:?}", mount_shm_args.mount_point);
     tracing::info!("size: {} MB", mount_shm_args.size_mb);
 
-    // Clean up shared memory files if prefix is provided
-    if let Some(ref cleanup_prefix) = mount_shm_args.cleanup_prefix {
-        tracing::info!(
-            "Cleaning up ALL shared memory files with prefix: {}",
-            cleanup_prefix
-        );
-
-        let cleanup_result = cleanup_all_shared_memory_files(cleanup_prefix);
-
-        match cleanup_result {
-            Ok(cleaned_files) => {
-                if !cleaned_files.is_empty() {
-                    tracing::info!(
-                        "Cleaned up {} shared memory files: {:?}",
-                        cleaned_files.len(),
-                        cleaned_files
-                    );
-                } else {
-                    tracing::info!(
-                        "No shared memory files found with prefix: {}",
-                        cleanup_prefix
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to cleanup shared memory files: {}", e);
-            }
-        }
-    }
+    tracing::info!(
+        "Cleaning up ALL shared memory files in: {:?}",
+        mount_shm_args.mount_point
+    );
 
     // create mount point directory
     if !mount_shm_args.mount_point.exists() {
@@ -243,51 +218,6 @@ async fn run_mount_shm(mount_shm_args: hypervisor::config::MountShmArgs) -> Resu
     }
 
     Ok(())
-}
-
-/// Cleans up ALL shared memory files in /dev/shm with the specified prefix pattern
-/// This function directly removes files without orphan detection
-fn cleanup_all_shared_memory_files(prefix_pattern: &str) -> Result<Vec<String>> {
-    use std::fs;
-
-    let mut cleaned_files = Vec::new();
-
-    // Use glob to find matching files in /dev/shm
-    let pattern = format!("/dev/shm/{prefix_pattern}");
-    let paths = glob::glob(&pattern)
-        .with_context(|| format!("Failed to compile glob pattern: {pattern}"))?;
-
-    for path_result in paths {
-        let file_path = path_result
-            .with_context(|| format!("Failed to read glob path for pattern: {pattern}"))?;
-
-        if !file_path.is_file() {
-            continue;
-        }
-
-        // Extract filename for logging
-        let filename = file_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("<unknown>");
-
-        // Directly remove the file without any orphan checks
-        match fs::remove_file(&file_path) {
-            Ok(_) => {
-                cleaned_files.push(filename.to_string());
-                tracing::info!("Removed shared memory file: {}", file_path.display());
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to remove shared memory file {}: {}",
-                    file_path.display(),
-                    e
-                );
-            }
-        }
-    }
-
-    Ok(cleaned_files)
 }
 
 async fn run_show_tui_workers(args: hypervisor::config::ShowTuiWorkersArgs) -> Result<()> {

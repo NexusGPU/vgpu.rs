@@ -20,6 +20,7 @@ glob = { workspace = true }
 similar-asserts = { workspace = true }
 test-log = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tempfile = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }

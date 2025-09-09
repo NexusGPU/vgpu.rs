@@ -114,7 +114,7 @@ impl ThreadSafeSharedMemoryManager {
         Ok(())
     }
 
-    /// Cleanup orphaned shared memory files from /dev/shm that match our naming pattern.
+    /// Cleanup orphaned shared memory files that match our naming pattern.
     /// This should be called at startup to clean up files left by crashed processes.
     pub fn cleanup_orphaned_files(
         &self,
@@ -131,7 +131,7 @@ impl ThreadSafeSharedMemoryManager {
                 continue;
             }
             if self.is_shared_memory_orphaned(&file_path)? {
-                if let Err(e) = self.remove_orphaned_file(&file_path) {
+                if let Err(e) = self.remove_orphaned_file(&file_path, base_path.as_ref()) {
                     warn!(
                         "Failed to remove orphaned file {}: {}",
                         file_path.display(),
@@ -191,10 +191,16 @@ impl ThreadSafeSharedMemoryManager {
     }
 
     /// Remove an orphaned shared memory file
-    fn remove_orphaned_file(&self, file_path: &Path) -> Result<()> {
+    fn remove_orphaned_file(&self, file_path: &Path, base_path: &Path) -> Result<()> {
         self.active_memories.write().remove(file_path);
         std::fs::remove_file(file_path)
             .context(format!("Failed to remove file {}", file_path.display()))?;
+
+        // Try to clean up empty parent directories (stop at base_path)
+        if let Err(e) = super::cleanup_empty_parent_directories(file_path, Some(base_path)) {
+            tracing::warn!("Failed to cleanup empty directories: {}", e);
+        }
+
         info!(
             "Cleaned up orphaned shared memory file: {}",
             file_path.display()

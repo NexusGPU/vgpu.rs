@@ -18,6 +18,45 @@ pub mod mutex;
 pub mod set;
 pub mod traits;
 
+/// Clean up empty parent directories after removing a file
+/// This removes the directory structure recursively if directories become empty
+pub fn cleanup_empty_parent_directories(
+    file_path: &Path,
+    stop_at_path: Option<&Path>,
+) -> std::io::Result<()> {
+    if let Some(parent_dir) = file_path.parent() {
+        // Skip if we've reached the stop path
+        if let Some(stop) = stop_at_path {
+            if parent_dir == stop {
+                return Ok(());
+            }
+        }
+
+        // Try to remove the immediate parent directory if it's empty
+        if let Ok(entries) = std::fs::read_dir(parent_dir) {
+            let entry_count = entries.count();
+            if entry_count == 0 {
+                match std::fs::remove_dir(parent_dir) {
+                    Ok(_) => {
+                        tracing::info!("Removed empty directory: {}", parent_dir.display());
+                        // Recursively try to remove parent directories if they're also empty
+                        cleanup_empty_parent_directories(parent_dir, stop_at_path)?;
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            "Failed to remove empty directory {}: {}",
+                            parent_dir.display(),
+                            e
+                        );
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Pod identifier structure containing namespace and name
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PodIdentifier {
@@ -817,7 +856,7 @@ mod tests {
     fn orphaned_file_cleanup() {
         let manager = ThreadSafeSharedMemoryManager::new();
 
-        // Create a fake orphaned file in /tmp (since we can't write to /dev/shm in tests)
+        // Create a fake orphaned file in /tmp
         let test_file = "/tmp/test_orphaned_shm_file";
         std::fs::write(test_file, "fake shared memory data").unwrap();
 
@@ -972,5 +1011,139 @@ mod tests {
             MAX_PROCESSES,
             "should remain at capacity when inserting new PID beyond capacity"
         );
+    }
+
+    #[test]
+    fn test_cleanup_empty_parent_directories() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create nested directory structure: base/namespace/podname/
+        let namespace_dir = base_path.join("test-namespace");
+        let pod_dir = namespace_dir.join("test-pod");
+        fs::create_dir_all(&pod_dir).unwrap();
+
+        // Create a file in the pod directory
+        let test_file = pod_dir.join("shm");
+        fs::write(&test_file, "test data").unwrap();
+
+        // Verify structure exists
+        assert!(test_file.exists());
+        assert!(pod_dir.exists());
+        assert!(namespace_dir.exists());
+
+        // Remove the file
+        fs::remove_file(&test_file).unwrap();
+
+        // Test cleanup without stop_at_path (should remove all empty dirs)
+        let result = cleanup_empty_parent_directories(&test_file, None);
+        assert!(result.is_ok());
+
+        // Pod directory should be removed
+        assert!(!pod_dir.exists());
+        // Namespace directory should be removed
+        assert!(!namespace_dir.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_parent_directories_with_stop_at_path() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create nested directory structure: base/namespace/podname/
+        let namespace_dir = base_path.join("test-namespace");
+        let pod_dir = namespace_dir.join("test-pod");
+        fs::create_dir_all(&pod_dir).unwrap();
+
+        // Create a file in the pod directory
+        let test_file = pod_dir.join("shm");
+        fs::write(&test_file, "test data").unwrap();
+
+        // Remove the file
+        fs::remove_file(&test_file).unwrap();
+
+        // Test cleanup with stop_at_path set to base_path
+        let result = cleanup_empty_parent_directories(&test_file, Some(base_path));
+        assert!(result.is_ok());
+
+        // Pod directory should be removed
+        assert!(!pod_dir.exists());
+        // Namespace directory should be removed
+        assert!(!namespace_dir.exists());
+        // Base directory should remain (it's the stop_at_path)
+        assert!(base_path.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_parent_directories_stops_at_non_empty_dir() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create nested directory structure: base/namespace/podname/
+        let namespace_dir = base_path.join("test-namespace");
+        let pod_dir = namespace_dir.join("test-pod");
+        fs::create_dir_all(&pod_dir).unwrap();
+
+        // Create two files in the pod directory
+        let test_file1 = pod_dir.join("shm");
+        let test_file2 = pod_dir.join("other_file");
+        fs::write(&test_file1, "test data").unwrap();
+        fs::write(&test_file2, "other data").unwrap();
+
+        // Remove only one file
+        fs::remove_file(&test_file1).unwrap();
+
+        // Test cleanup - should not remove pod directory since it's not empty
+        let result = cleanup_empty_parent_directories(&test_file1, Some(base_path));
+        assert!(result.is_ok());
+
+        // Pod directory should still exist (not empty)
+        assert!(pod_dir.exists());
+        assert!(namespace_dir.exists());
+        assert!(test_file2.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_parent_directories_with_nested_stop_path() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create nested directory structure: base/namespace/podname/
+        let namespace_dir = base_path.join("test-namespace");
+        let pod_dir = namespace_dir.join("test-pod");
+        fs::create_dir_all(&pod_dir).unwrap();
+
+        // Create a file in the pod directory
+        let test_file = pod_dir.join("shm");
+        fs::write(&test_file, "test data").unwrap();
+
+        // Remove the file
+        fs::remove_file(&test_file).unwrap();
+
+        // Test cleanup with stop_at_path set to namespace directory
+        let result = cleanup_empty_parent_directories(&test_file, Some(&namespace_dir));
+        assert!(result.is_ok());
+
+        // Pod directory should be removed
+        assert!(!pod_dir.exists());
+        // Namespace directory should remain (it's the stop_at_path)
+        assert!(namespace_dir.exists());
+        assert!(base_path.exists());
     }
 }
