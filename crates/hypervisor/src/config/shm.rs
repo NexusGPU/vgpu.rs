@@ -53,6 +53,6 @@ pub struct MountShmArgs {
     )]
     pub mount_point: PathBuf,
 
-    #[arg(long, help = "Shared memory size in MB", default_value = "64")]
+    #[arg(long, help = "Shared memory size in MB", default_value = "128")]
     pub size_mb: u64,
 }
