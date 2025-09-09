@@ -5,10 +5,10 @@ use std::path::PathBuf;
 pub struct ShowShmArgs {
     #[arg(long, help = "Pod namespace")]
     pub namespace: String,
-    
+
     #[arg(long, help = "Pod name")]
     pub pod_name: String,
-    
+
     #[arg(
         long,
         help = "Base path for shared memory files",
