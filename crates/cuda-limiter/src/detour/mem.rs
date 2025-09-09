@@ -87,7 +87,6 @@ where
                 request_size
             );
             result
-
             // Temporarily block trap to avoid recursion
             // let trap = global_trap();
             // // OOM: enter trap and wait
