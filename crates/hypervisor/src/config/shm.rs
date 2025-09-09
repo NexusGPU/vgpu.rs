@@ -3,8 +3,20 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 pub struct ShowShmArgs {
-    #[arg(long, help = "Shared memory identifier")]
-    pub shm_identifier: String,
+    #[arg(long, help = "Pod namespace")]
+    pub namespace: String,
+    
+    #[arg(long, help = "Pod name")]
+    pub pod_name: String,
+    
+    #[arg(
+        long,
+        help = "Base path for shared memory files",
+        env = "SHM_BASE_PATH",
+        value_hint = clap::ValueHint::DirPath,
+        default_value = "/run/tensor-fusion/shm"
+    )]
+    pub shm_base_path: PathBuf,
 }
 
 #[derive(Parser)]

@@ -48,14 +48,21 @@ async fn run_daemon(daemon_args: hypervisor::config::DaemonArgs) -> Result<()> {
 
 async fn run_show_shm(show_shm_args: hypervisor::config::ShowShmArgs) -> Result<()> {
     use utils::shared_memory::handle::SharedMemoryHandle;
+    use utils::shared_memory::PodIdentifier;
     utils::logging::init();
 
+    // Create PodIdentifier and construct shared memory path
+    let pod_identifier = PodIdentifier::new(&show_shm_args.namespace, &show_shm_args.pod_name);
+    let shm_path = pod_identifier.to_path(&show_shm_args.shm_base_path);
+
     tracing::info!(
-        "Attempting to open shared memory with identifier: {}",
-        show_shm_args.shm_identifier
+        "Attempting to open shared memory for pod {}/{} at path: {}",
+        show_shm_args.namespace,
+        show_shm_args.pod_name,
+        shm_path.display()
     );
 
-    let handle = SharedMemoryHandle::open(&show_shm_args.shm_identifier)?;
+    let handle = SharedMemoryHandle::open(&shm_path)?;
 
     // Get the raw pointer for validation
     let ptr = handle.get_ptr();
