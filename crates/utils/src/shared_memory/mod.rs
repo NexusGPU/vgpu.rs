@@ -1,3 +1,5 @@
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
@@ -15,6 +17,95 @@ pub mod manager;
 pub mod mutex;
 pub mod set;
 pub mod traits;
+
+/// Clean up empty parent directories after removing a file
+/// This removes the directory structure recursively if directories become empty
+pub fn cleanup_empty_parent_directories(
+    file_path: &Path,
+    stop_at_path: Option<&Path>,
+) -> std::io::Result<()> {
+    if let Some(parent_dir) = file_path.parent() {
+        // Skip if we've reached the stop path
+        if let Some(stop) = stop_at_path {
+            if parent_dir == stop {
+                return Ok(());
+            }
+        }
+
+        // Try to remove the immediate parent directory if it's empty
+        if let Ok(entries) = std::fs::read_dir(parent_dir) {
+            let entry_count = entries.count();
+            if entry_count == 0 {
+                match std::fs::remove_dir(parent_dir) {
+                    Ok(_) => {
+                        tracing::info!("Removed empty directory: {}", parent_dir.display());
+                        // Recursively try to remove parent directories if they're also empty
+                        cleanup_empty_parent_directories(parent_dir, stop_at_path)?;
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            "Failed to remove empty directory {}: {}",
+                            parent_dir.display(),
+                            e
+                        );
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Pod identifier structure containing namespace and name
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PodIdentifier {
+    pub namespace: String,
+    pub name: String,
+}
+
+impl PodIdentifier {
+    /// Create a new PodIdentifier
+    pub fn new(namespace: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            namespace: namespace.into(),
+            name: name.into(),
+        }
+    }
+
+    pub fn to_path(&self, base_path: impl AsRef<Path>) -> PathBuf {
+        base_path
+            .as_ref()
+            .join(format!("{}/{}", self.namespace, self.name))
+    }
+
+    /// Parse a PodIdentifier from a full shared memory path  
+    /// Path format: {base_path}/{namespace}/{name}
+    /// This method extracts namespace/name from any base path
+    pub fn from_path(path: &str) -> Option<Self> {
+        let path = Path::new(path);
+        let components: Vec<_> = path
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+
+        if components.len() < 2 {
+            return None;
+        }
+
+        // Extract the last 3 components: {namespace}/{name}
+        let len = components.len();
+        let namespace = components[len - 2].to_string();
+        let name = components[len - 1].to_string();
+        Some(Self::new(namespace, name))
+    }
+}
+
+impl std::fmt::Display for PodIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.namespace, self.name)
+    }
+}
 
 const MAX_PROCESSES: usize = 2048;
 /// Maximum number of devices that can be stored in shared memory
@@ -478,17 +569,11 @@ mod tests {
 
     use super::*;
 
-    const TEST_IDENTIFIER: &str = "test_shared_memory";
+    const TEST_SHM_BASE_PATH: &str = "/tmp/shm";
     const TEST_DEVICE_IDX: u32 = 0;
     const TEST_TOTAL_CORES: u32 = 1024;
     const TEST_UP_LIMIT: u32 = 80;
     const TEST_MEM_LIMIT: u64 = 1024 * 1024 * 1024; // 1GB
-
-    /// Helper function to check if shared memory file exists in /dev/shm
-    fn shared_memory_file_exists(identifier: &str) -> bool {
-        let path = format!("/dev/shm/{identifier}");
-        std::path::Path::new(&path).exists()
-    }
 
     fn create_test_configs() -> Vec<DeviceConfig> {
         vec![DeviceConfig {
@@ -500,10 +585,6 @@ mod tests {
             sm_count: 10,
             max_thread_per_sm: 1024,
         }]
-    }
-
-    fn create_unique_identifier(test_name: &str) -> String {
-        format!("{}_{}_{}", TEST_IDENTIFIER, test_name, std::process::id())
     }
 
     #[test]
@@ -611,10 +692,11 @@ mod tests {
     #[test]
     fn shared_memory_handle_create_and_open() {
         let configs = create_test_configs();
-        let identifier = create_unique_identifier("handle_create_open");
+        let identifier = PodIdentifier::new("handle_create_open", "test");
 
+        let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
         // Create shared memory
-        let handle1 = SharedMemoryHandle::create(&identifier, &configs)
+        let handle1 = SharedMemoryHandle::create(&pod_path, &configs)
             .expect("should create shared memory successfully");
 
         let state1 = handle1.get_state();
@@ -622,10 +704,9 @@ mod tests {
         assert_eq!(state1.device_count(), 1);
 
         // Verify shared memory file exists after creation
-        assert!(shared_memory_file_exists(&identifier));
-
+        assert!(Path::new(&pod_path).exists());
         // Open existing shared memory
-        let handle2 = SharedMemoryHandle::open(&identifier)
+        let handle2 = SharedMemoryHandle::open(&pod_path)
             .expect("should open existing shared memory successfully");
 
         let state2 = handle2.get_state();
@@ -644,7 +725,7 @@ mod tests {
         assert_eq!(cores, Some(42));
 
         // File should still exist while handles are active
-        assert!(shared_memory_file_exists(&identifier));
+        assert!(Path::new(&pod_path).exists());
     }
 
     #[test]
@@ -656,10 +737,11 @@ mod tests {
     #[test]
     fn concurrent_device_access() {
         let configs = create_test_configs();
-        let identifier = create_unique_identifier("concurrent_access");
+        let identifier = PodIdentifier::new("concurrent_access", "test");
+        let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
 
         let handle = Arc::new(
-            SharedMemoryHandle::create(&identifier, &configs)
+            SharedMemoryHandle::create(&pod_path, &configs)
                 .expect("should create shared memory successfully"),
         );
 
@@ -705,17 +787,18 @@ mod tests {
     fn thread_safe_manager_basic_operations() {
         let manager = ThreadSafeSharedMemoryManager::new();
         let configs = create_test_configs();
-        let identifier = create_unique_identifier("manager_basic");
+        let identifier = PodIdentifier::new("manager_basic", "test");
+        let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
 
         // Test creation
-        manager.create_shared_memory(&identifier, &configs).unwrap();
-        assert!(manager.contains(&identifier));
+        manager.create_shared_memory(&pod_path, &configs).unwrap();
+        assert!(manager.contains(&pod_path));
 
         // Verify shared memory file exists
-        assert!(shared_memory_file_exists(&identifier));
+        assert!(Path::new(&pod_path).exists());
 
         // Test getting shared memory
-        let ptr = manager.get_shared_memory(&identifier).unwrap();
+        let ptr = manager.get_shared_memory(&pod_path).unwrap();
         assert!(!ptr.is_null());
 
         // Test accessing through pointer
@@ -726,16 +809,23 @@ mod tests {
         }
 
         // Test cleanup
-        manager.cleanup(&identifier).unwrap();
-        assert!(!manager.contains(&identifier));
-        assert!(!shared_memory_file_exists(&identifier));
+        manager.cleanup(&pod_path).unwrap();
+        assert!(!manager.contains(&pod_path));
+
+        // Check that the path exists but is an empty directory
+        let path = Path::new(&pod_path);
+        assert!(
+            path.read_dir().unwrap().next().is_none(),
+            "Directory should be empty"
+        );
     }
 
     #[test]
     fn thread_safe_manager_concurrent_creation() {
         let manager = Arc::new(ThreadSafeSharedMemoryManager::new());
         let configs = create_test_configs();
-        let identifier = create_unique_identifier("manager_concurrent");
+        let identifier = PodIdentifier::new("manager_concurrent", "test");
+        let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
 
         let mut handles = vec![];
 
@@ -743,10 +833,10 @@ mod tests {
         for _ in 0..5 {
             let manager_clone = Arc::clone(&manager);
             let configs_clone = configs.clone();
-            let identifier_clone = identifier.clone();
+            let pod_path_clone = pod_path.clone();
 
             let handle = thread::spawn(move || {
-                let result = manager_clone.create_shared_memory(&identifier_clone, &configs_clone);
+                let result = manager_clone.create_shared_memory(&pod_path_clone, &configs_clone);
                 assert!(result.is_ok());
             });
 
@@ -758,29 +848,29 @@ mod tests {
         }
 
         // Should have exactly one shared memory
-        assert!(manager.contains(&identifier));
-        manager.cleanup(&identifier).unwrap();
+        assert!(manager.contains(&pod_path));
+        manager.cleanup(&pod_path).unwrap();
     }
 
     #[test]
     fn orphaned_file_cleanup() {
         let manager = ThreadSafeSharedMemoryManager::new();
 
-        // Create a fake orphaned file in /tmp (since we can't write to /dev/shm in tests)
+        // Create a fake orphaned file in /tmp
         let test_file = "/tmp/test_orphaned_shm_file";
         std::fs::write(test_file, "fake shared memory data").unwrap();
 
         // Verify file exists
-        assert!(std::path::Path::new(test_file).exists());
+        assert!(Path::new(test_file).exists());
 
         // Test cleanup with a pattern that won't match
         let cleaned = manager
-            .cleanup_orphaned_files("nonexistent_pattern", |_| false)
+            .cleanup_orphaned_files("nonexistent_pattern", |_| false, Path::new("/"))
             .unwrap();
         assert_eq!(cleaned.len(), 0);
 
         // File should still exist since pattern didn't match
-        assert!(std::path::Path::new(test_file).exists());
+        assert!(Path::new(test_file).exists());
 
         // Clean up test file
         std::fs::remove_file(test_file).unwrap();
@@ -921,5 +1011,139 @@ mod tests {
             MAX_PROCESSES,
             "should remain at capacity when inserting new PID beyond capacity"
         );
+    }
+
+    #[test]
+    fn test_cleanup_empty_parent_directories() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create nested directory structure: base/namespace/podname/
+        let namespace_dir = base_path.join("test-namespace");
+        let pod_dir = namespace_dir.join("test-pod");
+        fs::create_dir_all(&pod_dir).unwrap();
+
+        // Create a file in the pod directory
+        let test_file = pod_dir.join("shm");
+        fs::write(&test_file, "test data").unwrap();
+
+        // Verify structure exists
+        assert!(test_file.exists());
+        assert!(pod_dir.exists());
+        assert!(namespace_dir.exists());
+
+        // Remove the file
+        fs::remove_file(&test_file).unwrap();
+
+        // Test cleanup without stop_at_path (should remove all empty dirs)
+        let result = cleanup_empty_parent_directories(&test_file, None);
+        assert!(result.is_ok());
+
+        // Pod directory should be removed
+        assert!(!pod_dir.exists());
+        // Namespace directory should be removed
+        assert!(!namespace_dir.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_parent_directories_with_stop_at_path() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create nested directory structure: base/namespace/podname/
+        let namespace_dir = base_path.join("test-namespace");
+        let pod_dir = namespace_dir.join("test-pod");
+        fs::create_dir_all(&pod_dir).unwrap();
+
+        // Create a file in the pod directory
+        let test_file = pod_dir.join("shm");
+        fs::write(&test_file, "test data").unwrap();
+
+        // Remove the file
+        fs::remove_file(&test_file).unwrap();
+
+        // Test cleanup with stop_at_path set to base_path
+        let result = cleanup_empty_parent_directories(&test_file, Some(base_path));
+        assert!(result.is_ok());
+
+        // Pod directory should be removed
+        assert!(!pod_dir.exists());
+        // Namespace directory should be removed
+        assert!(!namespace_dir.exists());
+        // Base directory should remain (it's the stop_at_path)
+        assert!(base_path.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_parent_directories_stops_at_non_empty_dir() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create nested directory structure: base/namespace/podname/
+        let namespace_dir = base_path.join("test-namespace");
+        let pod_dir = namespace_dir.join("test-pod");
+        fs::create_dir_all(&pod_dir).unwrap();
+
+        // Create two files in the pod directory
+        let test_file1 = pod_dir.join("shm");
+        let test_file2 = pod_dir.join("other_file");
+        fs::write(&test_file1, "test data").unwrap();
+        fs::write(&test_file2, "other data").unwrap();
+
+        // Remove only one file
+        fs::remove_file(&test_file1).unwrap();
+
+        // Test cleanup - should not remove pod directory since it's not empty
+        let result = cleanup_empty_parent_directories(&test_file1, Some(base_path));
+        assert!(result.is_ok());
+
+        // Pod directory should still exist (not empty)
+        assert!(pod_dir.exists());
+        assert!(namespace_dir.exists());
+        assert!(test_file2.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_parent_directories_with_nested_stop_path() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create nested directory structure: base/namespace/podname/
+        let namespace_dir = base_path.join("test-namespace");
+        let pod_dir = namespace_dir.join("test-pod");
+        fs::create_dir_all(&pod_dir).unwrap();
+
+        // Create a file in the pod directory
+        let test_file = pod_dir.join("shm");
+        fs::write(&test_file, "test data").unwrap();
+
+        // Remove the file
+        fs::remove_file(&test_file).unwrap();
+
+        // Test cleanup with stop_at_path set to namespace directory
+        let result = cleanup_empty_parent_directories(&test_file, Some(&namespace_dir));
+        assert!(result.is_ok());
+
+        // Pod directory should be removed
+        assert!(!pod_dir.exists());
+        // Namespace directory should remain (it's the stop_at_path)
+        assert!(namespace_dir.exists());
+        assert!(base_path.exists());
     }
 }

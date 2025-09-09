@@ -1,6 +1,7 @@
 //! Limiter Coordinator Module
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,11 +17,23 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, SharedDeviceState};
+use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, PodIdentifier};
 
 use super::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
 use super::utilization::DeviceSnapshot;
 use utils::shared_memory::traits::SharedMemoryAccess;
+
+/// Configuration for the LimiterCoordinator
+pub struct CoordinatorConfig {
+    /// Monitoring interval
+    pub watch_interval: Duration,
+    /// Number of GPU devices
+    pub device_count: u32,
+    /// Glob pattern for shared memory files
+    pub shared_memory_glob_pattern: String,
+    /// Base path for shared memory operations
+    pub base_path: PathBuf,
+}
 
 /// Generic limiter coordinator with dependency injection
 pub struct LimiterCoordinator<M, P, D, T> {
@@ -42,6 +55,8 @@ pub struct LimiterCoordinator<M, P, D, T> {
     device_count: u32,
     /// glob pattern for shared memory files
     shared_memory_glob_pattern: String,
+    /// Base path for shared memory operations
+    base_path: PathBuf,
 }
 
 impl<M, P, D, T> LimiterCoordinator<M, P, D, T>
@@ -53,9 +68,7 @@ where
 {
     /// Create a new generic coordinator with injected dependencies
     pub fn new(
-        watch_interval: Duration,
-        device_count: u32,
-        shared_memory_glob_pattern: String,
+        config: CoordinatorConfig,
         shared_memory: Arc<M>,
         pod_state: Arc<P>,
         snapshot: Arc<D>,
@@ -68,9 +81,10 @@ where
             time,
             device_watcher_tasks: RwLock::new(HashMap::new()),
             heartbeat_task: RwLock::new(None),
-            watch_interval,
-            device_count,
-            shared_memory_glob_pattern,
+            watch_interval: config.watch_interval,
+            device_count: config.device_count,
+            shared_memory_glob_pattern: config.shared_memory_glob_pattern,
+            base_path: config.base_path,
         }
     }
 
@@ -80,9 +94,9 @@ where
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
-    pub fn extract_identifier_from_path(&self, file_path: &std::path::Path) -> Result<String> {
+    pub fn extract_identifier_from_path(&self, file_path: &Path) -> Result<PodIdentifier> {
         self.shared_memory
-            .extract_identifier_from_path(file_path)
+            .extract_identifier_from_path(&self.base_path, file_path)
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
@@ -217,26 +231,26 @@ where
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         *last_seen_timestamp = device_snapshot.timestamp;
 
-        for pod_identifier in pods_for_device {
-            let Some(host_pids) = pod_state.get_host_pids_for_pod(&pod_identifier) else {
-                debug!(pod_identifier = %pod_identifier, "Pod not found when fetching host PIDs");
+        for pod_id in pods_for_device {
+            let Some(host_pids) = pod_state.get_host_pids_for_pod(&pod_id) else {
+                debug!(pod_identifier = %pod_id, "Pod not found when fetching host PIDs");
                 continue;
             };
 
             if host_pids.is_empty() {
-                debug!(pod_identifier = %pod_identifier, device_idx = device_idx, "No active processes to monitor");
+                debug!(pod_identifier = %pod_id, device_idx = device_idx, "No active processes to monitor");
                 continue;
             }
 
-            let Some(device_config) =
-                pod_state.get_device_config_for_pod(&pod_identifier, device_idx)
+            let Some(device_config) = pod_state.get_device_config_for_pod(&pod_id, device_idx)
             else {
-                debug!(pod_identifier = %pod_identifier, device_idx = device_idx, "Device config not found for pod");
+                debug!(pod_identifier = %pod_id, device_idx = device_idx, "Device config not found for pod");
                 continue;
             };
 
             if let Err(e) = Self::process_pod_utilization_update(
-                &pod_identifier,
+                pod_state,
+                &pod_id,
                 &host_pids,
                 &device_config,
                 &device_snapshot,
@@ -244,7 +258,7 @@ where
             .await
             {
                 error!(
-                    pod_identifier = %pod_identifier,
+                    pod_identifier = %pod_id,
                     device_idx = device_idx,
                     error = %e,
                     "Failed to process pod utilization update"
@@ -257,15 +271,31 @@ where
 
     /// Process utilization update for a single pod
     async fn process_pod_utilization_update(
-        pod_identifier: &str,
+        pod_state: &Arc<P>,
+        pod_identifier: &PodIdentifier,
         host_pids: &[u32],
         device_config: &DeviceConfig,
         device_snapshot: &DeviceSnapshot,
     ) -> Result<()> {
-        let current_share =
-            Self::get_available_cores(pod_identifier, device_config.device_idx as usize)
-                .await
-                .context("Failed to read current share from shared memory")?;
+        let pod_path = pod_state.pod_path(pod_identifier);
+        // Open shared memory handle
+        let handle = SharedMemoryHandle::open(&pod_path).context("Failed to open shared memory")?;
+        let state = handle.get_state();
+
+        let device_index = device_config.device_idx as usize;
+        if !state.has_device(device_index) {
+            anyhow::bail!(
+                "Device {} not found in shared memory for pod {}",
+                device_index,
+                pod_identifier
+            );
+        }
+
+        let current_share = state
+            .with_device(device_index, |device| device.device_info.get_available_cores())
+            .context(format!(
+                "Device {device_index} not found in shared memory for pod {pod_identifier}. This indicates a system state inconsistency.",
+            ))?;
 
         let pod_utilization = device_snapshot.get_pod_utilization(host_pids);
         let pod_memory = device_snapshot.get_pod_memory(host_pids);
@@ -276,24 +306,30 @@ where
             current_share,
         );
 
-        Self::update_shared_memory_state(
-            pod_identifier,
-            device_config.device_idx as usize,
-            Some(pod_memory),
-            Some(new_share),
-            device_snapshot.timestamp,
-        )
-        .await
-        .context("Failed to update shared memory state")
+        // Update shared memory state
+        state.with_device(device_index, |device| {
+            device.device_info.set_pod_memory_used(pod_memory);
+        });
+
+        if let Some(new_share) = Some(new_share) {
+            state.with_device(device_index, |device| {
+                device.device_info.set_available_cores(new_share);
+            });
+        }
+
+        state.update_heartbeat(device_snapshot.timestamp);
+
+        Ok(())
     }
 
     /// Ensures a pod is registered with device configurations (idempotent operation)
     pub async fn ensure_pod_registered(
         &self,
-        pod_identifier: &str,
+        pod_identifier: &PodIdentifier,
         configs: &[DeviceConfig],
     ) -> Result<Vec<usize>> {
-        let restored_pids = match self.shared_memory.get_shared_memory(pod_identifier) {
+        let pod_path = self.pod_state.pod_path(pod_identifier);
+        let restored_pids = match self.shared_memory.get_shared_memory(pod_path) {
             Ok(ptr) => {
                 debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
                 let state = unsafe { &*ptr };
@@ -320,8 +356,9 @@ where
             }
             Err(e) => {
                 debug!(pod_identifier = %pod_identifier, error = %e, "Creating new shared memory for pod");
+                let pod_path = self.pod_state.pod_path(pod_identifier);
                 self.shared_memory
-                    .create_shared_memory(pod_identifier, configs)
+                    .create_shared_memory(&pod_path, configs)
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
                 Vec::new()
             }
@@ -340,10 +377,11 @@ where
     }
 
     /// Registers a process within a pod (Process-level operation)
-    pub fn register_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
+    pub fn register_process(&self, pod_identifier: &PodIdentifier, host_pid: u32) -> Result<()> {
         // Add PID to shared memory
+        let pod_path = self.pod_state.pod_path(pod_identifier);
         self.shared_memory
-            .add_pid(pod_identifier, host_pid as usize)
+            .add_pid(pod_path, host_pid as usize)
             .map_err(|e| anyhow::anyhow!("{}", e))
             .context("Failed to add PID to shared memory")?;
 
@@ -357,10 +395,15 @@ where
     }
 
     /// Unregisters a single process from the coordinator.
-    pub async fn unregister_process(&self, pod_identifier: &str, host_pid: u32) -> Result<()> {
+    pub async fn unregister_process(
+        &self,
+        pod_identifier: &PodIdentifier,
+        host_pid: u32,
+    ) -> Result<()> {
+        let pod_path = self.pod_state.pod_path(pod_identifier);
         // Remove PID from shared memory
         self.shared_memory
-            .remove_pid(pod_identifier, host_pid as usize)
+            .remove_pid(pod_path, host_pid as usize)
             .map_err(|e| anyhow::anyhow!("{}", e))
             .context("Failed to remove PID from shared memory")?;
 
@@ -373,73 +416,13 @@ where
         Ok(())
     }
 
-    /// Updates the shared memory state efficiently without unnecessary blocking
-    async fn update_shared_memory_state(
-        pod_identifier: &str,
-        device_index: usize,
-        memory_used: Option<u64>,
-        new_share: Option<i32>,
-        timestamp: u64,
-    ) -> Result<()> {
-        Self::with_shared_memory_handle(pod_identifier, move |state, pod_identifier: &str| {
-            if !state.has_device(device_index) {
-                anyhow::bail!(
-                    "Device {} not found in shared memory for pod {}",
-                    device_index,
-                    pod_identifier
-                );
-            }
-
-            if let Some(memory_used) = memory_used {
-                state.with_device(device_index, |device| {
-                    device.device_info.set_pod_memory_used(memory_used);
-                });
-            }
-
-            if let Some(new_share) = new_share {
-                state.with_device(device_index, |device| {
-                    let total_cuda_cores = device.device_info.get_total_cores() as i32;
-                    let current_cores = device.device_info.get_available_cores();
-                    let target_cores = new_share.max(0).min(total_cuda_cores);
-                    let delta = target_cores - current_cores;
-                    device.device_info.fetch_add_available_cores(delta);
-                });
-            }
-
-            state.update_heartbeat(timestamp);
-            Ok(())
-        })
-    }
-
-    /// Gets available cores for a device efficiently
-    async fn get_available_cores(pod_identifier: &str, device_index: usize) -> Result<i32> {
-        Self::with_shared_memory_handle(pod_identifier, move |state, pod_identifier: &str| {
-            state
-                .with_device(device_index, |device| device.device_info.get_available_cores())
-                .context(format!(
-                    "Device {device_index} not found in shared memory for pod {pod_identifier}. This indicates a system state inconsistency.",
-                ))
-        })
-    }
-
-    /// Helper method to safely access shared memory handles with consistent error handling
-    fn with_shared_memory_handle<R, F>(pod_identifier: &str, f: F) -> Result<R>
-    where
-        F: FnOnce(&SharedDeviceState, &str) -> Result<R> + Send + 'static,
-        R: Send + 'static,
-    {
-        let handle =
-            SharedMemoryHandle::open(pod_identifier).context("Failed to open shared memory")?;
-        let state = handle.get_state();
-        f(state, pod_identifier)
-    }
-
     /// Start periodic cleanup task for unused shared memory segments
     fn start_periodic_cleanup_task(&self, cancellation_token: CancellationToken) -> JoinHandle<()> {
         let shared_memory = self.shared_memory.clone();
 
         let shared_memory_glob_pattern = self.shared_memory_glob_pattern.clone();
         let pod_state = self.pod_state.clone();
+        let base_path = self.base_path.clone();
         tokio::spawn(async move {
             // Run cleanup every 5 minutes
             let mut cleanup_interval = interval(Duration::from_secs(300));
@@ -454,13 +437,13 @@ where
 
                         if let Err(e) = shared_memory.cleanup_orphaned_files(&shared_memory_glob_pattern, |identifier| {
                             !pod_state.contains_pod(identifier)
-                        }) {
+                        }, &base_path) {
                             tracing::warn!("Failed to cleanup orphaned shared memory files: {}", e);
                         }
 
                         match shared_memory.cleanup_unused(|identifier| {
                             pod_state.contains_pod(identifier)
-                        }) {
+                        }, &base_path) {
                             Ok(cleaned_files) => {
                                 if !cleaned_files.is_empty() {
                                     tracing::info!(
@@ -505,13 +488,14 @@ where
 
                         // Update heartbeat for each pod
                         for pod_identifier in pod_identifiers {
-                            if let Err(e) = Self::with_shared_memory_handle(&pod_identifier, move |state, _| {
+                            let pod_path = pod_state.pod_path(&pod_identifier);
+                            if let Ok(handle) = SharedMemoryHandle::open(&pod_path) {
+                                let state = handle.get_state();
                                 state.update_heartbeat(timestamp);
-                                Ok(())
-                            })
-                            {
+                            } else {
+                                let e = format!("Failed to open shared memory for pod {pod_identifier}");
                                 tracing::warn!(
-                                    pod_identifier = %pod_identifier,
+                                    pod_identifier = %format!("{}/{}", pod_identifier.namespace, pod_identifier.name),
                                     error = %e,
                                     "Failed to update heartbeat for pod"
                                 );
@@ -741,24 +725,25 @@ mod tests {
         );
 
         // Test process registration
-        let result = coordinator.register_process("test-pod", 1234);
+        let pod_id = PodIdentifier::new("test", "pod");
+        let result = coordinator.register_process(&pod_id, 1234);
         assert!(result.is_ok());
 
         // Verify operation was logged in mock
         let operations = shared_memory.get_operations();
         assert!(operations
             .iter()
-            .any(|op| op.contains("add_pid(test-pod, 1234)")));
+            .any(|op| op.contains("add_pid(/tmp/test_shm/test/pod, 1234)")));
 
         // Test process unregistration
-        let result = coordinator.unregister_process("test-pod", 1234).await;
+        let result = coordinator.unregister_process(&pod_id, 1234).await;
         assert!(result.is_ok());
 
         // Verify operation was logged in mock
         let operations = shared_memory.get_operations();
         assert!(operations
             .iter()
-            .any(|op| op.contains("remove_pid(test-pod, 1234)")));
+            .any(|op| op.contains("remove_pid(/tmp/test_shm/test/pod, 1234)")));
     }
 
     #[tokio::test]
@@ -849,7 +834,7 @@ mod tests {
             "test_*.shm".to_string(),
         );
 
-        let test_path = std::path::Path::new("/tmp/test_pod_123.shm");
+        let test_path = Path::new("/tmp/test_shm/test_ns/test_pod_123/shm");
         let result = coordinator.extract_identifier_from_path(test_path);
         assert!(result.is_ok());
 

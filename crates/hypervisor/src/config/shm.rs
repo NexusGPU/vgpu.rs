@@ -3,8 +3,20 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 pub struct ShowShmArgs {
-    #[arg(long, help = "Shared memory identifier")]
-    pub shm_identifier: String,
+    #[arg(long, help = "Pod namespace")]
+    pub namespace: String,
+
+    #[arg(long, help = "Pod name")]
+    pub pod_name: String,
+
+    #[arg(
+        long,
+        help = "Base path for shared memory files",
+        env = "SHM_BASE_PATH",
+        value_hint = clap::ValueHint::DirPath,
+        default_value = "/run/tensor-fusion/shm"
+    )]
+    pub shm_base_path: PathBuf,
 }
 
 #[derive(Parser)]
@@ -12,7 +24,7 @@ pub struct ShowTuiWorkersArgs {
     #[arg(
         long,
         help = "Glob pattern for worker shared memory files",
-        default_value = "/tf_shm_*"
+        default_value = "/dev/shm/tf_shm_*"
     )]
     pub glob: String,
 
@@ -43,11 +55,4 @@ pub struct MountShmArgs {
 
     #[arg(long, help = "Shared memory size in MB", default_value = "64")]
     pub size_mb: u64,
-
-    #[arg(
-        long,
-        help = "Cleanup all shared memory files with this prefix (e.g., 'tf_shm_*')",
-        value_hint = clap::ValueHint::Other,
-    )]
-    pub cleanup_prefix: Option<String>,
 }

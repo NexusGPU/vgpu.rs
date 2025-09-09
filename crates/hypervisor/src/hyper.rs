@@ -48,14 +48,21 @@ async fn run_daemon(daemon_args: hypervisor::config::DaemonArgs) -> Result<()> {
 
 async fn run_show_shm(show_shm_args: hypervisor::config::ShowShmArgs) -> Result<()> {
     use utils::shared_memory::handle::SharedMemoryHandle;
+    use utils::shared_memory::PodIdentifier;
     utils::logging::init();
 
+    // Create PodIdentifier and construct shared memory path
+    let pod_identifier = PodIdentifier::new(&show_shm_args.namespace, &show_shm_args.pod_name);
+    let shm_path = pod_identifier.to_path(&show_shm_args.shm_base_path);
+
     tracing::info!(
-        "Attempting to open shared memory with identifier: {}",
-        show_shm_args.shm_identifier
+        "Attempting to open shared memory for pod {}/{} at path: {}",
+        show_shm_args.namespace,
+        show_shm_args.pod_name,
+        shm_path.display()
     );
 
-    let handle = SharedMemoryHandle::open(&show_shm_args.shm_identifier)?;
+    let handle = SharedMemoryHandle::open(&shm_path)?;
 
     // Get the raw pointer for validation
     let ptr = handle.get_ptr();
@@ -142,35 +149,10 @@ async fn run_mount_shm(mount_shm_args: hypervisor::config::MountShmArgs) -> Resu
     tracing::info!("mount point: {:?}", mount_shm_args.mount_point);
     tracing::info!("size: {} MB", mount_shm_args.size_mb);
 
-    // Clean up shared memory files if prefix is provided
-    if let Some(ref cleanup_prefix) = mount_shm_args.cleanup_prefix {
-        tracing::info!(
-            "Cleaning up ALL shared memory files with prefix: {}",
-            cleanup_prefix
-        );
-
-        let cleanup_result = cleanup_all_shared_memory_files(cleanup_prefix);
-
-        match cleanup_result {
-            Ok(cleaned_files) => {
-                if !cleaned_files.is_empty() {
-                    tracing::info!(
-                        "Cleaned up {} shared memory files: {:?}",
-                        cleaned_files.len(),
-                        cleaned_files
-                    );
-                } else {
-                    tracing::info!(
-                        "No shared memory files found with prefix: {}",
-                        cleanup_prefix
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to cleanup shared memory files: {}", e);
-            }
-        }
-    }
+    tracing::info!(
+        "Cleaning up ALL shared memory files in: {:?}",
+        mount_shm_args.mount_point
+    );
 
     // create mount point directory
     if !mount_shm_args.mount_point.exists() {
@@ -236,51 +218,6 @@ async fn run_mount_shm(mount_shm_args: hypervisor::config::MountShmArgs) -> Resu
     }
 
     Ok(())
-}
-
-/// Cleans up ALL shared memory files in /dev/shm with the specified prefix pattern
-/// This function directly removes files without orphan detection
-fn cleanup_all_shared_memory_files(prefix_pattern: &str) -> Result<Vec<String>> {
-    use std::fs;
-
-    let mut cleaned_files = Vec::new();
-
-    // Use glob to find matching files in /dev/shm
-    let pattern = format!("/dev/shm/{prefix_pattern}");
-    let paths = glob::glob(&pattern)
-        .with_context(|| format!("Failed to compile glob pattern: {pattern}"))?;
-
-    for path_result in paths {
-        let file_path = path_result
-            .with_context(|| format!("Failed to read glob path for pattern: {pattern}"))?;
-
-        if !file_path.is_file() {
-            continue;
-        }
-
-        // Extract filename for logging
-        let filename = file_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("<unknown>");
-
-        // Directly remove the file without any orphan checks
-        match fs::remove_file(&file_path) {
-            Ok(_) => {
-                cleaned_files.push(filename.to_string());
-                tracing::info!("Removed shared memory file: {}", file_path.display());
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to remove shared memory file {}: {}",
-                    file_path.display(),
-                    e
-                );
-            }
-        }
-    }
-
-    Ok(cleaned_files)
 }
 
 async fn run_show_tui_workers(args: hypervisor::config::ShowTuiWorkersArgs) -> Result<()> {

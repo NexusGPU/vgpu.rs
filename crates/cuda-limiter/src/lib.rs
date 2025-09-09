@@ -67,8 +67,8 @@ fn are_hooks_enabled() -> (bool, bool) {
     (enable_nvml_hooks, enable_cuda_hooks)
 }
 
-pub(crate) fn mock_shm_name() -> Option<String> {
-    std::env::var("TF_SHM_IDENTIFIER").ok()
+pub(crate) fn mock_shm_path() -> Option<String> {
+    std::env::var("TF_SHM_FILE").ok()
 }
 
 fn init_ngpu_library() {
@@ -88,7 +88,7 @@ fn init_ngpu_library() {
                 }
             };
 
-        let config = if mock_shm_name().is_none() {
+        let config = if mock_shm_path().is_none() {
             let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
                 Some((ip, port)) => (ip, port),
                 None => {

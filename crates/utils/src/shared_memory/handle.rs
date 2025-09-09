@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -10,17 +11,19 @@ use tracing::info;
 
 use super::{DeviceConfig, SharedDeviceState};
 
+/// Shared memory file name constant
+pub const SHM_PATH_SUFFIX: &str = "shm";
+
 /// Safely access shared memory, automatically handling the segment's lifecycle.
 pub struct SharedMemoryHandle {
     shmem: RefCell<Shmem>,
     ptr: *mut SharedDeviceState,
-    identifier: String,
 }
 
 impl SharedMemoryHandle {
     /// Creates a mock SharedMemoryHandle with predefined test data.
     /// This function is useful for testing without requiring actual shared memory.
-    pub fn mock(shm_name: String, gpu_idx_uuids: Vec<(usize, String)>) -> Self {
+    pub fn mock(shm_path: String, gpu_idx_uuids: Vec<(usize, String)>) -> Self {
         // Create mock configs for testing
         let mock_configs: Vec<_> = gpu_idx_uuids
             .iter()
@@ -40,15 +43,21 @@ impl SharedMemoryHandle {
         // Create actual shared memory to get a valid pointer
         let shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(&shm_name)
+            .use_tmpfs_with_dir(Path::new(&shm_path))
+            .os_id(SHM_PATH_SUFFIX)
             .open()
         {
             Ok(shmem) => shmem,
             Err(e) => {
-                tracing::warn!("failed to open shared memory: {:?}, creating new one", e);
+                tracing::warn!("failed to open shared memory shm_name: {shm_path}, err: {:?}, creating new one", e);
+
+                std::fs::create_dir_all(Path::new(&shm_path))
+                    .expect("Failed to create mock shared memory directory");
+
                 let shmem = ShmemConf::new()
                     .size(std::mem::size_of::<SharedDeviceState>())
-                    .os_id(&shm_name)
+                    .use_tmpfs_with_dir(Path::new(&shm_path))
+                    .os_id(SHM_PATH_SUFFIX)
                     .create()
                     .expect("Failed to create mock shared memory");
 
@@ -67,15 +76,15 @@ impl SharedMemoryHandle {
         Self {
             shmem: RefCell::new(shmem),
             ptr,
-            identifier: shm_name,
         }
     }
 
     /// Opens an existing shared memory segment.
-    pub fn open(identifier: &str) -> Result<Self> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let shmem = ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
+            .use_tmpfs_with_dir(path.as_ref())
+            .os_id(SHM_PATH_SUFFIX)
             .open()
             .context("Failed to open shared memory")?;
 
@@ -84,17 +93,17 @@ impl SharedMemoryHandle {
         Ok(Self {
             shmem: RefCell::new(shmem),
             ptr,
-            identifier: identifier.to_string(),
         })
     }
 
     /// Creates a new shared memory segment.
-    pub fn create(identifier: &str, configs: &[DeviceConfig]) -> Result<Self> {
+    pub fn create(path: impl AsRef<Path>, configs: &[DeviceConfig]) -> Result<Self> {
+        std::fs::create_dir_all(path.as_ref())?;
         let old_umask = unsafe { libc::umask(0) };
-
         let shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .os_id(identifier)
+            .use_tmpfs_with_dir(path.as_ref())
+            .os_id(SHM_PATH_SUFFIX)
             .mode(
                 Mode::S_IRUSR
                     | Mode::S_IWUSR
@@ -110,7 +119,8 @@ impl SharedMemoryHandle {
                 // If it already exists, try to open it.
                 ShmemConf::new()
                     .size(std::mem::size_of::<SharedDeviceState>())
-                    .os_id(identifier)
+                    .use_tmpfs_with_dir(path.as_ref())
+                    .os_id(SHM_PATH_SUFFIX)
                     .open()
                     .context("Failed to open existing shared memory")?
             }
@@ -129,14 +139,13 @@ impl SharedMemoryHandle {
         }
 
         info!(
-            identifier = %identifier,
+            path = ?path.as_ref(),
             "Created shared memory segment"
         );
 
         Ok(Self {
             shmem: RefCell::new(shmem),
             ptr,
-            identifier: identifier.to_string(),
         })
     }
 
@@ -153,11 +162,6 @@ impl SharedMemoryHandle {
     pub fn get_state(&self) -> &SharedDeviceState {
         unsafe { &*self.ptr }
     }
-
-    /// Gets the shared memory identifier.
-    pub fn get_identifier(&self) -> &str {
-        &self.identifier
-    }
 }
 
 // Implement Send and Sync because SharedDeviceState uses atomic operations.
@@ -170,16 +174,12 @@ impl Drop for SharedMemoryHandle {
             let need_cleanup = self.get_state().get_all_pids().is_empty();
 
             if !need_cleanup {
-                info!(
-                    identifier = %self.identifier,
-                    pid_count = self.get_state().get_all_pids().len(),
-                    "Other processes still using shared memory, preserving it"
-                );
                 // Don't clean up - other processes are still using it
                 self.shmem.borrow_mut().set_owner(false);
             } else {
+                let path = self.shmem.borrow().get_tmpfs_file_path();
                 info!(
-                    identifier = %self.identifier,
+                    path = ?path,
                     "No other processes using shared memory, allowing cleanup"
                 );
                 // Clean up - no other processes are using it
@@ -191,16 +191,20 @@ impl Drop for SharedMemoryHandle {
 
 #[cfg(test)]
 mod tests {
+    use crate::shared_memory::PodIdentifier;
+
     use super::*;
-    use std::process;
+    use std::{path::PathBuf, process};
 
     #[test]
     fn test_shared_memory_preserved_with_pids() {
-        let test_id = format!("test_preserved_{}", process::id());
+        let pod_id = PodIdentifier::new("test", "preserved");
         let configs = vec![];
+        let pod_path = pod_id.to_path("/tmp/test_shm");
 
+        let _ = std::fs::remove_dir_all(&pod_path);
         // Test case: Create shared memory, add PID, then test cleanup behavior
-        let handle = SharedMemoryHandle::create(&test_id, &configs).unwrap();
+        let handle = SharedMemoryHandle::create(&pod_path, &configs).unwrap();
 
         // Initially no PIDs
         assert!(handle.get_state().get_all_pids().is_empty());
@@ -213,22 +217,22 @@ mod tests {
 
         drop(handle);
 
-        let handle2 = SharedMemoryHandle::open(&test_id);
+        let handle2 = SharedMemoryHandle::open(&pod_path);
 
         assert!(handle2.is_ok());
 
         {
-            std::fs::remove_file(format!("/dev/shm/{test_id}")).unwrap();
+            std::fs::remove_dir_all(pod_path).unwrap();
         }
     }
 
     #[test]
     fn test_shared_memory_cleanup() {
-        let test_id = format!("test_cleanup_{}", process::id());
+        let test_path = PathBuf::from(format!("/tmp/test_cleanup_{}", process::id()));
         let configs = vec![];
 
         // Test case: Create shared memory, add PID, then test cleanup behavior
-        let handle = SharedMemoryHandle::create(&test_id, &configs).unwrap();
+        let handle = SharedMemoryHandle::create(&test_path, &configs).unwrap();
 
         // Initially no PIDs
         assert!(handle.get_state().get_all_pids().is_empty());
@@ -236,7 +240,7 @@ mod tests {
 
         drop(handle);
 
-        let handle2 = SharedMemoryHandle::open(&test_id);
+        let handle2 = SharedMemoryHandle::open(test_path);
 
         assert!(handle2.is_err());
     }

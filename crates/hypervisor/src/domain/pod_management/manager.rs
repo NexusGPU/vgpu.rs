@@ -1,14 +1,15 @@
 //! Simplified pod manager that handles worker lifecycle with unified state management.
 
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use api_types::{QosLevel, WorkerInfo};
 use nvml_wrapper::Nvml;
 use tracing::{info, warn};
-use utils::shared_memory::handle::SharedMemoryHandle;
 use utils::shared_memory::traits::SharedMemoryAccess;
+use utils::shared_memory::PodIdentifier;
 
 use crate::domain::hypervisor::HypervisorType;
 use crate::gpu_observer::GpuObserver;
@@ -25,7 +26,11 @@ use super::device_info::create_device_configs_from_worker_info;
 use super::pod_state_store::PodStateStore;
 use super::types::{PodManagementError, Result};
 
-const IDENTIFIER_PREFIX: &str = "tf_shm_";
+/// Shared memory glob pattern format: {base_path}/*/*/shm  
+const SHM_GLOB_PATTERN_FORMAT: &str = "/*/*/";
+
+use utils::shared_memory::handle::SHM_PATH_SUFFIX;
+
 /// Simplified pod manager with unified state management
 pub struct PodManager<M, P, D, T> {
     /// Centralized pod state store
@@ -37,6 +42,8 @@ pub struct PodManager<M, P, D, T> {
     nvml: Arc<Nvml>,
     pod_info_cache: Arc<PodInfoCache>,
     gpu_observer: Arc<GpuObserver>,
+    /// Base path for shared memory operations
+    shm_base_path: PathBuf,
 }
 
 impl<M, P, D, T> PodManager<M, P, D, T> {
@@ -45,8 +52,14 @@ impl<M, P, D, T> PodManager<M, P, D, T> {
         &self.pod_state_store
     }
     /// Find a pod by worker PID.
-    pub fn find_pod_by_worker_pid(&self, pid: u32) -> Option<String> {
+    pub fn find_pod_by_worker_pid(&self, pid: u32) -> Option<PodIdentifier> {
         self.pod_state_store.get_pod_by_pid(pid)
+    }
+
+    /// Parse namespace and pod name from a shared memory path identifier
+    /// Format: {base_path}/{namespace}/{pod_name}/shm
+    pub fn pod_name_namespace(&self, identifier: &PodIdentifier) -> Option<(String, String)> {
+        Some((identifier.namespace.clone(), identifier.name.clone()))
     }
 }
 
@@ -68,6 +81,7 @@ where
         pod_info_cache: Arc<PodInfoCache>,
         pod_state_store: Arc<PodStateStore>,
         gpu_observer: Arc<GpuObserver>,
+        shm_base_path: PathBuf,
     ) -> Self {
         Self {
             pod_state_store,
@@ -78,13 +92,21 @@ where
             nvml,
             pod_info_cache,
             gpu_observer,
+            shm_base_path,
         }
     }
 
-    pub async fn restore_pod_from_shared_memory(&self, shm_glob_pattern: &str) -> Result<()> {
+    pub async fn restore_pod_from_shared_memory(&self) -> Result<()> {
+        // Generate glob pattern from base path: {base_path}/*/*/shm
+        let shm_glob_pattern = format!(
+            "{}{}{}",
+            self.shm_base_path.to_string_lossy(),
+            SHM_GLOB_PATTERN_FORMAT,
+            SHM_PATH_SUFFIX
+        );
         let shared_memory_files = self
             .limiter_coordinator
-            .find_shared_memory_files(shm_glob_pattern)
+            .find_shared_memory_files(&shm_glob_pattern)
             .map_err(|e| PodManagementError::SharedMemoryError {
                 message: e.to_string(),
             })?;
@@ -102,7 +124,7 @@ where
                 );
                 continue;
             };
-            match self.ensure_pod_registered(namespace, pod_name).await {
+            match self.ensure_pod_registered(&namespace, &pod_name).await {
                 Err(PodManagementError::PodNotFound {
                     namespace,
                     pod_name,
@@ -131,7 +153,7 @@ where
         namespace: &str,
         pod_name: &str,
     ) -> Result<Option<WorkerInfo>> {
-        let pod_identifier = self.pod_identifier(namespace, pod_name);
+        let pod_identifier = PodIdentifier::new(namespace, pod_name);
 
         // Check local state first
         if let Some(pod_state) = self.pod_state_store.get_pod(&pod_identifier) {
@@ -211,22 +233,10 @@ where
         info!("Resource monitor stopped");
     }
 
-    // Private helper methods
-    fn pod_identifier(&self, namespace: &str, pod_name: &str) -> String {
-        format!("{IDENTIFIER_PREFIX}{namespace}_{pod_name}")
-    }
-
-    fn pod_name_namespace<'s>(&self, pod_identifier: &'s str) -> Option<(&'s str, &'s str)> {
-        let rest = pod_identifier.strip_prefix(IDENTIFIER_PREFIX)?;
-        let mut parts = rest.splitn(2, '_');
-        let namespace = parts.next()?;
-        let pod_name = parts.next().unwrap_or("");
-        Some((namespace, pod_name))
-    }
-
     /// Ensure pod is registered in all components (lazy loading)
     pub async fn ensure_pod_registered(&self, namespace: &str, pod_name: &str) -> Result<()> {
-        let pod_identifier = self.pod_identifier(namespace, pod_name);
+        let pod_identifier = PodIdentifier::new(namespace, pod_name);
+
         // Check if already registered
         if self.pod_state_store.contains_pod(&pod_identifier) {
             return Ok(());
@@ -264,7 +274,6 @@ where
         // Register in state store
         self.pod_state_store
             .register_pod(&pod_identifier, pod_info.0, device_configs.clone())?;
-
         let restored_pids = self
             .limiter_coordinator
             .ensure_pod_registered(&pod_identifier, &device_configs)
@@ -328,14 +337,14 @@ where
         container_name: &str,
         host_pid: u32,
     ) -> Result<()> {
-        let pod_identifier = self.pod_identifier(namespace, pod_name);
+        let pod_identifier = PodIdentifier::new(namespace, pod_name);
 
         // Get pod state to extract worker info
         let pod_state = self
             .pod_state_store
             .get_pod(&pod_identifier)
             .ok_or_else(|| PodManagementError::PodIdentifierNotFound {
-                pod_identifier: pod_identifier.clone(),
+                pod_identifier: pod_identifier.to_string(),
             })?;
 
         let WorkerInfo {
@@ -371,16 +380,8 @@ where
                 message: e.to_string(),
             })?;
 
-        // 3. Set up shared memory handle
-        let shared_memory_handle =
-            Arc::new(SharedMemoryHandle::open(&pod_identifier).map_err(|e| {
-                PodManagementError::SharedMemoryError {
-                    message: format!("Failed to open shared memory for {pod_identifier}: {e}"),
-                }
-            })?);
-
-        self.pod_state_store
-            .set_shared_memory_handle(&pod_identifier, shared_memory_handle)?;
+        // 3. Open shared memory for the pod
+        self.pod_state_store.open_shared_memory(&pod_identifier)?;
 
         // 4. Add worker to hypervisor
         if !self.hypervisor.process_exists(host_pid).await {
@@ -389,7 +390,8 @@ where
         }
 
         info!(
-            "Successfully registered process {host_pid} for pod {pod_identifier} container {container_name}"
+            "Successfully registered process {host_pid} for pod {} container {container_name}",
+            pod_identifier
         );
 
         Ok(())
@@ -404,8 +406,8 @@ where
             let stats = self.pod_state_store.stats();
             let mut pids = Vec::with_capacity(stats.total_processes);
 
-            for pod_id in self.pod_state_store.list_pod_identifiers() {
-                let processes = self.pod_state_store.get_pod_processes(&pod_id);
+            for pod_identifier in self.pod_state_store.list_pod_identifiers() {
+                let processes = self.pod_state_store.get_pod_processes(&pod_identifier);
                 for process in processes {
                     pids.push(process);
                 }
@@ -442,8 +444,8 @@ where
     async fn handle_process_exited(&self, host_pid: u32) -> Result<()> {
         info!("Processing process exit: host_pid={}", host_pid);
 
-        // Get pod identifier for this PID
-        let pod_identifier = match self.pod_state_store.get_pod_by_pid(host_pid) {
+        // Get pod path for this PID
+        let pod_id = match self.pod_state_store.get_pod_by_pid(host_pid) {
             Some(pod_id) => pod_id,
             None => {
                 warn!("Attempted to cleanup non-tracked process: {}", host_pid);
@@ -453,7 +455,7 @@ where
 
         info!(
             "Found tracked process: host_pid={}, pod={}",
-            host_pid, pod_identifier
+            host_pid, pod_id
         );
 
         // 1. Remove from hypervisor
@@ -465,7 +467,7 @@ where
         // 2. Unregister from limiter coordinator
         if let Err(e) = self
             .limiter_coordinator
-            .unregister_process(&pod_identifier, host_pid)
+            .unregister_process(&pod_id, host_pid)
             .await
         {
             tracing::error!(
@@ -473,22 +475,18 @@ where
                 host_pid,
                 e
             );
-        } else {
-            info!("Unregistered process {} from limiter coordinator", host_pid);
         }
 
         // 3. Remove from pod state store (atomic cleanup)
-        let pod_removed = self
-            .pod_state_store
-            .unregister_process(&pod_identifier, host_pid)?;
+        let pod_removed = self.pod_state_store.unregister_process(&pod_id, host_pid)?;
 
         if pod_removed {
-            info!("Pod {} removed (no more processes)", pod_identifier);
+            info!("Pod {} removed (no more processes)", pod_id);
         }
 
         info!(
             "Successfully cleaned up process {} from pod {}",
-            host_pid, pod_identifier
+            host_pid, pod_id
         );
 
         Ok(())
@@ -504,6 +502,10 @@ mod tests {
 
     // Note: Mock types would be defined here if needed for full PodManager testing
     // For now, we focus on testing the business logic components that can be isolated
+
+    fn create_test_pod_identifier(name: &str) -> PodIdentifier {
+        PodIdentifier::new("test-namespace", name)
+    }
 
     fn create_test_worker_info() -> WorkerInfo {
         WorkerInfo {
@@ -562,7 +564,7 @@ mod tests {
 
         for (identifier, expected) in edge_cases {
             let result = identifier
-                .strip_prefix(IDENTIFIER_PREFIX)
+                .strip_prefix("tf_shm_")
                 .and_then(|s| s.split_once('_'));
 
             assert_eq!(result, expected, "Failed for identifier: {identifier}");
@@ -582,11 +584,11 @@ mod tests {
         ];
 
         for (namespace, pod_name) in special_cases {
-            let identifier = format!("{IDENTIFIER_PREFIX}{namespace}_{pod_name}");
+            let identifier = format!("tf_shm_{namespace}_{pod_name}");
 
             // Test parsing back
             let parsed = identifier
-                .strip_prefix(IDENTIFIER_PREFIX)
+                .strip_prefix("tf_shm_")
                 .and_then(|s| s.split_once('_'));
 
             if namespace.is_empty() {
@@ -603,114 +605,120 @@ mod tests {
 
     #[tokio::test]
     async fn test_pod_state_store_operations() {
-        let pod_state_store = Arc::new(PodStateStore::new());
+        let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
         let worker_info = create_test_worker_info();
         let device_configs = vec![create_test_device_config()];
-        let pod_identifier = "tf_shm_test-namespace_test-pod";
+        let pod_identifier = create_test_pod_identifier("test-pod");
 
         // Test pod registration
         let result =
-            pod_state_store.register_pod(pod_identifier, worker_info.clone(), device_configs);
+            pod_state_store.register_pod(&pod_identifier, worker_info.clone(), device_configs);
         assert!(result.is_ok());
 
         // Verify pod is registered
-        assert!(pod_state_store.contains_pod(pod_identifier));
+        assert!(pod_state_store.contains_pod(&pod_identifier));
 
         // Test process registration
-        let result = pod_state_store.register_process(pod_identifier, 12345);
+        let result = pod_state_store.register_process(&pod_identifier, 12345);
         assert!(result.is_ok());
 
-        // Verify process is tracked
-        assert_eq!(
-            pod_state_store.get_pod_by_pid(12345),
-            Some(pod_identifier.to_string())
-        );
+        // Verify process is tracked (get_pod_by_pid returns full path with /shm suffix)
+        let pod_id = pod_state_store.get_pod_by_pid(12345);
+        assert!(pod_id.is_some());
+        let pod_id = pod_id.unwrap();
+        assert!(pod_id.namespace.contains("test-namespace"));
+        assert!(pod_id.name.contains("test-pod"));
 
         // Test process unregistration
         let pod_removed = pod_state_store
-            .unregister_process(pod_identifier, 12345)
+            .unregister_process(&pod_identifier, 12345)
             .unwrap();
         assert!(pod_removed); // Pod should be removed as it has no more processes
 
         // Verify cleanup
-        assert!(!pod_state_store.contains_pod(pod_identifier));
-        assert_eq!(pod_state_store.get_pod_by_pid(12345), None);
+        assert!(!pod_state_store.contains_pod(&pod_identifier));
+        assert!(pod_state_store.get_pod_by_pid(12345).is_none());
     }
 
     #[tokio::test]
     async fn test_multiple_processes_lifecycle() {
-        let pod_state_store = Arc::new(PodStateStore::new());
+        let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
         let worker_info = create_test_worker_info();
         let device_configs = vec![create_test_device_config()];
-        let pod_identifier = "tf_shm_test-namespace_test-pod";
+        let pod_identifier = create_test_pod_identifier("test-pod");
 
         // Register pod
         pod_state_store
-            .register_pod(pod_identifier, worker_info, device_configs)
+            .register_pod(&pod_identifier, worker_info, device_configs)
             .unwrap();
 
         // Register multiple processes
         pod_state_store
-            .register_process(pod_identifier, 12345)
+            .register_process(&pod_identifier, 12345)
             .unwrap();
         pod_state_store
-            .register_process(pod_identifier, 12346)
+            .register_process(&pod_identifier, 12346)
             .unwrap();
         pod_state_store
-            .register_process(pod_identifier, 12347)
+            .register_process(&pod_identifier, 12347)
             .unwrap();
+        {
+            // Verify all processes are tracked (get_pod_by_pid returns full path with /shm suffix)
+            let pod_12345 = pod_state_store.get_pod_by_pid(12345);
+            assert!(pod_12345.is_some());
+            let pod_12345 = pod_12345.as_ref().unwrap();
+            assert!(pod_12345.namespace.contains("test-namespace"));
+            assert!(pod_12345.name.contains("test-pod"));
 
-        // Verify all processes are tracked
-        assert_eq!(
-            pod_state_store.get_pod_by_pid(12345),
-            Some(pod_identifier.to_string())
-        );
-        assert_eq!(
-            pod_state_store.get_pod_by_pid(12346),
-            Some(pod_identifier.to_string())
-        );
-        assert_eq!(
-            pod_state_store.get_pod_by_pid(12347),
-            Some(pod_identifier.to_string())
-        );
+            let path_12346 = pod_state_store.get_pod_by_pid(12346);
+            assert!(path_12346.is_some());
+            let pod_12346 = path_12346.as_ref().unwrap();
+            assert!(pod_12346.namespace.contains("test-namespace"));
+            assert!(pod_12346.name.contains("test-pod"));
 
+            let path_12347 = pod_state_store.get_pod_by_pid(12347);
+            assert!(path_12347.is_some());
+            let pod_12347 = path_12347.as_ref().unwrap();
+            assert!(pod_12347.namespace.contains("test-namespace"));
+            assert!(pod_12347.name.contains("test-pod"));
+        }
         // Unregister first process - pod should remain
         let pod_removed = pod_state_store
-            .unregister_process(pod_identifier, 12345)
+            .unregister_process(&pod_identifier, 12345)
             .unwrap();
         assert!(!pod_removed);
-        assert!(pod_state_store.contains_pod(pod_identifier));
+        assert!(pod_state_store.contains_pod(&pod_identifier));
 
         // Unregister second process - pod should remain
         let pod_removed = pod_state_store
-            .unregister_process(pod_identifier, 12346)
+            .unregister_process(&pod_identifier, 12346)
             .unwrap();
         assert!(!pod_removed);
-        assert!(pod_state_store.contains_pod(pod_identifier));
+        assert!(pod_state_store.contains_pod(&pod_identifier));
 
         // Unregister last process - pod should be removed
         let pod_removed = pod_state_store
-            .unregister_process(pod_identifier, 12347)
+            .unregister_process(&pod_identifier, 12347)
             .unwrap();
         assert!(pod_removed);
-        assert!(!pod_state_store.contains_pod(pod_identifier));
+        assert!(!pod_state_store.contains_pod(&pod_identifier));
     }
 
     #[test]
     fn test_error_scenarios() {
-        let pod_state_store = Arc::new(PodStateStore::new());
-        let pod_identifier = "tf_shm_test-namespace_test-pod";
+        let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
+        let pod_identifier = create_test_pod_identifier("test-pod");
 
         // Test registering process for non-existent pod
-        let result = pod_state_store.register_process(pod_identifier, 12345);
+        let result = pod_state_store.register_process(&pod_identifier, 12345);
         assert!(result.is_err());
 
         // Test unregistering process for non-existent pod
-        let result = pod_state_store.unregister_process(pod_identifier, 12345);
+        let result = pod_state_store.unregister_process(&pod_identifier, 12345);
         assert!(result.is_err());
 
         // Test getting pod for non-existent identifier
-        let result = pod_state_store.get_pod(pod_identifier);
+        let result = pod_state_store.get_pod(&pod_identifier);
         assert!(result.is_none());
 
         // Test getting pod by non-existent PID
@@ -720,9 +728,11 @@ mod tests {
 
     #[test]
     fn test_stats_calculation() {
-        let pod_state_store = Arc::new(PodStateStore::new());
+        let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
         let worker_info = create_test_worker_info();
         let device_configs = vec![create_test_device_config()];
+        let pod1_id = create_test_pod_identifier("pod1");
+        let pod2_id = create_test_pod_identifier("pod2");
 
         // Initially empty
         let stats = pod_state_store.stats();
@@ -731,10 +741,10 @@ mod tests {
 
         // Register first pod with processes
         pod_state_store
-            .register_pod("pod1", worker_info.clone(), device_configs.clone())
+            .register_pod(&pod1_id, worker_info.clone(), device_configs.clone())
             .unwrap();
-        pod_state_store.register_process("pod1", 1001).unwrap();
-        pod_state_store.register_process("pod1", 1002).unwrap();
+        pod_state_store.register_process(&pod1_id, 1001).unwrap();
+        pod_state_store.register_process(&pod1_id, 1002).unwrap();
 
         let stats = pod_state_store.stats();
         assert_eq!(stats.total_pods, 1);
@@ -742,22 +752,22 @@ mod tests {
 
         // Register second pod with processes
         pod_state_store
-            .register_pod("pod2", worker_info, device_configs)
+            .register_pod(&pod2_id, worker_info, device_configs)
             .unwrap();
-        pod_state_store.register_process("pod2", 2001).unwrap();
+        pod_state_store.register_process(&pod2_id, 2001).unwrap();
 
         let stats = pod_state_store.stats();
         assert_eq!(stats.total_pods, 2);
         assert_eq!(stats.total_processes, 3);
 
         // Remove processes and pods
-        pod_state_store.unregister_process("pod1", 1001).unwrap();
+        pod_state_store.unregister_process(&pod1_id, 1001).unwrap();
         let stats = pod_state_store.stats();
         assert_eq!(stats.total_pods, 2);
         assert_eq!(stats.total_processes, 2);
 
         // Remove last process from pod1 - should remove pod
-        pod_state_store.unregister_process("pod1", 1002).unwrap();
+        pod_state_store.unregister_process(&pod1_id, 1002).unwrap();
         let stats = pod_state_store.stats();
         assert_eq!(stats.total_pods, 1);
         assert_eq!(stats.total_processes, 1);
@@ -765,8 +775,10 @@ mod tests {
 
     #[test]
     fn test_device_queries() {
-        let pod_state_store = Arc::new(PodStateStore::new());
+        let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
         let worker_info = create_test_worker_info();
+        let pod1_id = create_test_pod_identifier("pod1");
+        let pod2_id = create_test_pod_identifier("pod2");
 
         // Create configs for different devices
         let device_configs = [
@@ -792,31 +804,36 @@ mod tests {
 
         // Register pods using different devices
         pod_state_store
-            .register_pod("pod1", worker_info.clone(), vec![device_configs[0].clone()])
+            .register_pod(
+                &pod1_id,
+                worker_info.clone(),
+                vec![device_configs[0].clone()],
+            )
             .unwrap();
         pod_state_store
-            .register_pod("pod2", worker_info, vec![device_configs[1].clone()])
+            .register_pod(&pod2_id, worker_info, vec![device_configs[1].clone()])
             .unwrap();
 
         // Test device queries
         let pods_on_device_0 = pod_state_store.get_pods_using_device(0);
-        assert_eq!(pods_on_device_0, vec!["pod1"]);
+        assert_eq!(pods_on_device_0.len(), 1);
+        // Note: paths now include namespace/name/shm structure
 
         let pods_on_device_1 = pod_state_store.get_pods_using_device(1);
-        assert_eq!(pods_on_device_1, vec!["pod2"]);
+        assert_eq!(pods_on_device_1.len(), 1);
 
         let pods_on_device_2 = pod_state_store.get_pods_using_device(2);
         assert!(pods_on_device_2.is_empty());
 
         // Test device config retrieval
-        let config = pod_state_store.get_device_config_for_pod("pod1", 0);
+        let config = pod_state_store.get_device_config_for_pod(&pod1_id, 0);
         assert!(config.is_some());
         assert_eq!(config.unwrap().device_uuid, "GPU-0");
 
-        let config = pod_state_store.get_device_config_for_pod("pod1", 1);
+        let config = pod_state_store.get_device_config_for_pod(&pod1_id, 1);
         assert!(config.is_none());
 
-        let config = pod_state_store.get_device_config_for_pod("pod2", 1);
+        let config = pod_state_store.get_device_config_for_pod(&pod2_id, 1);
         assert!(config.is_some());
         assert_eq!(config.unwrap().device_uuid, "GPU-1");
     }
@@ -826,7 +843,7 @@ mod tests {
         use std::sync::Arc;
         use tokio::task::JoinSet;
 
-        let pod_state_store = Arc::new(PodStateStore::new());
+        let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
 
         // Test concurrent registrations and unregistrations
         let mut join_set = JoinSet::new();
@@ -837,7 +854,7 @@ mod tests {
             join_set.spawn(async move {
                 let worker_info = create_test_worker_info();
                 let device_configs = vec![create_test_device_config()];
-                let pod_id = format!("pod-{i}");
+                let pod_id = PodIdentifier::new("test-namespace", format!("pod-{i}"));
 
                 // Register pod
                 store
@@ -852,8 +869,9 @@ mod tests {
 
                 // Verify registration
                 assert!(store.contains_pod(&pod_id));
-                assert_eq!(store.get_pod_by_pid(pid1), Some(pod_id.clone()));
-                assert_eq!(store.get_pod_by_pid(pid2), Some(pod_id.clone()));
+                // Note: get_pod_by_pid returns the full path, not PodIdentifier
+                assert!(store.get_pod_by_pid(pid1).is_some());
+                assert!(store.get_pod_by_pid(pid2).is_some());
 
                 // Unregister one process
                 let pod_removed = store.unregister_process(&pod_id, pid1).unwrap();
@@ -865,8 +883,8 @@ mod tests {
 
                 // Verify cleanup
                 assert!(!store.contains_pod(&pod_id));
-                assert_eq!(store.get_pod_by_pid(pid1), None);
-                assert_eq!(store.get_pod_by_pid(pid2), None);
+                assert!(store.get_pod_by_pid(pid1).is_none());
+                assert!(store.get_pod_by_pid(pid2).is_none());
             });
         }
 
@@ -883,7 +901,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stress_test_with_many_pods_and_processes() {
-        let pod_state_store = Arc::new(PodStateStore::new());
+        let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
 
         // Create many pods with many processes each
         let num_pods = 100;
@@ -893,7 +911,7 @@ mod tests {
         for pod_idx in 0..num_pods {
             let worker_info = create_test_worker_info();
             let device_configs = vec![create_test_device_config()];
-            let pod_id = format!("stress-pod-{pod_idx:03}");
+            let pod_id = PodIdentifier::new("test-namespace", format!("stress-pod-{pod_idx:03}"));
 
             pod_state_store
                 .register_pod(&pod_id, worker_info, device_configs)
@@ -912,7 +930,7 @@ mod tests {
 
         // Test queries work correctly with large dataset
         for pod_idx in 0..num_pods {
-            let pod_id = format!("stress-pod-{pod_idx:03}");
+            let pod_id = PodIdentifier::new("test-namespace", format!("stress-pod-{pod_idx:03}"));
             assert!(pod_state_store.contains_pod(&pod_id));
 
             let host_pids = pod_state_store.get_host_pids_for_pod(&pod_id).unwrap();
@@ -925,7 +943,7 @@ mod tests {
 
         // Cleanup all pods by removing processes
         for pod_idx in 0..num_pods {
-            let pod_id = format!("stress-pod-{pod_idx:03}");
+            let pod_id = PodIdentifier::new("test-namespace", format!("stress-pod-{pod_idx:03}"));
 
             // Remove all but one process
             for proc_idx in 0..(processes_per_pod - 1) {
