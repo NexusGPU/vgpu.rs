@@ -87,6 +87,8 @@ where
                 request_size
             );
             result
+
+            // Temporarily block trap to avoid recursion
             // let trap = global_trap();
             // // OOM: enter trap and wait
             // match trap.enter_trap_and_wait(TrapFrame::OutOfMemory {
