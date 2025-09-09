@@ -289,6 +289,8 @@ pub struct SharedDeviceStateV1 {
     pub last_heartbeat: AtomicU64,
     /// Set of pids
     pub pids: ShmMutex<Set<usize, MAX_PROCESSES>>,
+    /// Padding (512 bytes)
+    pub _padding: [u8; 512],
 }
 
 /// Versioned shared device state enum for future compatibility
@@ -439,6 +441,7 @@ impl SharedDeviceStateV1 {
             device_count: AtomicU32::new(configs.len() as u32),
             last_heartbeat: AtomicU64::new(now),
             pids: ShmMutex::new(Set::new()),
+            _padding: [0; 512],
         };
 
         for config in configs {
