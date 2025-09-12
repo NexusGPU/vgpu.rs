@@ -403,8 +403,7 @@ where
 
         // Get all tracked PIDs from the state store
         let tracked_pids: Vec<u32> = {
-            let stats = self.pod_state_store.stats();
-            let mut pids = Vec::with_capacity(stats.total_processes);
+            let mut pids = vec![];
 
             for pod_identifier in self.pod_state_store.list_pod_identifiers() {
                 let processes = self.pod_state_store.get_pod_processes(&pod_identifier);
@@ -727,53 +726,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stats_calculation() {
-        let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
-        let worker_info = create_test_worker_info();
-        let device_configs = vec![create_test_device_config()];
-        let pod1_id = create_test_pod_identifier("pod1");
-        let pod2_id = create_test_pod_identifier("pod2");
-
-        // Initially empty
-        let stats = pod_state_store.stats();
-        assert_eq!(stats.total_pods, 0);
-        assert_eq!(stats.total_processes, 0);
-
-        // Register first pod with processes
-        pod_state_store
-            .register_pod(&pod1_id, worker_info.clone(), device_configs.clone())
-            .unwrap();
-        pod_state_store.register_process(&pod1_id, 1001).unwrap();
-        pod_state_store.register_process(&pod1_id, 1002).unwrap();
-
-        let stats = pod_state_store.stats();
-        assert_eq!(stats.total_pods, 1);
-        assert_eq!(stats.total_processes, 2);
-
-        // Register second pod with processes
-        pod_state_store
-            .register_pod(&pod2_id, worker_info, device_configs)
-            .unwrap();
-        pod_state_store.register_process(&pod2_id, 2001).unwrap();
-
-        let stats = pod_state_store.stats();
-        assert_eq!(stats.total_pods, 2);
-        assert_eq!(stats.total_processes, 3);
-
-        // Remove processes and pods
-        pod_state_store.unregister_process(&pod1_id, 1001).unwrap();
-        let stats = pod_state_store.stats();
-        assert_eq!(stats.total_pods, 2);
-        assert_eq!(stats.total_processes, 2);
-
-        // Remove last process from pod1 - should remove pod
-        pod_state_store.unregister_process(&pod1_id, 1002).unwrap();
-        let stats = pod_state_store.stats();
-        assert_eq!(stats.total_pods, 1);
-        assert_eq!(stats.total_processes, 1);
-    }
-
-    #[test]
     fn test_device_queries() {
         let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
         let worker_info = create_test_worker_info();
@@ -894,9 +846,8 @@ mod tests {
         }
 
         // Final verification - store should be empty
-        let stats = pod_state_store.stats();
-        assert_eq!(stats.total_pods, 0);
-        assert_eq!(stats.total_processes, 0);
+        assert_eq!(pod_state_store.list_pod_identifiers().len(), 0);
+        assert_eq!(pod_state_store.list_all_processes().len(), 0);
     }
 
     #[tokio::test]
@@ -924,9 +875,11 @@ mod tests {
         }
 
         // Verify all registrations
-        let stats = pod_state_store.stats();
-        assert_eq!(stats.total_pods, num_pods);
-        assert_eq!(stats.total_processes, num_pods * processes_per_pod);
+        assert_eq!(pod_state_store.list_pod_identifiers().len(), num_pods);
+        assert_eq!(
+            pod_state_store.list_all_processes().len(),
+            num_pods * processes_per_pod
+        );
 
         // Test queries work correctly with large dataset
         for pod_idx in 0..num_pods {
@@ -961,8 +914,7 @@ mod tests {
         }
 
         // Final verification
-        let final_stats = pod_state_store.stats();
-        assert_eq!(final_stats.total_pods, 0);
-        assert_eq!(final_stats.total_processes, 0);
+        assert_eq!(pod_state_store.list_pod_identifiers().len(), 0);
+        assert_eq!(pod_state_store.list_all_processes().len(), 0);
     }
 }
