@@ -297,10 +297,7 @@ impl PodStateStore {
     }
 
     pub fn list_all_processes(&self) -> Vec<u32> {
-        self.pid_to_pod
-            .iter()
-            .map(|entry| *entry.key())
-            .collect()
+        self.pid_to_pod.iter().map(|entry| *entry.key()).collect()
     }
 
     /// Clear all data (useful for testing)
