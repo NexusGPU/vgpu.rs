@@ -1,9 +1,11 @@
 use std::cell::Cell;
 use std::collections::HashSet;
+use std::env;
 use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::OsStr;
+use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -54,12 +56,12 @@ unsafe fn entry_point() {
 }
 
 fn are_hooks_enabled() -> (bool, bool) {
-    let enable_nvml_hooks = if let Ok(enable_nvml_hooks) = std::env::var("ENABLE_NVML_HOOKS") {
+    let enable_nvml_hooks = if let Ok(enable_nvml_hooks) = env::var("ENABLE_NVML_HOOKS") {
         enable_nvml_hooks != "false"
     } else {
         true
     };
-    let enable_cuda_hooks = if let Ok(enable_cuda_hooks) = std::env::var("ENABLE_CUDA_HOOKS") {
+    let enable_cuda_hooks = if let Ok(enable_cuda_hooks) = env::var("ENABLE_CUDA_HOOKS") {
         enable_cuda_hooks != "false"
     } else {
         true
@@ -68,7 +70,7 @@ fn are_hooks_enabled() -> (bool, bool) {
 }
 
 pub(crate) fn mock_shm_path() -> Option<String> {
-    std::env::var("TF_SHM_FILE").ok()
+    env::var("TF_SHM_FILE").ok()
 }
 
 fn init_ngpu_library() {
@@ -76,7 +78,7 @@ fn init_ngpu_library() {
     NGPU_INITIALIZED.call_once(|| {
         let nvml =
             match Nvml::builder()
-                .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
+                .lib_path(&env::var_os("TF_NVML_LIB_PATH").unwrap_or(
                     OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
                 ))
                 .init()
@@ -110,7 +112,7 @@ fn init_ngpu_library() {
             config
         } else {
             // In mock/test mode, derive UUIDs from either CUDA_VISIBLE_DEVICES or list all devices
-            let uuids = if let Ok(visible_devices) = std::env::var("TF_VISIBLE_DEVICES") {
+            let uuids = if let Ok(visible_devices) = env::var("TF_VISIBLE_DEVICES") {
                 visible_devices
                     .split(',')
                     .map(|s| s.trim().to_string())
@@ -147,8 +149,8 @@ fn init_ngpu_library() {
                     "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
                     &visible_devices
                 );
-                std::env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
-                std::env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
+                env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
+                env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
             }
         }
 
@@ -374,7 +376,7 @@ pub fn global_trap() -> impl Trap {
 }
 
 fn is_mapping_device_idx() -> bool {
-    match std::fs::read_to_string("/proc/self/cmdline") {
+    match fs::read_to_string("/proc/self/cmdline") {
         Ok(cmdline) => cmdline.contains("nvidia-smi"),
         Err(_) => false,
     }

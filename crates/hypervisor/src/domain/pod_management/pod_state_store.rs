@@ -3,7 +3,6 @@
 //! This module provides a centralized, thread-safe store for all pod-related state,
 //! eliminating the need for multiple synchronized registries and providing atomic operations.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,7 +12,7 @@ use tracing::debug;
 use tracing::info;
 use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, PodIdentifier};
 
-use super::types::{PodManagementError, PodStatus, Result, SystemStats};
+use super::types::{PodManagementError, PodStatus, Result};
 
 // Re-export unified types for backward compatibility
 use super::types::PodState;
@@ -284,37 +283,6 @@ impl PodStateStore {
         Ok(())
     }
 
-    /// Get store statistics
-    pub fn stats(&self) -> SystemStats {
-        let total_pods = self.pods.len();
-        let total_processes = self.pid_to_pod.len();
-        let gpu_pods = self
-            .pods
-            .iter()
-            .filter(|entry| !entry.device_configs.is_empty())
-            .count();
-
-        let active_devices = self
-            .pods
-            .iter()
-            .flat_map(|entry| {
-                entry
-                    .device_configs
-                    .iter()
-                    .map(|config| config.device_idx)
-                    .collect::<Vec<_>>()
-            })
-            .collect::<HashSet<_>>()
-            .len();
-
-        SystemStats {
-            total_pods,
-            total_processes,
-            gpu_pods,
-            active_devices,
-        }
-    }
-
     /// List all pod identifiers
     pub fn list_pod_identifiers(&self) -> Vec<PodIdentifier> {
         self.pods.iter().map(|entry| entry.key().clone()).collect()
@@ -326,6 +294,10 @@ impl PodStateStore {
             .get(pod_identifier)
             .map(|pod| pod.processes.iter().copied().collect())
             .unwrap_or_default()
+    }
+
+    pub fn list_all_processes(&self) -> Vec<u32> {
+        self.pid_to_pod.iter().map(|entry| *entry.key()).collect()
     }
 
     /// Clear all data (useful for testing)
@@ -528,32 +500,6 @@ mod tests {
 
         let pods_using_device_1 = store.get_pods_using_device(1);
         assert_eq!(pods_using_device_1.len(), 0);
-    }
-
-    #[test]
-    fn test_store_stats() {
-        let store = PodStateStore::new("/tmp/test_shm".into());
-        let pod_id = create_test_pod_identifier("pod-1");
-        let info = create_test_worker_info("test-pod");
-        let device_configs = vec![create_test_device_config()];
-
-        // Initially empty
-        let stats = store.stats();
-        assert_eq!(stats.total_pods, 0);
-        assert_eq!(stats.total_processes, 0);
-
-        // Add pod
-        store.register_pod(&pod_id, info, device_configs).unwrap();
-
-        let stats = store.stats();
-        assert_eq!(stats.total_pods, 1);
-        assert_eq!(stats.total_processes, 0);
-
-        store.register_process(&pod_id, 1234).unwrap();
-
-        let stats = store.stats();
-        assert_eq!(stats.total_pods, 1);
-        assert_eq!(stats.total_processes, 1);
     }
 
     #[test]

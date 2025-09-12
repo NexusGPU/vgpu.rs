@@ -13,4 +13,4 @@ pub mod utilization;
 // Re-export commonly used types
 pub use manager::PodManager;
 pub use pod_state_store::PodStateStore;
-pub use types::{PodManagementError, PodState, PodStatus, Result, SystemStats};
+pub use types::{PodManagementError, PodState, PodStatus, Result};

@@ -139,19 +139,6 @@ impl std::fmt::Debug for PodState {
     }
 }
 
-/// Statistics about the pod management system
-#[derive(Debug, Clone)]
-pub struct SystemStats {
-    /// Total number of pods
-    pub total_pods: usize,
-    /// Total number of processes across all pods
-    pub total_processes: usize,
-    /// Number of pods with GPU resources
-    pub gpu_pods: usize,
-    /// Number of active devices
-    pub active_devices: usize,
-}
-
 /// Helper trait for converting errors to our unified error type
 pub trait IntoResult<T> {
     fn into_pod_management_result(self) -> Result<T>;
