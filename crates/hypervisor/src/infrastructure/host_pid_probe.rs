@@ -319,9 +319,8 @@ impl HostPidProbe {
                 Err(_) => continue,
             };
 
-            match HostPidProbe::extract_process_info(pid).await {
-                Ok(process_info) => processes.push(process_info),
-                Err(e) => warn!(pid = %pid, error = %e, "failed to extract process info"),
+            if let Ok(process_info) = HostPidProbe::extract_process_info(pid).await {
+                processes.push(process_info);
             }
         }
 
