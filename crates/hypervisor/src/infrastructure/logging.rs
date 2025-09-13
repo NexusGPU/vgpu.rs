@@ -91,7 +91,7 @@ pub fn init<P: AsRef<Path>>(
         .with_writer(file_writer)
         .with_ansi(false)
         .with_filter(filter::filter_fn(|metadata| {
-            metadata.target().contains("metrics")
+            metadata.target().eq("metrics")
         }));
 
     registry().with(fmt_layer).with(metrics_layer).init();
