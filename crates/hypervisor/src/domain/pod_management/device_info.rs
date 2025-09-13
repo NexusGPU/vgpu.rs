@@ -29,7 +29,7 @@ pub async fn create_device_configs_from_worker_info(
     );
 
     for gpu_uuid in gpu_uuids {
-        let device = nvml.device_by_uuid(gpu_uuid.to_uppercase().as_str())?;
+        let device = nvml.device_by_uuid(gpu_uuid.replace("gpu-", "GPU-").as_str())?;
         let device_idx = device.index()?;
 
         let tflops_capacity = tokio::task::spawn_blocking({
