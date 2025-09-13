@@ -345,6 +345,7 @@ impl HostPidProbe {
 
         // Read environment variables
         let environ_data = fs::read_to_string(&environ_path).await.map_err(|e| {
+            warn!(pid = %pid, error = %e, "Cannot read {environ_path}");
             HostPidProbeError::ProcReadError {
                 message: format!("Cannot read {environ_path}: {e}"),
             }
@@ -356,6 +357,7 @@ impl HostPidProbe {
 
         // Read status file to get namespace PID
         let status_data = fs::read_to_string(&status_path).await.map_err(|e| {
+            warn!(pid = %pid, error = %e, "Cannot read {status_path}");
             HostPidProbeError::ProcReadError {
                 message: format!("Cannot read {status_path}: {e}"),
             }
