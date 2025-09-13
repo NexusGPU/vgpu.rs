@@ -3,6 +3,7 @@
 use anyhow::Result;
 use influxdb_line_protocol::LineProtocolBuilder;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::super::{GpuScheduler, SchedulingDecision};
 use super::decision_engine::DecisionEngine;
@@ -161,7 +162,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
     ) {
         if let Some(process) = self.processes.get_mut(&process_id) {
             process.traps.push(Trap {
-                frame: frame.clone(),
+                frame: Arc::new(frame.clone()), // Clone once into Arc instead of cloning later
                 waker,
                 round: 1,
             });

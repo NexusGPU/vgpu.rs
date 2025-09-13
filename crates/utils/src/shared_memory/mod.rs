@@ -79,7 +79,7 @@ impl PodIdentifier {
             .join(format!("{}/{}", self.namespace, self.name))
     }
 
-    /// Parse a PodIdentifier from a full shared memory path  
+    /// Parse a PodIdentifier from a full shared memory path
     /// Path format: {base_path}/{namespace}/{name}
     /// This method extracts namespace/name from any base path
     pub fn from_path(path: &str) -> Option<Self> {
@@ -95,8 +95,8 @@ impl PodIdentifier {
 
         // Extract the last 3 components: {namespace}/{name}
         let len = components.len();
-        let namespace = components[len - 2].to_string();
-        let name = components[len - 1].to_string();
+        let namespace = String::from(components[len - 2]);
+        let name = String::from(components[len - 1]);
         Some(Self::new(namespace, name))
     }
 }
@@ -581,7 +581,7 @@ mod tests {
     fn create_test_configs() -> Vec<DeviceConfig> {
         vec![DeviceConfig {
             device_idx: TEST_DEVICE_IDX,
-            device_uuid: "test-device-uuid".to_string(),
+            device_uuid: String::from("test-device-uuid"),
             up_limit: TEST_UP_LIMIT,
             mem_limit: TEST_MEM_LIMIT,
             total_cuda_cores: TEST_TOTAL_CORES,
@@ -885,7 +885,7 @@ mod tests {
         let configs = vec![
             DeviceConfig {
                 device_idx: 0,
-                device_uuid: "device-0".to_string(),
+                device_uuid: String::from("device-0"),
                 up_limit: 80,
                 mem_limit: 1024 * 1024 * 1024,
                 total_cuda_cores: 1024,
@@ -894,7 +894,7 @@ mod tests {
             },
             DeviceConfig {
                 device_idx: 2,
-                device_uuid: "device-2".to_string(),
+                device_uuid: String::from("device-2"),
                 up_limit: 70,
                 mem_limit: 2 * 1024 * 1024 * 1024,
                 total_cuda_cores: 2048,
@@ -933,8 +933,8 @@ mod tests {
         });
 
         assert_eq!(found_devices.len(), 2);
-        assert_eq!(found_devices[0], (0, "device-0".to_string()));
-        assert_eq!(found_devices[1], (2, "device-2".to_string()));
+        assert_eq!(found_devices[0], (0, String::from("device-0")));
+        assert_eq!(found_devices[1], (2, String::from("device-2")));
 
         // Test deactivating a device and checking iteration
         let SharedDeviceState::V1(inner) = &state;
