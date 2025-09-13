@@ -149,7 +149,7 @@ impl GpuObserver {
     }
 
     fn query_metrics(&self, last_metrics: &Metrics) -> Result<Metrics> {
-        let mut gpu_metrics: HashMap<String, GpuMetrics> = HashMap::new();
+        let mut gpu_metrics = HashMap::new();
         let mut gpu_process_metrics = HashMap::new();
 
         for i in 0..self.nvml.device_count()? {

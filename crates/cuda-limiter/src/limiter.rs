@@ -85,7 +85,7 @@ impl Limiter {
 
         let mut gpu_idx_uuids = Vec::new();
         for uuid in gpu_uuids.into_iter() {
-            let device = nvml.device_by_uuid(uuid.as_str())?;
+            let device = nvml.device_by_uuid(uuid.to_uppercase().as_str())?;
             let index = device.index()?;
             gpu_idx_uuids.push((index as usize, uuid));
         }
@@ -131,7 +131,7 @@ impl Limiter {
                 .init()
                 .unwrap();
 
-            let device = nvml.device_by_uuid(device_uuid.as_str())?;
+            let device = nvml.device_by_uuid(device_uuid.to_uppercase().as_str())?;
             let raw_index = device.index()?;
             self.cu_device_mapping
                 .insert(cu_device, (raw_index as usize, device_uuid));
@@ -153,7 +153,7 @@ impl Limiter {
                 ))
                 .init()
                 .unwrap();
-            let device = nvml.device_by_uuid(uuid.as_str())?;
+            let device = nvml.device_by_uuid(uuid.to_uppercase().as_str())?;
             let index: u32 = device.index()?;
             self.cu_device_mapping
                 .insert(cu_device, (index as usize, uuid));

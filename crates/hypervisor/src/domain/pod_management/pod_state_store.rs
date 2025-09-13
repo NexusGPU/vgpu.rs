@@ -87,7 +87,7 @@ impl PodStateStore {
         info: WorkerInfo,
         device_configs: Vec<DeviceConfig>,
     ) -> Result<()> {
-        let mut pod_state = PodState::new(info.clone(), device_configs);
+        let mut pod_state = PodState::new(info, device_configs);
         // If pod already exists, preserve existing processes and shared memory handle
         if let Some(existing) = self.pods.get(pod_identifier) {
             pod_state.processes = existing.processes.clone();
