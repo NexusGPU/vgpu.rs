@@ -76,7 +76,15 @@ where
     let pod_info = PodInfo {
         pod_name: pod_entry.pod_name.clone(),
         namespace: pod_entry.namespace.clone(),
-        gpu_uuids: pod_entry.gpu_uuids.clone().unwrap_or_default(),
+        gpu_uuids: pod_entry
+            .gpu_uuids
+            .map(|uuids| {
+                uuids
+                    .into_iter()
+                    .map(|uuid| uuid.replace("gpu-", "GPU-"))
+                    .collect()
+            })
+            .unwrap_or_default(),
         tflops_limit: pod_entry.tflops_limit,
         vram_limit: pod_entry.vram_limit,
         qos_level: pod_entry.qos_level,
