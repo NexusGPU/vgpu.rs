@@ -183,6 +183,15 @@ impl PodStateStore {
         self.pods.get(pod_identifier).map(|entry| entry.clone())
     }
 
+    /// Access pod state without cloning - more efficient for read-only operations
+    pub fn with_pod<R>(
+        &self,
+        pod_identifier: &PodIdentifier,
+        f: impl FnOnce(&PodState) -> R,
+    ) -> Option<R> {
+        self.pods.get(pod_identifier).map(|entry| f(entry.value()))
+    }
+
     /// Get pod path by process PID
     pub fn get_pod_by_pid(&self, host_pid: u32) -> Option<PodIdentifier> {
         self.pid_to_pod
@@ -202,6 +211,17 @@ impl PodStateStore {
             .filter(|entry| entry.value().uses_device(device_idx))
             .map(|entry| entry.key().clone())
             .collect()
+    }
+
+    /// Visit pods using a specific device without cloning identifiers - more efficient for read-only operations
+    pub fn visit_pods_using_device<F>(&self, device_idx: u32, mut visitor: F)
+    where
+        F: FnMut(&PodIdentifier, &PodState),
+    {
+        self.pods
+            .iter()
+            .filter(|entry| entry.value().uses_device(device_idx))
+            .for_each(|entry| visitor(entry.key(), entry.value()));
     }
 
     /// Get host PIDs for a specific pod

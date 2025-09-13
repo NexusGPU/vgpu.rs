@@ -115,7 +115,7 @@ fn init_ngpu_library() {
             let uuids = if let Ok(visible_devices) = env::var("TF_VISIBLE_DEVICES") {
                 visible_devices
                     .split(',')
-                    .map(|s| s.trim().to_string())
+                    .map(|s| String::from(s.trim()))
                     .collect::<Vec<_>>()
             } else {
                 panic!("TF_VISIBLE_DEVICES not set");
@@ -354,7 +354,7 @@ pub fn global_trap() -> impl Trap {
         if let Some((hypervisor_ip, hypervisor_port)) = config::get_hypervisor_config() {
             let server_url = format!("http://{hypervisor_ip}:{hypervisor_port}");
             let config = HttpTrapConfig {
-                server_url,
+                server_url: server_url.into(),
                 ..Default::default()
             };
 
