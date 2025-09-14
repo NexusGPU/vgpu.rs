@@ -8,6 +8,7 @@
 //! - Trap responses become results
 //! - Trap handlers implement the TaskProcessor trait
 
+use std::borrow::Cow;
 use std::io::Error as IoError;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -49,30 +50,30 @@ pub struct HttpTrapResponse {
 /// Configuration for HTTP trap client
 #[derive(Debug, Clone)]
 pub struct HttpTrapConfig {
-    pub server_url: String,
+    pub server_url: Cow<'static, str>,
     pub timeout: Duration,
     pub retry_attempts: u32,
     pub retry_delay: Duration,
-    pub client_id: String,
-    pub base_path: String,
+    pub client_id: String, // This needs to be dynamic (process ID)
+    pub base_path: Cow<'static, str>,
 }
 
 impl Default for HttpTrapConfig {
     fn default() -> Self {
         Self {
-            server_url: "http://localhost:8080".to_string(),
+            server_url: Cow::Borrowed("http://localhost:8080"),
             timeout: Duration::from_secs(30),
             retry_attempts: 3,
             retry_delay: Duration::from_millis(500),
             client_id: format!("trap_client_{}", std::process::id()),
-            base_path: "/api/v1/trap".to_string(),
+            base_path: Cow::Borrowed("/api/v1/trap"),
         }
     }
 }
 
 impl From<HttpTrapConfig> for ClientConfig {
     fn from(config: HttpTrapConfig) -> Self {
-        ClientConfig::new(config.server_url)
+        ClientConfig::new(config.server_url.into_owned())
             .with_client_id(config.client_id)
             .with_request_timeout(config.timeout)
             .with_retry_config(
@@ -440,7 +441,7 @@ mod tests {
         let trap_task = task::spawn_blocking(move || {
             // build TrapClient to test server
             let config = HttpTrapConfig {
-                server_url,
+                server_url: Cow::Owned(server_url),
                 ..Default::default()
             };
             let trap_client = BlockingHttpTrap::new(config).expect("create client");
@@ -495,12 +496,12 @@ mod tests {
     #[test]
     fn test_config_conversion() {
         let trap_config = HttpTrapConfig {
-            server_url: "http://test.example.com".to_string(),
+            server_url: Cow::Owned("http://test.example.com".to_string()),
             timeout: Duration::from_secs(60),
             retry_attempts: 5,
             retry_delay: Duration::from_millis(200),
             client_id: "test_client".to_string(),
-            base_path: "/test/api".to_string(),
+            base_path: Cow::Owned("/test/api".to_string()),
         };
 
         let client_config = ClientConfig::from(trap_config.clone());
@@ -544,7 +545,7 @@ mod tests {
 
         // Configure the client to retry 3 times.
         let config = HttpTrapConfig {
-            server_url: uri,
+            server_url: Cow::Owned(uri),
             retry_attempts: 3,
             retry_delay: Duration::from_millis(100),
             ..Default::default()
@@ -587,7 +588,7 @@ mod tests {
             .await;
 
         let config = HttpTrapConfig {
-            server_url: uri,
+            server_url: Cow::Owned(uri),
             retry_attempts: 1, // No need to retry for this test
             ..Default::default()
         };
@@ -632,7 +633,7 @@ mod tests {
             .await;
 
         let config = HttpTrapConfig {
-            server_url: uri,
+            server_url: Cow::Owned(uri),
             timeout: Duration::from_secs(1),
             retry_attempts: 0, // Disable retries for a clean timeout test
             ..Default::default()

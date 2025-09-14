@@ -354,7 +354,7 @@ pub fn global_trap() -> impl Trap {
         if let Some((hypervisor_ip, hypervisor_port)) = config::get_hypervisor_config() {
             let server_url = format!("http://{hypervisor_ip}:{hypervisor_port}");
             let config = HttpTrapConfig {
-                server_url,
+                server_url: server_url.into(),
                 ..Default::default()
             };
 

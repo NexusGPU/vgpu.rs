@@ -26,7 +26,7 @@ use super::device_info::create_device_configs_from_worker_info;
 use super::pod_state_store::PodStateStore;
 use super::types::{PodManagementError, Result};
 
-/// Shared memory glob pattern format: {base_path}/*/*/shm  
+/// Shared memory glob pattern format: {base_path}/*/*/shm
 const SHM_GLOB_PATTERN_FORMAT: &str = "/*/*/";
 
 use utils::shared_memory::handle::SHM_PATH_SUFFIX;
@@ -156,8 +156,8 @@ where
         let pod_identifier = PodIdentifier::new(namespace, pod_name);
 
         // Check local state first
-        if let Some(pod_state) = self.pod_state_store.get_pod(&pod_identifier) {
-            return Ok(Some(pod_state.info));
+        if let Some(pod_info) = self.pod_state_store.get_pod_info(&pod_identifier) {
+            return Ok(Some(pod_info));
         }
 
         // Try to get from pod info cache and register if found

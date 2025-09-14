@@ -182,8 +182,8 @@ pub(crate) async fn run_metrics<M, P, D, T>(
 
                 let pod_store = pod_mgr.pod_state_store();
                 for pod_identifier in pod_store.list_pod_identifiers() {
-                    if let Some(pod_state) = pod_store.get_pod(&pod_identifier) {
-                        if let Some(gpu_uuids) = pod_state.info.gpu_uuids {
+                    if let Some(pod_info) = pod_store.get_pod_info(&pod_identifier) {
+                        if let Some(gpu_uuids) = pod_info.gpu_uuids {
                             for uuid in gpu_uuids {
                                 let acc = worker_acc.entry(uuid).or_default();
                                 acc.entry(pod_identifier.clone()).or_default();
