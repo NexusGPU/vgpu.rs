@@ -126,13 +126,13 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc> + Send + 'static> TrapHandler
 {
     async fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Box<dyn Waker>) {
         // Handle the trap event - spawn async task for lock acquisition
-        // Clone frame to avoid lifetime issues
-        let frame_clone = frame.clone();
+        // Create Arc for frame to avoid expensive cloning
+        let frame_arc = Arc::new(frame.clone());
         let scheduler = self.scheduler.clone();
         scheduler
             .lock()
             .await
-            .on_trap(pid, trap_id, &frame_clone, waker)
+            .on_trap(pid, trap_id, frame_arc, waker)
             .await;
     }
 }

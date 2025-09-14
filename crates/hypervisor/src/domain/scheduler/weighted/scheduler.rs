@@ -3,6 +3,7 @@
 use anyhow::Result;
 use influxdb_line_protocol::LineProtocolBuilder;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::super::{GpuScheduler, SchedulingDecision};
 use super::decision_engine::DecisionEngine;
@@ -156,12 +157,14 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
         &mut self,
         process_id: u32,
         _trap_id: u64,
-        frame: &TrapFrame,
+        frame: Arc<TrapFrame>,
         waker: Box<dyn Waker>,
     ) {
         if let Some(process) = self.processes.get_mut(&process_id) {
+            let frame_debug = format!("{frame:?}");
+
             process.traps.push(Trap {
-                frame: frame.clone(),
+                frame,
                 waker,
                 round: 1,
             });
@@ -177,7 +180,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
                 .tag("event_type", "on_trap")
                 .tag("pid", &process_id.to_string())
                 .field("new_weight", weight as i64)
-                .field("trap_details", format!("{frame:?}").as_str())
+                .field("trap_details", frame_debug.as_str())
                 .timestamp(current_time())
                 .close_line()
                 .build();

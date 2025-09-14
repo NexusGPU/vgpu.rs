@@ -1,11 +1,12 @@
 //! Core types for the weighted scheduler
 
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 use trap::{TrapFrame, Waker};
 
 /// Represents a trap condition that a process is waiting for
 pub struct Trap {
-    pub frame: TrapFrame,
+    pub frame: Arc<TrapFrame>,
     pub waker: Box<dyn Waker>,
     pub round: u32,
 }

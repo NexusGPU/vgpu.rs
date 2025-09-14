@@ -1,6 +1,7 @@
 use std::fmt;
 
 use anyhow::Result;
+use std::sync::Arc;
 
 use crate::process::{GpuProcess, Worker};
 
@@ -66,7 +67,7 @@ pub trait GpuScheduler<Proc: GpuProcess> {
         &mut self,
         process_id: u32,
         trap_id: u64,
-        frame: &trap::TrapFrame,
+        frame: Arc<trap::TrapFrame>,
         waker: Box<dyn trap::Waker>,
     );
 }

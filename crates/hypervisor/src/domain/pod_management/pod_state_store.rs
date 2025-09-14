@@ -183,6 +183,13 @@ impl PodStateStore {
         self.pods.get(pod_identifier).map(|entry| entry.clone())
     }
 
+    /// Get pod info by identifier without cloning entire state
+    pub fn get_pod_info(&self, pod_identifier: &PodIdentifier) -> Option<WorkerInfo> {
+        self.pods
+            .get(pod_identifier)
+            .map(|entry| entry.info.clone())
+    }
+
     /// Get pod path by process PID
     pub fn get_pod_by_pid(&self, host_pid: u32) -> Option<PodIdentifier> {
         self.pid_to_pod
