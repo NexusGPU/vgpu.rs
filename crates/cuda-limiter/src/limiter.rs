@@ -36,8 +36,11 @@ pub(crate) enum Error {
     #[error("Device dim not configured: {0}")]
     DeviceDimNotConfigured(usize),
 
-    #[error("Device {0} not healthy")]
-    DeviceNotHealthy(usize),
+    #[error("Device {device_idx} not healthy, last heartbeat {last_heartbeat}")]
+    DeviceNotHealthy {
+        device_idx: usize,
+        last_heartbeat: u64,
+    },
 
     #[error("NVML error: {0}")]
     Nvml(#[from] nvml_wrapper::error::NvmlError),
@@ -190,7 +193,11 @@ impl Limiter {
             return Err(Error::DeviceNotConfigured(raw_device_index));
         }
         if !state.is_healthy(Duration::from_secs(2)) {
-            return Err(Error::DeviceNotHealthy(raw_device_index));
+            let last_heartbeat = state.get_last_heartbeat();
+            return Err(Error::DeviceNotHealthy {
+                device_idx: raw_device_index,
+                last_heartbeat,
+            });
         }
 
         // Exponential backoff parameters
@@ -236,7 +243,16 @@ impl Limiter {
         let state = handle.get_state();
 
         if !state.is_healthy(Duration::from_secs(2)) {
-            tracing::warn!("device {} is not healthy", raw_device_index);
+            let last_heartbeat = state.get_last_heartbeat();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let err = Error::DeviceNotHealthy {
+                device_idx: raw_device_index,
+                last_heartbeat,
+            };
+            tracing::warn!(now = now, "{err}");
         }
 
         if let Some((used, limit)) = state.with_device(raw_device_index, |device| {
