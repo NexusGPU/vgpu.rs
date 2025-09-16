@@ -11,6 +11,7 @@ use spin::RwLock;
 use tracing::info;
 use tracing::warn;
 
+use crate::shared_memory::handle::SHM_PATH_SUFFIX;
 use crate::shared_memory::PodIdentifier;
 
 use super::{handle::SharedMemoryHandle, DeviceConfig, SharedDeviceState};
@@ -130,15 +131,18 @@ impl ThreadSafeSharedMemoryManager {
             if is_pod_tracking(&identifier) {
                 continue;
             }
-            if self.is_shared_memory_orphaned(&file_path)? {
-                if let Err(e) = self.remove_orphaned_file(&file_path, base_path.as_ref()) {
-                    warn!(
-                        "Failed to remove orphaned file {}: {}",
-                        file_path.display(),
-                        e
-                    );
-                } else {
-                    cleaned_pid_ids.push(identifier);
+            // file_path is /base_path/namespace/pod_name/shm
+            if let Some(parent) = file_path.parent() {
+                if self.is_shared_memory_orphaned(parent)? {
+                    if let Err(e) = self.remove_orphaned_file(&file_path, base_path.as_ref()) {
+                        warn!(
+                            "Failed to remove orphaned file {}: {}",
+                            file_path.display(),
+                            e
+                        );
+                    } else {
+                        cleaned_pid_ids.push(identifier);
+                    }
                 }
             }
         }
@@ -165,8 +169,10 @@ impl ThreadSafeSharedMemoryManager {
     fn is_shared_memory_orphaned(&self, path: impl AsRef<Path>) -> Result<bool> {
         match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .flink(path.as_ref())
+            .use_tmpfs_with_dir(path.as_ref())
+            .os_id(SHM_PATH_SUFFIX)
             .open()
+            .context("Failed to open shared memory")
         {
             Ok(shmem) => {
                 let ptr = shmem.as_ptr() as *const SharedDeviceState;
@@ -229,7 +235,8 @@ impl ThreadSafeSharedMemoryManager {
         };
 
         for path in paths {
-            let identifier = self.extract_identifier_from_path(&base_path, &path)?;
+            let identifier =
+                self.extract_identifier_from_path(&base_path, path.join(SHM_PATH_SUFFIX))?;
             if is_pod_tracking(&identifier) {
                 continue;
             }
