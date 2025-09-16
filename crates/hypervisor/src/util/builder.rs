@@ -91,10 +91,10 @@ impl ApplicationBuilder {
             watch_interval: Duration::from_millis(70),
             device_count: gpu_system.device_count,
             shared_memory_glob_pattern: format!(
-                "{}/*/*/{}",
+                "{}/*/*",
                 self.daemon_args.shared_memory_base_path.to_string_lossy(),
-                utils::shared_memory::handle::SHM_PATH_SUFFIX
             ),
+
             base_path: shm_base_path,
         };
 

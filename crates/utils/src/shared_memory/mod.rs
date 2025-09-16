@@ -510,6 +510,11 @@ impl SharedDeviceStateV1 {
             return false; // No heartbeat recorded
         }
 
+        if last_heartbeat > now {
+            // If last heartbeat is in the future, consider unhealthy
+            return false;
+        }
+
         tracing::debug!(
             last_heartbeat = last_heartbeat,
             now = now,

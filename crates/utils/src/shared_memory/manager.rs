@@ -127,22 +127,28 @@ impl ThreadSafeSharedMemoryManager {
         let file_paths = self.find_shared_memory_files(glob_pattern)?;
 
         for file_path in file_paths {
-            let identifier = self.extract_identifier_from_path(&base_path, &file_path)?;
+            if let Err(e) = super::cleanup_empty_parent_directories(
+                file_path.join(SHM_PATH_SUFFIX).as_ref(),
+                Some(base_path.as_ref()),
+            ) {
+                tracing::warn!("Failed to cleanup empty directories: {}", e);
+            }
+
+            let shm_file_path = file_path.join(SHM_PATH_SUFFIX);
+            let identifier = self.extract_identifier_from_path(&base_path, &shm_file_path)?;
             if is_pod_tracking(&identifier) {
                 continue;
             }
-            // file_path is /base_path/namespace/pod_name/shm
-            if let Some(parent) = file_path.parent() {
-                if self.is_shared_memory_orphaned(parent)? {
-                    if let Err(e) = self.remove_orphaned_file(&file_path, base_path.as_ref()) {
-                        warn!(
-                            "Failed to remove orphaned file {}: {}",
-                            file_path.display(),
-                            e
-                        );
-                    } else {
-                        cleaned_pid_ids.push(identifier);
-                    }
+
+            if self.is_shared_memory_orphaned(file_path)? {
+                if let Err(e) = self.remove_orphaned_file(&shm_file_path, base_path.as_ref()) {
+                    warn!(
+                        "Failed to remove orphaned file {}: {}",
+                        shm_file_path.display(),
+                        e
+                    );
+                } else {
+                    cleaned_pid_ids.push(identifier);
                 }
             }
         }
