@@ -72,7 +72,7 @@ fn are_hooks_enabled() -> (bool, bool) {
 
 pub(crate) fn mock_shm_path() -> Option<PathBuf> {
     env::var("TF_SHM_FILE")
-        .map(|s| PathBuf::from(s))
+        .map(PathBuf::from)
         .map(|mut p| {
             p.pop();
             p
