@@ -158,17 +158,10 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Find shared memory files matching the glob pattern
     pub fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<PathBuf>> {
-        let paths = glob::glob(glob_pattern).context("Failed to compile glob pattern")?;
-
-        let mut file_paths = Vec::new();
-        for path_result in paths {
-            let file_path = path_result.context("Failed to read glob path")?;
-            if file_path.is_file() {
-                file_paths.push(file_path);
-            }
-        }
-
-        Ok(file_paths)
+        glob::glob(glob_pattern)
+            .context("Failed to compile glob pattern")?
+            .collect::<Result<Vec<_>, _>>()
+            .context("Failed to read glob path")
     }
 
     /// Check if a shared memory segment is orphaned

@@ -101,6 +101,7 @@ where
 
     pub async fn restore_pod_from_shared_memory(&self) -> Result<()> {
         // Generate glob pattern from base path: {base_path}/*/*/shm
+        // TODO: reuse the shared_memory_glob_pattern the coordinator
         let shm_glob_pattern = format!(
             "{}{}{}",
             self.shm_base_path.to_string_lossy(),

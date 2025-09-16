@@ -44,9 +44,6 @@ pub enum KubernetesError {
     WatchFailed { message: String },
     #[display("Failed to parse annotations: {message}")]
     AnnotationParseError { message: String },
-    #[display("Pod not found: {pod_name} in namespace {namespace}")]
-    #[allow(dead_code)]
-    PodNotFound { pod_name: String, namespace: String },
 }
 
 impl Error for KubernetesError {}

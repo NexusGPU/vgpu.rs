@@ -896,6 +896,21 @@ mod tests {
     }
 
     #[test]
+    fn orphaned_file_cleanup111() {
+        let manager = ThreadSafeSharedMemoryManager::new();
+
+        // Test cleanup with a pattern that won't match
+        let cleaned = manager
+            .cleanup_orphaned_files(
+                "/run/tensor-fusion/shm/*/*",
+                |_| false,
+                Path::new("/run/tensor-fusion/shm"),
+            )
+            .unwrap();
+        assert_eq!(cleaned.len(), 0);
+    }
+
+    #[test]
     fn device_iteration_methods() {
         // Create multiple device configurations
         let configs = vec![
