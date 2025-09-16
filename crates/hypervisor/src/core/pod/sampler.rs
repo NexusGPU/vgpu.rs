@@ -1,26 +1,26 @@
 //! Simple implementations of traits for production use
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Context;
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::error::NvmlError;
+use nvml_wrapper::Nvml;
 
 use super::traits::{DeviceSnapshotProvider, TimeSource};
 use super::utilization::{codec_normalize, DeviceSnapshot, ProcessUtilization};
 
 /// Production NVML-based device snapshot provider
-pub struct NvmlDeviceSampler;
-
-impl NvmlDeviceSampler {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct NvmlDeviceSampler {
+    nvml: Arc<Nvml>,
 }
 
-impl Default for NvmlDeviceSampler {
-    fn default() -> Self {
-        Self::new()
+impl NvmlDeviceSampler {
+    pub fn init() -> Result<Self, anyhow::Error> {
+        Ok(Self {
+            nvml: Arc::new(Nvml::init().context("Failed to initialize NVML")?),
+        })
     }
 }
 
@@ -32,8 +32,8 @@ impl DeviceSnapshotProvider for NvmlDeviceSampler {
         device_idx: u32,
         last_seen_ts: u64,
     ) -> Result<DeviceSnapshot, Self::Error> {
-        let nvml = nvml_wrapper::Nvml::init().context("Failed to initialize NVML")?;
-        let device = nvml
+        let device: nvml_wrapper::Device<'_> = self
+            .nvml
             .device_by_index(device_idx)
             .context("Failed to get device by index")?;
 
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_nvml_error_recovery_patterns() {
-        let sampler = NvmlDeviceSampler::new();
+        let sampler = NvmlDeviceSampler::init().unwrap();
 
         // Test multiple consecutive error scenarios
         let invalid_devices = vec![9999, 8888, 7777];
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_edge_cases() {
-        let sampler = NvmlDeviceSampler::new();
+        let sampler = NvmlDeviceSampler::init().unwrap();
 
         // Test with different last_seen_timestamp values
         let edge_timestamps = vec![

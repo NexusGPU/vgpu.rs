@@ -291,7 +291,7 @@ pub async fn mock_coordinator(
     let shared_memory = Arc::new(ThreadSafeSharedMemoryManager::new());
     let base_path = tmpdir.path().to_path_buf();
     let pod_state = Arc::new(PodStateStore::new(base_path.clone()));
-    let snapshot = Arc::new(NvmlDeviceSampler::new());
+    let snapshot = Arc::new(NvmlDeviceSampler::init().unwrap());
     let time = Arc::new(SystemClock::new());
 
     // Create coordinator with mock dependencies

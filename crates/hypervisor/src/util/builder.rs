@@ -84,7 +84,7 @@ impl ApplicationBuilder {
 
         // Create limiter coordinator
         let shared_memory_manager = Arc::new(ThreadSafeSharedMemoryManager::new());
-        let snapshot = Arc::new(NvmlDeviceSampler::new());
+        let snapshot = Arc::new(NvmlDeviceSampler::init()?);
         let time = Arc::new(SystemClock::new());
 
         let config = CoordinatorConfig {
