@@ -88,7 +88,7 @@ impl ApplicationBuilder {
         let time = Arc::new(SystemClock::new());
 
         let config = CoordinatorConfig {
-            watch_interval: Duration::from_millis(60),
+            watch_interval: Duration::from_millis(70),
             device_count: gpu_system.device_count,
             shared_memory_glob_pattern: format!(
                 "{}/*/*/{}",

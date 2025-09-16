@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing_subscriber::field::debug;
 use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, PodIdentifier};
 
 use super::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
@@ -319,6 +320,7 @@ where
 
         state.update_heartbeat(device_snapshot.timestamp);
 
+        debug!(pod_identifier = %pod_identifier, user_current = pod_utilization.total_utilization, user_new = new_share, "updated shared memory state for pod");
         Ok(())
     }
 
