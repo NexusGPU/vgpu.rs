@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
+use std::thread;
 use std::time::Duration;
 
 use cudarc::driver::sys::CUdevice;
@@ -200,10 +201,7 @@ impl Limiter {
             });
         }
 
-        // Exponential backoff parameters
-        let mut backoff_ms = 1;
-        const MAX_BACKOFF_MS: u64 = 100;
-        const BACKOFF_MULTIPLIER: u64 = 2;
+        let sleep_ms = 10;
 
         loop {
             let available = state
@@ -222,9 +220,7 @@ impl Limiter {
                 break;
             }
 
-            // Wait with exponential backoff to avoid busy-waiting
-            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
-            backoff_ms = (backoff_ms * BACKOFF_MULTIPLIER).min(MAX_BACKOFF_MS);
+            thread::sleep(Duration::from_millis(sleep_ms));
         }
 
         Ok(())
