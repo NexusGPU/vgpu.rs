@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
+use utils::shared_memory::handle::SHM_PATH_SUFFIX;
 use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
 use utils::shared_memory::{DeviceConfig, PodIdentifier};
 
@@ -348,7 +349,7 @@ impl Drop for PodCleanupGuard {
     fn drop(&mut self) {
         let pod_path = self.pod_id.to_path(&self.base_path);
         // Clean up shared memory file for this specific pod
-        let _ = std::fs::remove_file(&pod_path);
+        let _ = std::fs::remove_file(pod_path.join(SHM_PATH_SUFFIX));
         // Remove environment variable if it matches this pod
         if std::env::var(TF_SHM_FILE).unwrap_or_default() == pod_path.to_string_lossy() {
             std::env::remove_var(TF_SHM_FILE);
@@ -488,7 +489,7 @@ impl TestCoordinatorManager {
         is_limiter_enabled: bool,
     ) -> Result<(u128, Output), Report<IntegrationTestError>> {
         // Set environment variable for this pod - use the full path
-        let pod_path = self.pod_state.pod_path(&pod.pod_id);
+        let pod_path = self.pod_state.pod_path(&pod.pod_id).join(SHM_PATH_SUFFIX);
         std::env::set_var(TF_SHM_FILE, pod_path.to_string_lossy().as_ref());
 
         self.run_test_with_detailed_output(
@@ -558,7 +559,7 @@ impl Drop for TestCoordinatorManager {
 
         // Clean up any remaining shared memory files using proper paths
         for pod_id in &self.registered_pods {
-            let pod_path = self.pod_state.pod_path(pod_id);
+            let pod_path = self.pod_state.pod_path(pod_id).join(SHM_PATH_SUFFIX);
             let _ = std::fs::remove_file(&pod_path);
         }
     }

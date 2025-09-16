@@ -258,7 +258,7 @@ impl ThreadSafeSharedMemoryManager {
             .strip_prefix(base_path.as_ref())
             .with_context(|| format!("Failed to strip prefix from {}", path.as_ref().display()))?;
         let identifier = relative_path.to_string_lossy().to_string();
-        PodIdentifier::from_path(&identifier).ok_or_else(|| {
+        PodIdentifier::from_shm_file_path(&identifier).ok_or_else(|| {
             anyhow::anyhow!("Failed to parse PodIdentifier from path: {}", identifier)
         })
     }
@@ -339,7 +339,7 @@ impl super::traits::SharedMemoryAccess for ThreadSafeSharedMemoryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared_memory::PodIdentifier;
+    use crate::shared_memory::{handle::SHM_PATH_SUFFIX, PodIdentifier};
     use std::path::Path;
 
     #[test]
@@ -348,7 +348,7 @@ mod tests {
         let base_path = Path::new("/dev/shm");
 
         // Success case
-        let full_path = Path::new("/dev/shm/kube-system/my-pod");
+        let full_path = Path::new("/dev/shm/kube-system/my-pod/shm");
         let result = manager
             .extract_identifier_from_path(base_path, full_path)
             .unwrap();
@@ -371,7 +371,7 @@ mod tests {
         let full_path = original.to_path(base_path);
 
         let extracted = manager
-            .extract_identifier_from_path(base_path, &full_path)
+            .extract_identifier_from_path(base_path, &full_path.join(SHM_PATH_SUFFIX))
             .unwrap();
         assert_eq!(extracted, original);
     }
