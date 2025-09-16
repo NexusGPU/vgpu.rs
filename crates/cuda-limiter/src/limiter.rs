@@ -202,7 +202,7 @@ impl Limiter {
         }
 
         let sleep_ms = 10;
-
+        let mut wait_time = 0;
         loop {
             let available = state
                 .with_device(raw_device_index, |device| {
@@ -221,6 +221,17 @@ impl Limiter {
             }
 
             thread::sleep(Duration::from_millis(sleep_ms));
+            wait_time += sleep_ms;
+
+            if wait_time > 1000 {
+                if !state.is_healthy(Duration::from_secs(2)) {
+                    let last_heartbeat = state.get_last_heartbeat();
+                    return Err(Error::DeviceNotHealthy {
+                        device_idx: raw_device_index,
+                        last_heartbeat,
+                    });
+                }
+            }
         }
 
         Ok(())
