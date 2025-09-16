@@ -160,13 +160,20 @@ impl PodInfoCache {
 
         let api: Api<Pod> = Api::namespaced(client.clone(), namespace);
 
-        let pod = api.get(pod_name).await.map_err(|e| {
-            Report::new(KubernetesError::PodNotFound {
-                pod_name: pod_name.to_string(),
-                namespace: namespace.to_string(),
-            })
-            .attach_printable(format!("Kubernetes API error: {e}"))
-        })?;
+        let pod = match api.get(pod_name).await {
+            Ok(pod) => pod,
+            Err(kube::Error::Api(error_response)) if error_response.code == 404 => {
+                // Pod not found, return Ok(None)
+                return Ok(None);
+            }
+            Err(e) => {
+                // Other Kubernetes API errors
+                return Err(Report::new(KubernetesError::ConnectionFailed {
+                    message: format!("Failed to get pod {namespace}/{pod_name}: {e}"),
+                })
+                .attach_printable("Kubernetes API error"));
+            }
+        };
 
         // Transform and cache the pod info
         let mut tf_info = self.transform_pod_to_pod_info(pod)?;

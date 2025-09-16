@@ -84,17 +84,17 @@ impl ApplicationBuilder {
 
         // Create limiter coordinator
         let shared_memory_manager = Arc::new(ThreadSafeSharedMemoryManager::new());
-        let snapshot = Arc::new(NvmlDeviceSampler::new());
+        let snapshot = Arc::new(NvmlDeviceSampler::init()?);
         let time = Arc::new(SystemClock::new());
 
         let config = CoordinatorConfig {
-            watch_interval: Duration::from_millis(100),
+            watch_interval: Duration::from_millis(70),
             device_count: gpu_system.device_count,
             shared_memory_glob_pattern: format!(
-                "{}/*/*/{}",
+                "{}/*/*",
                 self.daemon_args.shared_memory_base_path.to_string_lossy(),
-                utils::shared_memory::handle::SHM_PATH_SUFFIX
             ),
+
             base_path: shm_base_path,
         };
 

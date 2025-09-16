@@ -58,8 +58,11 @@ impl<M, P, D, T> PodManager<M, P, D, T> {
 
     /// Parse namespace and pod name from a shared memory path identifier
     /// Format: {base_path}/{namespace}/{pod_name}/shm
-    pub fn pod_name_namespace(&self, identifier: &PodIdentifier) -> Option<(String, String)> {
-        Some((identifier.namespace.clone(), identifier.name.clone()))
+    pub fn pod_name_namespace<'a>(
+        &self,
+        identifier: &'a PodIdentifier,
+    ) -> Option<(&'a str, &'a str)> {
+        Some((&identifier.namespace, &identifier.name))
     }
 }
 
@@ -98,6 +101,7 @@ where
 
     pub async fn restore_pod_from_shared_memory(&self) -> Result<()> {
         // Generate glob pattern from base path: {base_path}/*/*/shm
+        // TODO: reuse the shared_memory_glob_pattern the coordinator
         let shm_glob_pattern = format!(
             "{}{}{}",
             self.shm_base_path.to_string_lossy(),
@@ -124,7 +128,7 @@ where
                 );
                 continue;
             };
-            match self.ensure_pod_registered(&namespace, &pod_name).await {
+            match self.ensure_pod_registered(namespace, pod_name).await {
                 Err(PodManagementError::PodNotFound {
                     namespace,
                     pod_name,

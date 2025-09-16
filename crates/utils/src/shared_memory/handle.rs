@@ -23,7 +23,7 @@ pub struct SharedMemoryHandle {
 impl SharedMemoryHandle {
     /// Creates a mock SharedMemoryHandle with predefined test data.
     /// This function is useful for testing without requiring actual shared memory.
-    pub fn mock(shm_path: String, gpu_idx_uuids: Vec<(usize, String)>) -> Self {
+    pub fn mock(shm_path: impl AsRef<Path>, gpu_idx_uuids: Vec<(usize, String)>) -> Self {
         // Create mock configs for testing
         let mock_configs: Vec<_> = gpu_idx_uuids
             .iter()
@@ -43,20 +43,24 @@ impl SharedMemoryHandle {
         // Create actual shared memory to get a valid pointer
         let shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .use_tmpfs_with_dir(Path::new(&shm_path))
+            .use_tmpfs_with_dir(shm_path.as_ref())
             .os_id(SHM_PATH_SUFFIX)
             .open()
         {
             Ok(shmem) => shmem,
             Err(e) => {
-                tracing::warn!("failed to open shared memory shm_name: {shm_path}, err: {:?}, creating new one", e);
+                tracing::warn!(
+                    "failed to open shared memory shm_name: {:?}, err: {:?}, creating new one",
+                    shm_path.as_ref(),
+                    e
+                );
 
-                std::fs::create_dir_all(Path::new(&shm_path))
+                std::fs::create_dir_all(shm_path.as_ref())
                     .expect("Failed to create mock shared memory directory");
 
                 let shmem = ShmemConf::new()
                     .size(std::mem::size_of::<SharedDeviceState>())
-                    .use_tmpfs_with_dir(Path::new(&shm_path))
+                    .use_tmpfs_with_dir(shm_path.as_ref())
                     .os_id(SHM_PATH_SUFFIX)
                     .create()
                     .expect("Failed to create mock shared memory");

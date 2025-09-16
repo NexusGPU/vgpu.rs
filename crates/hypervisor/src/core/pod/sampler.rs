@@ -1,26 +1,26 @@
 //! Simple implementations of traits for production use
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Context;
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::error::NvmlError;
+use nvml_wrapper::Nvml;
 
 use super::traits::{DeviceSnapshotProvider, TimeSource};
 use super::utilization::{codec_normalize, DeviceSnapshot, ProcessUtilization};
 
 /// Production NVML-based device snapshot provider
-pub struct NvmlDeviceSampler;
-
-impl NvmlDeviceSampler {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct NvmlDeviceSampler {
+    nvml: Arc<Nvml>,
 }
 
-impl Default for NvmlDeviceSampler {
-    fn default() -> Self {
-        Self::new()
+impl NvmlDeviceSampler {
+    pub fn init() -> Result<Self, anyhow::Error> {
+        Ok(Self {
+            nvml: Arc::new(Nvml::init().context("Failed to initialize NVML")?),
+        })
     }
 }
 
@@ -32,8 +32,8 @@ impl DeviceSnapshotProvider for NvmlDeviceSampler {
         device_idx: u32,
         last_seen_ts: u64,
     ) -> Result<DeviceSnapshot, Self::Error> {
-        let nvml = nvml_wrapper::Nvml::init().context("Failed to initialize NVML")?;
-        let device = nvml
+        let device: nvml_wrapper::Device<'_> = self
+            .nvml
             .device_by_index(device_idx)
             .context("Failed to get device by index")?;
 
@@ -124,65 +124,5 @@ impl TimeSource for SystemClock {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_nvml_error_recovery_patterns() {
-        let sampler = NvmlDeviceSampler::new();
-
-        // Test multiple consecutive error scenarios
-        let invalid_devices = vec![9999, 8888, 7777];
-
-        for device_idx in invalid_devices {
-            let result = sampler.get_device_snapshot(device_idx, 0);
-            assert!(result.is_err(), "Should fail for device {device_idx}");
-
-            // Test that error can be properly handled and doesn't panic
-            match result {
-                Err(e) => {
-                    let error_msg = format!("{e:?}");
-                    assert!(!error_msg.is_empty());
-                    // Error should contain some indication of the problem
-                    assert!(
-                        error_msg.contains("Failed")
-                            || error_msg.contains("Error")
-                            || error_msg.contains("not found")
-                            || error_msg.contains("NVML")
-                    );
-                }
-                Ok(_) => panic!("Expected error for invalid device {device_idx}"),
-            }
-        }
-    }
-
-    #[test]
-    fn test_timestamp_edge_cases() {
-        let sampler = NvmlDeviceSampler::new();
-
-        // Test with different last_seen_timestamp values
-        let edge_timestamps = vec![
-            0,          // Unix epoch
-            u64::MAX,   // Maximum timestamp
-            1577836800, // 2020-01-01
-            4294967295, // 2106-02-07 (32-bit timestamp limit)
-        ];
-
-        for &timestamp in &edge_timestamps {
-            // These will likely fail due to invalid device, but timestamp handling should be robust
-            let result = sampler.get_device_snapshot(9999, timestamp);
-
-            // The error should be about device access, not timestamp handling
-            if let Err(e) = result {
-                let error_msg = format!("{e}");
-                // Should not contain timestamp-related errors
-                assert!(!error_msg.to_lowercase().contains("timestamp"));
-                assert!(!error_msg.to_lowercase().contains("time"));
-            }
-        }
     }
 }

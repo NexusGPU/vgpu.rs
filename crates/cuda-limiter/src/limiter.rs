@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
+use std::thread;
 use std::time::Duration;
 
 use cudarc::driver::sys::CUdevice;
@@ -200,11 +201,8 @@ impl Limiter {
             });
         }
 
-        // Exponential backoff parameters
-        let mut backoff_ms = 1;
-        const MAX_BACKOFF_MS: u64 = 100;
-        const BACKOFF_MULTIPLIER: u64 = 2;
-
+        let sleep_ms = 10;
+        let mut wait_times = 0;
         loop {
             let available = state
                 .with_device(raw_device_index, |device| {
@@ -222,9 +220,25 @@ impl Limiter {
                 break;
             }
 
-            // Wait with exponential backoff to avoid busy-waiting
-            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
-            backoff_ms = (backoff_ms * BACKOFF_MULTIPLIER).min(MAX_BACKOFF_MS);
+            thread::sleep(Duration::from_millis(sleep_ms));
+            wait_times += 1;
+
+            if wait_times > 10 {
+                wait_times = 0;
+                let is_healthy = state.is_healthy(Duration::from_secs(2));
+                tracing::debug!(
+                    device_idx = raw_device_index,
+                    is_healthy = is_healthy,
+                    "check device health"
+                );
+                if !is_healthy {
+                    let last_heartbeat = state.get_last_heartbeat();
+                    return Err(Error::DeviceNotHealthy {
+                        device_idx: raw_device_index,
+                        last_heartbeat,
+                    });
+                }
+            }
         }
 
         Ok(())

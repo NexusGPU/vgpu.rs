@@ -11,6 +11,7 @@ use spin::RwLock;
 use tracing::info;
 use tracing::warn;
 
+use crate::shared_memory::handle::SHM_PATH_SUFFIX;
 use crate::shared_memory::PodIdentifier;
 
 use super::{handle::SharedMemoryHandle, DeviceConfig, SharedDeviceState};
@@ -126,15 +127,24 @@ impl ThreadSafeSharedMemoryManager {
         let file_paths = self.find_shared_memory_files(glob_pattern)?;
 
         for file_path in file_paths {
-            let identifier = self.extract_identifier_from_path(&base_path, &file_path)?;
+            if let Err(e) = super::cleanup_empty_parent_directories(
+                file_path.join(SHM_PATH_SUFFIX).as_ref(),
+                Some(base_path.as_ref()),
+            ) {
+                tracing::warn!("Failed to cleanup empty directories: {}", e);
+            }
+
+            let shm_file_path = file_path.join(SHM_PATH_SUFFIX);
+            let identifier = self.extract_identifier_from_path(&base_path, &shm_file_path)?;
             if is_pod_tracking(&identifier) {
                 continue;
             }
-            if self.is_shared_memory_orphaned(&file_path)? {
-                if let Err(e) = self.remove_orphaned_file(&file_path, base_path.as_ref()) {
+
+            if self.is_shared_memory_orphaned(file_path)? {
+                if let Err(e) = self.remove_orphaned_file(&shm_file_path, base_path.as_ref()) {
                     warn!(
                         "Failed to remove orphaned file {}: {}",
-                        file_path.display(),
+                        shm_file_path.display(),
                         e
                     );
                 } else {
@@ -148,26 +158,20 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Find shared memory files matching the glob pattern
     pub fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<PathBuf>> {
-        let paths = glob::glob(&format!("/dev/shm/{glob_pattern}"))
-            .context("Failed to compile glob pattern")?;
-
-        let mut file_paths = Vec::new();
-        for path_result in paths {
-            let file_path = path_result.context("Failed to read glob path")?;
-            if file_path.is_file() {
-                file_paths.push(file_path);
-            }
-        }
-
-        Ok(file_paths)
+        glob::glob(glob_pattern)
+            .context("Failed to compile glob pattern")?
+            .collect::<Result<Vec<_>, _>>()
+            .context("Failed to read glob path")
     }
 
     /// Check if a shared memory segment is orphaned
     fn is_shared_memory_orphaned(&self, path: impl AsRef<Path>) -> Result<bool> {
         match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .flink(path.as_ref())
+            .use_tmpfs_with_dir(path.as_ref())
+            .os_id(SHM_PATH_SUFFIX)
             .open()
+            .context("Failed to open shared memory")
         {
             Ok(shmem) => {
                 let ptr = shmem.as_ptr() as *const SharedDeviceState;
@@ -230,7 +234,8 @@ impl ThreadSafeSharedMemoryManager {
         };
 
         for path in paths {
-            let identifier = self.extract_identifier_from_path(&base_path, &path)?;
+            let identifier =
+                self.extract_identifier_from_path(&base_path, path.join(SHM_PATH_SUFFIX))?;
             if is_pod_tracking(&identifier) {
                 continue;
             }
@@ -259,7 +264,7 @@ impl ThreadSafeSharedMemoryManager {
             .strip_prefix(base_path.as_ref())
             .with_context(|| format!("Failed to strip prefix from {}", path.as_ref().display()))?;
         let identifier = relative_path.to_string_lossy().to_string();
-        PodIdentifier::from_path(&identifier).ok_or_else(|| {
+        PodIdentifier::from_shm_file_path(&identifier).ok_or_else(|| {
             anyhow::anyhow!("Failed to parse PodIdentifier from path: {}", identifier)
         })
     }
@@ -340,7 +345,7 @@ impl super::traits::SharedMemoryAccess for ThreadSafeSharedMemoryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared_memory::PodIdentifier;
+    use crate::shared_memory::{handle::SHM_PATH_SUFFIX, PodIdentifier};
     use std::path::Path;
 
     #[test]
@@ -349,7 +354,7 @@ mod tests {
         let base_path = Path::new("/dev/shm");
 
         // Success case
-        let full_path = Path::new("/dev/shm/kube-system/my-pod");
+        let full_path = Path::new("/dev/shm/kube-system/my-pod/shm");
         let result = manager
             .extract_identifier_from_path(base_path, full_path)
             .unwrap();
@@ -372,7 +377,7 @@ mod tests {
         let full_path = original.to_path(base_path);
 
         let extracted = manager
-            .extract_identifier_from_path(base_path, &full_path)
+            .extract_identifier_from_path(base_path, full_path.join(SHM_PATH_SUFFIX))
             .unwrap();
         assert_eq!(extracted, original);
     }

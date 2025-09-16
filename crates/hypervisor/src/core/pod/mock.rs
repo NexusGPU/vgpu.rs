@@ -248,7 +248,7 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
                 .to_string()
         };
 
-        PodIdentifier::from_path(&identifier).ok_or_else(|| {
+        PodIdentifier::from_shm_file_path(&identifier).ok_or_else(|| {
             anyhow::anyhow!("Failed to parse PodIdentifier from path: {}", identifier)
         })
     }

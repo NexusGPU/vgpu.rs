@@ -317,8 +317,10 @@ where
             });
         }
 
-        state.update_heartbeat(device_snapshot.timestamp);
+        // Convert NVML timestamp from microseconds to seconds for heartbeat
+        state.update_heartbeat(device_snapshot.timestamp / 1_000_000);
 
+        debug!(pod_identifier = %pod_identifier, user_current = pod_utilization.total_utilization, user_new = new_share, "updated shared memory state for pod");
         Ok(())
     }
 
@@ -837,6 +839,10 @@ mod tests {
         let test_path = Path::new("/tmp/test_shm/test_ns/test_pod_123/shm");
         let result = coordinator.extract_identifier_from_path(test_path);
         assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            PodIdentifier::new("test_ns", "test_pod_123")
+        );
 
         // Verify the call was made to the mock
         let operations = shared_memory.get_operations();

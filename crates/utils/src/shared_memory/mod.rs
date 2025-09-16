@@ -36,6 +36,7 @@ pub fn cleanup_empty_parent_directories(
         if let Ok(entries) = std::fs::read_dir(parent_dir) {
             let entry_count = entries.count();
             if entry_count == 0 {
+                tracing::info!("Removing empty directory: {}", parent_dir.display());
                 match std::fs::remove_dir(parent_dir) {
                     Ok(_) => {
                         tracing::info!("Removed empty directory: {}", parent_dir.display());
@@ -80,23 +81,23 @@ impl PodIdentifier {
     }
 
     /// Parse a PodIdentifier from a full shared memory path  
-    /// Path format: {base_path}/{namespace}/{name}
+    /// Path format: {base_path}/{namespace}/{name}/shm
     /// This method extracts namespace/name from any base path
-    pub fn from_path(path: &str) -> Option<Self> {
+    pub fn from_shm_file_path(path: &str) -> Option<Self> {
         let path = Path::new(path);
         let components: Vec<_> = path
             .components()
             .filter_map(|c| c.as_os_str().to_str())
             .collect();
 
-        if components.len() < 2 {
+        if components.len() < 3 {
             return None;
         }
 
-        // Extract the last 3 components: {namespace}/{name}
+        // Extract the last 3 components: {namespace}/{name}/shm
         let len = components.len();
-        let namespace = components[len - 2].to_string();
-        let name = components[len - 1].to_string();
+        let namespace = components[len - 3].to_string();
+        let name = components[len - 2].to_string();
         Some(Self::new(namespace, name))
     }
 }
@@ -496,15 +497,31 @@ impl SharedDeviceStateV1 {
 
     /// Checks if the shared memory is healthy based on heartbeat.
     pub fn is_healthy(&self, timeout: Duration) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(duration) => duration.as_secs(),
+            Err(_) => {
+                // If system time is before UNIX_EPOCH, consider unhealthy
+                tracing::warn!("System time is before UNIX_EPOCH, considering unhealthy");
+                return false;
+            }
+        };
         let last_heartbeat = self.get_last_heartbeat();
 
         if last_heartbeat == 0 {
             return false; // No heartbeat recorded
         }
+
+        if last_heartbeat > now {
+            // If last heartbeat is in the future, consider unhealthy
+            return false;
+        }
+
+        tracing::debug!(
+            last_heartbeat = last_heartbeat,
+            now = now,
+            timeout = timeout.as_secs(),
+            "check device health"
+        );
 
         now.saturating_sub(last_heartbeat) <= timeout.as_secs()
     }
@@ -567,7 +584,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use crate::shared_memory::handle::SharedMemoryHandle;
+    use crate::shared_memory::handle::{SharedMemoryHandle, SHM_PATH_SUFFIX};
     use crate::shared_memory::manager::ThreadSafeSharedMemoryManager;
 
     use super::*;
@@ -1031,7 +1048,7 @@ mod tests {
         fs::create_dir_all(&pod_dir).unwrap();
 
         // Create a file in the pod directory
-        let test_file = pod_dir.join("shm");
+        let test_file = pod_dir.join(SHM_PATH_SUFFIX);
         fs::write(&test_file, "test data").unwrap();
 
         // Verify structure exists
@@ -1067,7 +1084,7 @@ mod tests {
         fs::create_dir_all(&pod_dir).unwrap();
 
         // Create a file in the pod directory
-        let test_file = pod_dir.join("shm");
+        let test_file = pod_dir.join(SHM_PATH_SUFFIX);
         fs::write(&test_file, "test data").unwrap();
 
         // Remove the file
@@ -1100,7 +1117,7 @@ mod tests {
         fs::create_dir_all(&pod_dir).unwrap();
 
         // Create two files in the pod directory
-        let test_file1 = pod_dir.join("shm");
+        let test_file1 = pod_dir.join(SHM_PATH_SUFFIX);
         let test_file2 = pod_dir.join("other_file");
         fs::write(&test_file1, "test data").unwrap();
         fs::write(&test_file2, "other data").unwrap();
@@ -1133,7 +1150,7 @@ mod tests {
         fs::create_dir_all(&pod_dir).unwrap();
 
         // Create a file in the pod directory
-        let test_file = pod_dir.join("shm");
+        let test_file = pod_dir.join(SHM_PATH_SUFFIX);
         fs::write(&test_file, "test data").unwrap();
 
         // Remove the file

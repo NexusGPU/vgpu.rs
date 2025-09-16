@@ -6,6 +6,7 @@ use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::OsStr;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -69,8 +70,14 @@ fn are_hooks_enabled() -> (bool, bool) {
     (enable_nvml_hooks, enable_cuda_hooks)
 }
 
-pub(crate) fn mock_shm_path() -> Option<String> {
-    env::var("TF_SHM_FILE").ok()
+pub(crate) fn mock_shm_path() -> Option<PathBuf> {
+    env::var("TF_SHM_FILE")
+        .map(PathBuf::from)
+        .map(|mut p| {
+            p.pop();
+            p
+        })
+        .ok()
 }
 
 fn init_ngpu_library() {
