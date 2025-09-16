@@ -496,10 +496,14 @@ impl SharedDeviceStateV1 {
 
     /// Checks if the shared memory is healthy based on heartbeat.
     pub fn is_healthy(&self, timeout: Duration) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(duration) => duration.as_secs(),
+            Err(_) => {
+                // If system time is before UNIX_EPOCH, consider unhealthy
+                tracing::warn!("System time is before UNIX_EPOCH, considering unhealthy");
+                return false;
+            }
+        };
         let last_heartbeat = self.get_last_heartbeat();
 
         if last_heartbeat == 0 {
