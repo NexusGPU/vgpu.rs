@@ -317,7 +317,8 @@ where
             });
         }
 
-        state.update_heartbeat(device_snapshot.timestamp);
+        // Convert NVML timestamp from microseconds to seconds for heartbeat
+        state.update_heartbeat(device_snapshot.timestamp / 1_000_000);
 
         debug!(pod_identifier = %pod_identifier, user_current = pod_utilization.total_utilization, user_new = new_share, "updated shared memory state for pod");
         Ok(())
