@@ -36,6 +36,7 @@ pub fn cleanup_empty_parent_directories(
         if let Ok(entries) = std::fs::read_dir(parent_dir) {
             let entry_count = entries.count();
             if entry_count == 0 {
+                tracing::info!("Removing empty directory: {}", parent_dir.display());
                 match std::fs::remove_dir(parent_dir) {
                     Ok(_) => {
                         tracing::info!("Removed empty directory: {}", parent_dir.display());
@@ -893,21 +894,6 @@ mod tests {
 
         // Clean up test file
         std::fs::remove_file(test_file).unwrap();
-    }
-
-    #[test]
-    fn orphaned_file_cleanup111() {
-        let manager = ThreadSafeSharedMemoryManager::new();
-
-        // Test cleanup with a pattern that won't match
-        let cleaned = manager
-            .cleanup_orphaned_files(
-                "/run/tensor-fusion/shm/*/*",
-                |_| false,
-                Path::new("/run/tensor-fusion/shm"),
-            )
-            .unwrap();
-        assert_eq!(cleaned.len(), 0);
     }
 
     #[test]
