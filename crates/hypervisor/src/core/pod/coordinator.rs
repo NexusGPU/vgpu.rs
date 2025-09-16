@@ -17,7 +17,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use tracing_subscriber::field::debug;
 use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, PodIdentifier};
 
 use super::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
