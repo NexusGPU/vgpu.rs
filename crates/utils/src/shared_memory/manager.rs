@@ -371,7 +371,7 @@ mod tests {
         let full_path = original.to_path(base_path);
 
         let extracted = manager
-            .extract_identifier_from_path(base_path, &full_path.join(SHM_PATH_SUFFIX))
+            .extract_identifier_from_path(base_path, full_path.join(SHM_PATH_SUFFIX))
             .unwrap();
         assert_eq!(extracted, original);
     }
