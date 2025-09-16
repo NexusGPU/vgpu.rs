@@ -506,6 +506,13 @@ impl SharedDeviceStateV1 {
             return false; // No heartbeat recorded
         }
 
+        tracing::debug!(
+            last_heartbeat = last_heartbeat,
+            now = now,
+            timeout = timeout.as_secs(),
+            "check device health"
+        );
+
         now.saturating_sub(last_heartbeat) <= timeout.as_secs()
     }
 
