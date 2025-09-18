@@ -113,13 +113,37 @@ impl PodStateStore {
         Ok(())
     }
 
+    /// Unregister a pod from the state store
+    ///
+    /// return error if there are still processes registered to the pod
+    pub fn unregister_pod(&self, pod_identifier: &PodIdentifier) -> Result<()> {
+        // Check pod exists and is empty in a separate scope to release the reference
+        {
+            let pod_ref = self.pods.get(pod_identifier).ok_or_else(|| {
+                PodManagementError::PodIdentifierNotFound {
+                    pod_identifier: pod_identifier.clone(),
+                }
+            })?;
+
+            if !pod_ref.is_empty() {
+                return Err(PodManagementError::PodNotEmpty {
+                    pod_identifier: pod_identifier.clone(),
+                });
+            }
+            // pod_ref is dropped here, releasing the read reference
+        }
+
+        self.pods.remove(pod_identifier);
+        Ok(())
+    }
+
     /// Register a process within a pod
     ///
     /// If the pod doesn't exist, this will return an error.
     pub fn register_process(&self, pod_identifier: &PodIdentifier, host_pid: u32) -> Result<()> {
         let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
             PodManagementError::PodIdentifierNotFound {
-                pod_identifier: format!("{}/{}", pod_identifier.namespace, pod_identifier.name),
+                pod_identifier: pod_identifier.clone(),
             }
         })?;
 
@@ -150,7 +174,7 @@ impl PodStateStore {
         let should_remove_pod = {
             let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
                 PodManagementError::PodIdentifierNotFound {
-                    pod_identifier: format!("{}/{}", pod_identifier.namespace, pod_identifier.name),
+                    pod_identifier: pod_identifier.clone(),
                 }
             })?;
 
@@ -251,7 +275,7 @@ impl PodStateStore {
 
         let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
             PodManagementError::PodIdentifierNotFound {
-                pod_identifier: format!("{}/{}", pod_identifier.namespace, pod_identifier.name),
+                pod_identifier: pod_identifier.clone(),
             }
         })?;
 
@@ -274,7 +298,7 @@ impl PodStateStore {
     ) -> Result<()> {
         let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
             PodManagementError::PodIdentifierNotFound {
-                pod_identifier: format!("{}/{}", pod_identifier.namespace, pod_identifier.name),
+                pod_identifier: pod_identifier.clone(),
             }
         })?;
 

@@ -272,9 +272,9 @@ impl Tasks {
             }
 
             tracing::info!("Starting worker manager resource monitoring task");
-            // Start monitoring with 30 second interval and cancellation token
+            // Start monitoring with 60 second interval and cancellation token
             pod_manager
-                .start_resource_monitor(Duration::from_secs(30), token)
+                .start_resource_monitor(Duration::from_secs(60), token)
                 .await;
         })
     }
