@@ -416,11 +416,35 @@ where
             for pod_identifier in pod_identifiers {
                 let processes = self.pod_state_store.get_pod_processes(&pod_identifier);
                 if processes.is_empty() {
-                    info!("Pod {} has no processes, unregistering", pod_identifier);
-                    if let Err(e) = self.pod_state_store.unregister_pod(&pod_identifier) {
-                        tracing::error!("Failed to unregister pod {}: {}", pod_identifier, e);
+                    match self
+                        .pod_info_cache
+                        .pod_exists(&pod_identifier.namespace, &pod_identifier.name)
+                        .await
+                    {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            info!(
+                                "Pod {} has no processes, and pod not found in api server, unregistering",
+                                pod_identifier
+                            );
+
+                            if let Err(e) = self.pod_state_store.unregister_pod(&pod_identifier) {
+                                tracing::error!(
+                                    "Failed to unregister pod {}: {}",
+                                    pod_identifier,
+                                    e
+                                );
+                            }
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to check pod existence {}: {}",
+                                pod_identifier,
+                                e
+                            );
+                        }
                     }
-                    continue;
                 }
                 pids.extend(processes);
             }
