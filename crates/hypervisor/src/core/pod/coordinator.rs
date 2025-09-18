@@ -546,12 +546,7 @@ fn calculate_delta(device: &DeviceConfig, user_current: u32, share: i32) -> i32 
             share + increment
         }
     } else {
-        // Utilization above limit, decrease share
-        if share - increment < 0 {
-            0
-        } else {
-            share - increment
-        }
+        share - increment
     }
 }
 
