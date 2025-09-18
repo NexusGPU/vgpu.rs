@@ -117,16 +117,20 @@ impl PodStateStore {
     ///
     /// return error if there are still processes registered to the pod
     pub fn unregister_pod(&self, pod_identifier: &PodIdentifier) -> Result<()> {
-        let pod_ref = self.pods.get(pod_identifier).ok_or_else(|| {
-            PodManagementError::PodIdentifierNotFound {
-                pod_identifier: pod_identifier.clone(),
-            }
-        })?;
+        // Check pod exists and is empty in a separate scope to release the reference
+        {
+            let pod_ref = self.pods.get(pod_identifier).ok_or_else(|| {
+                PodManagementError::PodIdentifierNotFound {
+                    pod_identifier: pod_identifier.clone(),
+                }
+            })?;
 
-        if !pod_ref.is_empty() {
-            return Err(PodManagementError::PodNotEmpty {
-                pod_identifier: pod_identifier.clone(),
-            });
+            if !pod_ref.is_empty() {
+                return Err(PodManagementError::PodNotEmpty {
+                    pod_identifier: pod_identifier.clone(),
+                });
+            }
+            // pod_ref is dropped here, releasing the read reference
         }
 
         self.pods.remove(pod_identifier);
