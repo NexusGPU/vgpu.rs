@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use api_types::WorkerInfo;
-use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig};
+use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, PodIdentifier};
 
 /// Unified error type for pod management operations
 #[derive(Debug, thiserror::Error)]
@@ -16,7 +16,10 @@ pub enum PodManagementError {
     PodNotFound { namespace: String, pod_name: String },
 
     #[error("Pod identifier not found: {pod_identifier}")]
-    PodIdentifierNotFound { pod_identifier: String },
+    PodIdentifierNotFound { pod_identifier: PodIdentifier },
+
+    #[error("Pod not empty: {pod_identifier}")]
+    PodNotEmpty { pod_identifier: PodIdentifier },
 
     #[error("Process not found: {pid}")]
     ProcessNotFound { pid: u32 },

@@ -228,6 +228,7 @@ where
                 }
             }
 
+            info!("Checking for dead processes and cleaning them up");
             // Check for dead processes and clean them up
             if let Err(e) = self.check_and_cleanup_dead_processes().await {
                 tracing::error!("Failed to check and cleanup dead processes: {}", e);
@@ -348,7 +349,7 @@ where
             .pod_state_store
             .get_pod(&pod_identifier)
             .ok_or_else(|| PodManagementError::PodIdentifierNotFound {
-                pod_identifier: pod_identifier.to_string(),
+                pod_identifier: pod_identifier.clone(),
             })?;
 
         let WorkerInfo {
@@ -409,12 +410,27 @@ where
         let tracked_pids: Vec<u32> = {
             let mut pids = vec![];
 
-            for pod_identifier in self.pod_state_store.list_pod_identifiers() {
+            let pod_identifiers = self.pod_state_store.list_pod_identifiers();
+
+            let len = pod_identifiers.len();
+            for pod_identifier in pod_identifiers {
                 let processes = self.pod_state_store.get_pod_processes(&pod_identifier);
-                for process in processes {
-                    pids.push(process);
+                if processes.is_empty() {
+                    info!("Pod {} has no processes, unregistering", pod_identifier);
+                    if let Err(e) = self.pod_state_store.unregister_pod(&pod_identifier) {
+                        tracing::error!("Failed to unregister pod {}: {}", pod_identifier, e);
+                    }
+                    continue;
                 }
+                pids.extend(processes);
             }
+
+            info!(
+                "Checking for dead processes in {} pods, found {} tracked PIDs",
+                len,
+                pids.len()
+            );
+
             pids
         };
 
