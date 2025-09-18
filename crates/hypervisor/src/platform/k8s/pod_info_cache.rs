@@ -197,7 +197,7 @@ impl PodInfoCache {
             let key = PodKey::new(namespace.to_string(), pod_name.to_string());
             self.cache.insert(key, tf_info.clone());
 
-            info!(
+            debug!(
                 namespace = %namespace,
                 pod_name = %pod_name,
                 "Cached pod info from API server"
