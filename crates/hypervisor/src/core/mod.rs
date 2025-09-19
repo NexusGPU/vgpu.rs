@@ -8,7 +8,6 @@
 //! - Metrics collection logic
 
 pub mod hypervisor;
-pub mod metrics;
 pub mod pod;
 pub mod process;
 pub mod scheduler;
