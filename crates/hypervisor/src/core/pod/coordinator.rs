@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use utils::shared_memory::handle::SHM_PATH_SUFFIX;
 use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, PodIdentifier};
 
 use super::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
@@ -86,6 +87,11 @@ where
             shared_memory_glob_pattern: config.shared_memory_glob_pattern,
             base_path: config.base_path,
         }
+    }
+
+    /// Return the glob pattern for shared memory files including the `shm` suffix
+    pub fn shm_file_glob_pattern(&self) -> String {
+        format!("{}/{}", self.shared_memory_glob_pattern, SHM_PATH_SUFFIX)
     }
 
     pub fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<PathBuf>> {

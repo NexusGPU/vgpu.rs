@@ -160,7 +160,6 @@ impl ApplicationBuilder {
             components.pod_info_cache.clone(),
             components.pod_state_store.clone(),
             components.gpu_observer.clone(),
-            self.daemon_args.shared_memory_base_path.clone(),
         ));
 
         Ok(pod_manager)
