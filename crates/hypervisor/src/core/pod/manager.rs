@@ -521,11 +521,7 @@ where
         }
 
         // 3. Remove from pod state store (atomic cleanup)
-        let pod_removed = self.pod_state_store.unregister_process(&pod_id, host_pid)?;
-
-        if pod_removed {
-            info!("Pod {} removed (no more processes)", pod_id);
-        }
+        self.pod_state_store.unregister_process(&pod_id, host_pid)?;
 
         info!(
             "Successfully cleaned up process {} from pod {}",
@@ -673,13 +669,10 @@ mod tests {
         assert!(pod_id.name.contains("test-pod"));
 
         // Test process unregistration
-        let pod_removed = pod_state_store
+        pod_state_store
             .unregister_process(&pod_identifier, 12345)
             .unwrap();
-        assert!(pod_removed); // Pod should be removed as it has no more processes
 
-        // Verify cleanup
-        assert!(!pod_state_store.contains_pod(&pod_identifier));
         assert!(pod_state_store.get_pod_by_pid(12345).is_none());
     }
 
@@ -726,25 +719,22 @@ mod tests {
             assert!(pod_12347.name.contains("test-pod"));
         }
         // Unregister first process - pod should remain
-        let pod_removed = pod_state_store
+        pod_state_store
             .unregister_process(&pod_identifier, 12345)
             .unwrap();
-        assert!(!pod_removed);
         assert!(pod_state_store.contains_pod(&pod_identifier));
 
         // Unregister second process - pod should remain
-        let pod_removed = pod_state_store
+        pod_state_store
             .unregister_process(&pod_identifier, 12346)
             .unwrap();
-        assert!(!pod_removed);
         assert!(pod_state_store.contains_pod(&pod_identifier));
 
         // Unregister last process - pod should be removed
-        let pod_removed = pod_state_store
+        pod_state_store
             .unregister_process(&pod_identifier, 12347)
             .unwrap();
-        assert!(pod_removed);
-        assert!(!pod_state_store.contains_pod(&pod_identifier));
+        assert!(pod_state_store.contains_pod(&pod_identifier));
     }
 
     #[test]
@@ -870,15 +860,14 @@ mod tests {
                 assert!(store.get_pod_by_pid(pid2).is_some());
 
                 // Unregister one process
-                let pod_removed = store.unregister_process(&pod_id, pid1).unwrap();
-                assert!(!pod_removed); // Pod should still exist
+                store.unregister_process(&pod_id, pid1).unwrap();
+                assert!(store.contains_pod(&pod_id));
 
                 // Unregister second process
-                let pod_removed = store.unregister_process(&pod_id, pid2).unwrap();
-                assert!(pod_removed); // Pod should be removed
+                store.unregister_process(&pod_id, pid2).unwrap();
 
-                // Verify cleanup
-                assert!(!store.contains_pod(&pod_id));
+                // Verify still registered but empty
+                assert!(store.contains_pod(&pod_id));
                 assert!(store.get_pod_by_pid(pid1).is_none());
                 assert!(store.get_pod_by_pid(pid2).is_none());
             });
@@ -889,8 +878,7 @@ mod tests {
             result.unwrap(); // Ensure no task panicked
         }
 
-        // Final verification - store should be empty
-        assert_eq!(pod_state_store.list_pod_identifiers().len(), 0);
+        assert!(!pod_state_store.list_pod_identifiers().is_empty());
         assert_eq!(pod_state_store.list_all_processes().len(), 0);
     }
 
@@ -945,20 +933,19 @@ mod tests {
             // Remove all but one process
             for proc_idx in 0..(processes_per_pod - 1) {
                 let pid = (pod_idx * processes_per_pod + proc_idx) as u32 + 10000;
-                let pod_removed = pod_state_store.unregister_process(&pod_id, pid).unwrap();
-                assert!(!pod_removed); // Pod should still exist
+                pod_state_store.unregister_process(&pod_id, pid).unwrap();
+                assert!(pod_state_store.contains_pod(&pod_id));
             }
 
             // Remove last process (should remove pod)
             let last_pid = (pod_idx * processes_per_pod + processes_per_pod - 1) as u32 + 10000;
-            let pod_removed = pod_state_store
+            pod_state_store
                 .unregister_process(&pod_id, last_pid)
                 .unwrap();
-            assert!(pod_removed); // Pod should be removed
+            assert!(pod_state_store.contains_pod(&pod_id));
         }
 
-        // Final verification
-        assert_eq!(pod_state_store.list_pod_identifiers().len(), 0);
+        assert_eq!(pod_state_store.list_pod_identifiers().len(), num_pods);
         assert_eq!(pod_state_store.list_all_processes().len(), 0);
     }
 }
