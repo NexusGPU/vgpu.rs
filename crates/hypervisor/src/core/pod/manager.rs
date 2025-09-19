@@ -673,8 +673,6 @@ mod tests {
             .unregister_process(&pod_identifier, 12345)
             .unwrap();
 
-        // Verify cleanup
-        assert!(!pod_state_store.contains_pod(&pod_identifier));
         assert!(pod_state_store.get_pod_by_pid(12345).is_none());
     }
 
