@@ -162,16 +162,12 @@ impl PodStateStore {
 
     /// Unregister a process from a pod
     ///
-    /// Returns true if the pod should be removed (no more processes).
-    pub fn unregister_process(
-        &self,
-        pod_identifier: &PodIdentifier,
-        host_pid: u32,
-    ) -> Result<bool> {
+    /// Returns Ok(()) after removal.
+    pub fn unregister_process(&self, pod_identifier: &PodIdentifier, host_pid: u32) -> Result<()> {
         // Remove PID mapping first
         self.pid_to_pod.remove(&host_pid);
 
-        let should_remove_pod = {
+        let pod_empty = {
             let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
                 PodManagementError::PodIdentifierNotFound {
                     pod_identifier: pod_identifier.clone(),
@@ -182,24 +178,16 @@ impl PodStateStore {
             pod_ref.is_empty()
         };
 
-        if should_remove_pod {
-            self.pods.remove(pod_identifier);
+        if pod_empty {
             info!(
                 namespace = %pod_identifier.namespace,
                 pod_name = %pod_identifier.name,
                 host_pid = host_pid,
-                "Process unregistered and pod removed (no more processes)"
-            );
-        } else {
-            info!(
-                namespace = %pod_identifier.namespace,
-                pod_name = %pod_identifier.name,
-                host_pid = host_pid,
-                "Process unregistered from pod"
+                "Process unregistered (pod has no more processes)"
             );
         }
 
-        Ok(should_remove_pod)
+        Ok(())
     }
 
     /// Get pod state by identifier
@@ -484,10 +472,8 @@ mod tests {
         assert_eq!(pod_state.processes.len(), 1);
         assert!(pod_state.has_processes(1234));
         // Test process unregistration
-        let should_remove = store.unregister_process(&pod_id, 1234).unwrap();
-        assert!(should_remove); // Pod should be removed as it has no more processes
-
-        assert!(!store.contains_pod(&pod_id));
+        store.unregister_process(&pod_id, 1234).unwrap();
+        assert!(store.contains_pod(&pod_id));
         assert!(store.get_pod_by_pid(1234).is_none());
     }
 

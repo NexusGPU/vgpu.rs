@@ -12,7 +12,7 @@ use anyhow::Context;
 use anyhow::Result;
 
 use tokio::task::JoinHandle;
-use tokio::time::interval;
+use tokio::time::{interval, interval_at, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
@@ -427,7 +427,10 @@ where
         let base_path = self.base_path.clone();
         tokio::spawn(async move {
             // Run cleanup every 5 minutes
-            let mut cleanup_interval = interval(Duration::from_secs(300));
+            let mut cleanup_interval = interval_at(
+                Instant::now() + Duration::from_secs(300),
+                Duration::from_secs(300),
+            );
             cleanup_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             tracing::info!("Starting periodic shared memory cleanup task (every 5 minutes)");
