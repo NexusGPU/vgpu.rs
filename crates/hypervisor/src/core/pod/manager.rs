@@ -1,7 +1,6 @@
 //! Simplified pod manager that handles worker lifecycle with unified state management.
 
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,11 +25,6 @@ use super::device_info::create_device_configs_from_worker_info;
 use super::pod_state_store::PodStateStore;
 use super::types::{PodManagementError, Result};
 
-/// Shared memory glob pattern format: {base_path}/*/*/shm
-const SHM_GLOB_PATTERN_FORMAT: &str = "/*/*/";
-
-use utils::shared_memory::handle::SHM_PATH_SUFFIX;
-
 /// Simplified pod manager with unified state management
 pub struct PodManager<M, P, D, T> {
     /// Centralized pod state store
@@ -42,8 +36,6 @@ pub struct PodManager<M, P, D, T> {
     nvml: Arc<Nvml>,
     pod_info_cache: Arc<PodInfoCache>,
     gpu_observer: Arc<GpuObserver>,
-    /// Base path for shared memory operations
-    shm_base_path: PathBuf,
 }
 
 impl<M, P, D, T> PodManager<M, P, D, T> {
@@ -84,7 +76,6 @@ where
         pod_info_cache: Arc<PodInfoCache>,
         pod_state_store: Arc<PodStateStore>,
         gpu_observer: Arc<GpuObserver>,
-        shm_base_path: PathBuf,
     ) -> Self {
         Self {
             pod_state_store,
@@ -95,19 +86,12 @@ where
             nvml,
             pod_info_cache,
             gpu_observer,
-            shm_base_path,
         }
     }
 
     pub async fn restore_pod_from_shared_memory(&self) -> Result<()> {
-        // Generate glob pattern from base path: {base_path}/*/*/shm
-        // TODO: reuse the shared_memory_glob_pattern the coordinator
-        let shm_glob_pattern = format!(
-            "{}{}{}",
-            self.shm_base_path.to_string_lossy(),
-            SHM_GLOB_PATTERN_FORMAT,
-            SHM_PATH_SUFFIX
-        );
+        // Generate glob pattern from coordinator configuration
+        let shm_glob_pattern = self.limiter_coordinator.shm_file_glob_pattern();
         let shared_memory_files = self
             .limiter_coordinator
             .find_shared_memory_files(&shm_glob_pattern)
