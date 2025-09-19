@@ -24,7 +24,7 @@ pub struct ShowTuiWorkersArgs {
     #[arg(
         long,
         help = "Glob pattern for worker shared memory files",
-        default_value = "/dev/shm/tf_shm_*"
+        default_value = "/run/tensor-fusion/shm/*/*"
     )]
     pub glob: String,
 
@@ -37,11 +37,10 @@ pub struct ShowTuiWorkersArgs {
 
     #[arg(
         long,
-        help = "Enable mock mode for TUI development and testing",
-        default_value_t = false,
-        action = clap::ArgAction::SetTrue
+        help = "Refresh interval in seconds for TUI data updates",
+        default_value = "1"
     )]
-    pub mock: bool,
+    pub refresh_interval: u64,
 }
 
 #[derive(Parser)]

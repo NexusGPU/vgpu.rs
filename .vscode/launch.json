@@ -32,6 +32,28 @@
                 "logs/device_state.json"
             ],
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'hypervisor tui'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=hypervisor",
+                    "--package=hypervisor"
+                ],
+                "filter": {
+                    "name": "hypervisor",
+                    "kind": "bin"
+                },
+            },
+            "args": [
+                "tui",
+                "--refresh-interval",
+                "1"
+            ],
+            "cwd": "${workspaceFolder}"
         }
     ]
 }
