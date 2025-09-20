@@ -13,6 +13,9 @@ impl ShmDetailDialog {
 
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
