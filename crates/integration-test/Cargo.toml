@@ -4,17 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-trap = { workspace = true }
 api-types = { workspace = true }
 hypervisor = { workspace = true }
-serde_json = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-anyhow = { workspace = true }
 error-stack = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 utils = { workspace = true }
-ctor = { workspace = true }
 nvml-wrapper = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

@@ -19,6 +19,5 @@ eventsource = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-bytes = "1"
 similar-asserts = "1.5.0"
 test-log = { workspace = true } 

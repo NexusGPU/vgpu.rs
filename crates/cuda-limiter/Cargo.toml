@@ -15,7 +15,6 @@ utils = { workspace = true }
 ctor = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-serde_json = { workspace = true }
 cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
 reqwest = { workspace = true, features = ["json", "blocking", "rustls-tls"], default-features = false }
 error-stack = { workspace = true }
@@ -23,9 +22,7 @@ http-bidir-comm = { workspace = true }
 libloading = { workspace = true }
 nvml-wrapper = { workspace = true }
 nvml-wrapper-sys = { workspace = true }
-uuid = { workspace = true, features = ["v4", "serde", "std"] }
 once_cell = { workspace = true }
-hex = "0.4"
 dashmap = { workspace = true }
 
 [dev-dependencies]

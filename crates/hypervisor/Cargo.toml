@@ -32,7 +32,6 @@ poem = { workspace = true }
 http-bidir-comm = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 tokio-util = "0.7.16"
-tokio-stream = "0.1.15"
 tower = { workspace = true }
 hyper-util = { version = "0.1", features = ["tokio"] }
 schemars = { workspace = true }
@@ -60,5 +59,4 @@ path = "src/hyper.rs"
 [dev-dependencies]
 similar-asserts = { workspace = true }
 test-log = { workspace = true }
-criterion = { version = "0.7", features = ["html_reports"] }
 tempfile = { workspace = true }
