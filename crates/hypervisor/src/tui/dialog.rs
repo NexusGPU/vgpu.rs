@@ -15,9 +15,6 @@ impl ShmDetailDialog {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
 
         let heartbeat_age = if entry.last_heartbeat > 0 {
             current_time.saturating_sub(entry.last_heartbeat)
