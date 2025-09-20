@@ -11,15 +11,11 @@ frida-gum = { workspace = true, features = ["auto-download", "std"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 shared_memory = { workspace = true }
-cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
 spin = { version = "0.10", features = ["rwlock"], default-features = false }
 libc = "0.2.175"
 glob = { workspace = true }
 
 [dev-dependencies]
-similar-asserts = { workspace = true }
-test-log = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tempfile = { workspace = true }
 
 [build-dependencies]
