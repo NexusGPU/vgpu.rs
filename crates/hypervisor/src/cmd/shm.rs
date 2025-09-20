@@ -64,7 +64,9 @@ pub async fn run_show_shm(show_shm_args: ShowShmArgs) -> Result<()> {
     });
 
     // Print additional state information
-    let (heartbeat, pids, state_version) = state.get_detailed_state_info();
+    let heartbeat = state.get_last_heartbeat();
+    let pids = state.get_all_pids();
+    let state_version = state.get_version();
     tracing::info!(
         "Detailed state - Heartbeat: {}, PIDs count: {}, State version: {}",
         heartbeat,
