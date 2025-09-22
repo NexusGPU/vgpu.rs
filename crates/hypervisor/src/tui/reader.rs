@@ -56,7 +56,7 @@ impl ShmReader {
 
         let shm_file_str = path.join(SHM_PATH_SUFFIX).to_string_lossy().to_string();
         let pod_identifier = PodIdentifier::from_shm_file_path(&shm_file_str).ok_or(
-            anyhow::anyhow!("Failed to parse PodIdentifier from path: {}", shm_file_str),
+            anyhow::anyhow!("Failed to parse PodIdentifier from path: {shm_file_str}"),
         )?;
 
         Ok(ShmEntry {
