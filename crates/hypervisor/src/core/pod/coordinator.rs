@@ -97,13 +97,13 @@ where
     pub fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<PathBuf>> {
         self.shared_memory
             .find_shared_memory_files(glob_pattern)
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub fn extract_identifier_from_path(&self, file_path: &Path) -> Result<PodIdentifier> {
         self.shared_memory
             .extract_identifier_from_path(&self.base_path, file_path)
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     /// Run the coordinator with cancellation support
@@ -234,7 +234,7 @@ where
 
         let device_snapshot = snapshot
             .get_device_snapshot(device_idx, *last_seen_timestamp)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         *last_seen_timestamp = device_snapshot.timestamp;
 
         for pod_id in pods_for_device {
@@ -291,9 +291,7 @@ where
         let device_index = device_config.device_idx as usize;
         if !state.has_device(device_index) {
             anyhow::bail!(
-                "Device {} not found in shared memory for pod {}",
-                device_index,
-                pod_identifier
+                "Device {device_index} not found in shared memory for pod {pod_identifier}"
             );
         }
 
@@ -367,7 +365,7 @@ where
                 let pod_path = self.pod_state.pod_path(pod_identifier);
                 self.shared_memory
                     .create_shared_memory(&pod_path, configs)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
                 Vec::new()
             }
         };
@@ -390,7 +388,7 @@ where
         let pod_path = self.pod_state.pod_path(pod_identifier);
         self.shared_memory
             .add_pid(pod_path, host_pid as usize)
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .map_err(|e| anyhow::anyhow!("{e}"))
             .context("Failed to add PID to shared memory")?;
 
         info!(
@@ -412,7 +410,7 @@ where
         // Remove PID from shared memory
         self.shared_memory
             .remove_pid(pod_path, host_pid as usize)
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .map_err(|e| anyhow::anyhow!("{e}"))
             .context("Failed to remove PID from shared memory")?;
 
         info!(

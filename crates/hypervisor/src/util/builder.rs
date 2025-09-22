@@ -120,7 +120,7 @@ impl ApplicationBuilder {
                 self.daemon_args.node_name.clone(),
             )
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize pod info cache: {:?}", e))?,
+            .map_err(|e| anyhow::anyhow!("Failed to initialize pod info cache: {e:?}"))?,
         );
 
         Ok(CoreComponents {

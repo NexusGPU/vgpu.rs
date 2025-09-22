@@ -128,7 +128,7 @@ impl SharedMemoryHandle {
                     .open()
                     .context("Failed to open existing shared memory")?
             }
-            Err(e) => return Err(anyhow::anyhow!("Failed to create shared memory: {}", e)),
+            Err(e) => return Err(anyhow::anyhow!("Failed to create shared memory: {e}")),
         };
 
         unsafe {
