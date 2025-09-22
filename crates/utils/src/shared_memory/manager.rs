@@ -264,9 +264,8 @@ impl ThreadSafeSharedMemoryManager {
             .strip_prefix(base_path.as_ref())
             .with_context(|| format!("Failed to strip prefix from {}", path.as_ref().display()))?;
         let identifier = relative_path.to_string_lossy().to_string();
-        PodIdentifier::from_shm_file_path(&identifier).ok_or_else(|| {
-            anyhow::anyhow!("Failed to parse PodIdentifier from path: {}", identifier)
-        })
+        PodIdentifier::from_shm_file_path(&identifier)
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse PodIdentifier from path: {identifier}"))
     }
 
     /// Checks if a shared memory segment exists.
