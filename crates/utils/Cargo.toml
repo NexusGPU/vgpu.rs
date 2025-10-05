@@ -14,6 +14,8 @@ shared_memory = { workspace = true }
 spin = { version = "0.10", features = ["rwlock"], default-features = false }
 libc = "0.2.175"
 glob = { workspace = true }
+erl = { path = "../erl" }
+error-stack = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

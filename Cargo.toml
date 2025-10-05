@@ -10,7 +10,8 @@ members = [
   "crates/trap",
   "crates/http-bidir-comm",
   "crates/bootstrap",
-  "crates/integration-test"
+  "crates/integration-test",
+  "crates/erl"
 ]
 
 [workspace.dependencies]
@@ -42,6 +43,8 @@ k8s-openapi = { version = "0.20", features = ["v1_28"] }
 tokio = "1.47"
 error-stack = "0.4"
 futures = "0.3"
+proptest = "1.4"
+proptest-derive = "0.4"
 priority-queue = "2.5.0"
 serde_yaml = "0.9"
 influxdb-line-protocol = "2.0.0"
