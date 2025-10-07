@@ -63,8 +63,9 @@ fn write_ld_preload_config() -> Result<()> {
 
 fn write_tensor_fusion_conf() -> Result<()> {
     log_info("Writing tensor-fusion config");
-    fs::write(TENSOR_FUSION_CONF_PATH, TENSOR_FUSION_DIR)
-        .map_err(|e| format!("Failed to write tensor-fusion config to {TENSOR_FUSION_CONF_PATH}: {e}"))?;
+    fs::write(TENSOR_FUSION_CONF_PATH, TENSOR_FUSION_DIR).map_err(|e| {
+        format!("Failed to write tensor-fusion config to {TENSOR_FUSION_CONF_PATH}: {e}")
+    })?;
     log_debug(&format!(
         "Successfully wrote tensor-fusion config to {TENSOR_FUSION_CONF_PATH}",
     ));
@@ -106,7 +107,7 @@ fn copy_dynamic_lib_files() -> Result<()> {
 }
 
 fn copy_nvidia_smi_to_path() -> Result<()> {
-    if std::env::var("RUN_INSIDE_GPU_NODE").unwrap_or_default() == "true" {
+    if std::env::var("RUN_INSIDE_GPU_NODE").map_or(false, |s| s == "true") {
         log_info("RUN_INSIDE_GPU_NODE=true, skipping nvidia-smi copy");
         return Ok(());
     }
