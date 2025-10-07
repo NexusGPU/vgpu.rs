@@ -13,6 +13,7 @@ const PRELOAD_NGPU_LIBS: &str = "/tensor-fusion/libcuda_limiter.so\n";
 const NVIDIA_ML_LIB: &str = "/tensor-fusion/libnvidia-ml.so";
 const NVIDIA_ML_SYMLINK: &str = "/tensor-fusion/libnvidia-ml.so.1";
 const NVIDIA_SMI_TARGET: &str = "/tensor-fusion/nvidia-smi";
+const TENSOR_FUSION_CONF_PATH: &str = "/tensor-fusion/zz_tensor-fusion.conf";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -29,6 +30,7 @@ fn main() {
 
 fn run_setup() -> Result<()> {
     write_ld_preload_config()?;
+    write_tensor_fusion_conf()?;
     copy_dynamic_lib_files()?;
     copy_nvidia_smi_to_path()?;
     create_symlink_for_nvml()?;
@@ -55,6 +57,17 @@ fn write_ld_preload_config() -> Result<()> {
     .map_err(|e| format!("Failed to write preload config to {PRELOAD_CONFIG_PATH}: {e}",))?;
     log_debug(&format!(
         "Successfully wrote preload config to {PRELOAD_CONFIG_PATH}",
+    ));
+    Ok(())
+}
+
+fn write_tensor_fusion_conf() -> Result<()> {
+    log_info("Writing tensor-fusion config");
+    fs::write(TENSOR_FUSION_CONF_PATH, TENSOR_FUSION_DIR).map_err(|e| {
+        format!("Failed to write tensor-fusion config to {TENSOR_FUSION_CONF_PATH}: {e}")
+    })?;
+    log_debug(&format!(
+        "Successfully wrote tensor-fusion config to {TENSOR_FUSION_CONF_PATH}",
     ));
     Ok(())
 }
@@ -94,6 +107,10 @@ fn copy_dynamic_lib_files() -> Result<()> {
 }
 
 fn copy_nvidia_smi_to_path() -> Result<()> {
+    if std::env::var("RUN_INSIDE_GPU_NODE").is_ok_and(|s| s == "true") {
+        log_info("RUN_INSIDE_GPU_NODE=true, skipping nvidia-smi copy");
+        return Ok(());
+    }
     log_info("Copying nvidia-smi binary");
     fs::copy(NVIDIA_SMI_SOURCE, NVIDIA_SMI_TARGET)
         .map_err(|e| format!("Failed to copy {NVIDIA_SMI_SOURCE} to {NVIDIA_SMI_TARGET}: {e}",))?;
@@ -125,6 +142,7 @@ fn create_symlink_for_nvml() -> Result<()> {
 fn is_ngpu_mode() -> bool {
     fs::metadata(format!("{SOURCE_DIR}/libcuda_limiter.so")).is_ok()
 }
+
 // Logging utilities
 fn log_info(msg: &str) {
     println!("[INFO] {msg}");
