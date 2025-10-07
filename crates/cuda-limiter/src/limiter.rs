@@ -194,11 +194,11 @@ impl Limiter {
         }
 
         // Check device health
-        self.check_device_health(&state, raw_device_index)?;
+        self.check_device_health(state, raw_device_index)?;
 
         // Dispatch to appropriate version
         match state.version() {
-            1 => self.rate_limiter_v1(&state, raw_device_index, grids, blocks),
+            1 => self.rate_limiter_v1(state, raw_device_index, grids, blocks),
             2 => self.rate_limiter_v2(raw_device_index, grids, blocks),
             version => Err(Error::UnsupportedVersion {
                 version,
@@ -297,7 +297,7 @@ impl Limiter {
                     if wait_times % HEALTH_CHECK_INTERVAL == 0 {
                         let handle = self.get_or_init_shared_memory()?;
                         let state = handle.get_state();
-                        self.check_device_health(&state, raw_device_index)?;
+                        self.check_device_health(state, raw_device_index)?;
                     }
                 }
                 Err(e) => return Err(e),

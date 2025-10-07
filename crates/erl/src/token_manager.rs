@@ -125,8 +125,7 @@ where
 
             Err(error_stack::report!(ErlError::AdmissionDenied {
                 reason: format!(
-                    "Insufficient tokens for {:?}: need {:.3}, have {:.3} (grid: {}, block: {})",
-                    key, dynamic_cost, current_tokens, grid_count, block_count
+                    "Insufficient tokens for {key:?}: need {dynamic_cost:.3}, have {current_tokens:.3} (grid: {grid_count}, block: {block_count})"
                 )
             }))
         }

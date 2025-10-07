@@ -62,7 +62,7 @@ impl CongestionState {
                 if utilization_error <= -0.1 && avg_cost < slow_start_threshold {
                     // Utilization significantly returns to below target and cost is low, re-enter slow start
                     CongestionState::SlowStart
-                } else if utilization_error <= 0.01 && utilization_error >= -0.05 {
+                } else if (-0.05..=0.01).contains(&utilization_error) {
                     // Utilization basically returns to target vicinity, enter congestion avoidance
                     CongestionState::CongestionAvoidance
                 } else {

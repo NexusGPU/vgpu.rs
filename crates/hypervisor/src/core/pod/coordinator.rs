@@ -39,6 +39,11 @@ pub struct CoordinatorConfig {
     pub base_path: PathBuf,
 }
 
+type ErlControllers = HashMap<
+    (PodIdentifier, u32),
+    HypervisorUtilizationController<usize, ErlSharedMemoryAdapter, WorkloadAwareCubicController>,
+>;
+
 /// Generic limiter coordinator with dependency injection
 pub struct LimiterCoordinator<M, P, D, T> {
     /// Shared memory access dependency
@@ -54,18 +59,7 @@ pub struct LimiterCoordinator<M, P, D, T> {
     /// Heartbeat task handle
     heartbeat_task: RwLock<Option<JoinHandle<()>>>,
     /// ERL utilization controllers per pod per device: (PodIdentifier, device_idx) -> controller
-    erl_controllers: Arc<
-        RwLock<
-            HashMap<
-                (PodIdentifier, u32),
-                HypervisorUtilizationController<
-                    usize,
-                    ErlSharedMemoryAdapter,
-                    WorkloadAwareCubicController,
-                >,
-            >,
-        >,
-    >,
+    erl_controllers: Arc<RwLock<ErlControllers>>,
     /// Monitoring interval.
     watch_interval: Duration,
     /// Number of GPU devices.
@@ -199,18 +193,7 @@ where
         watch_interval: Duration,
         pod_state: Arc<P>,
         snapshot: Arc<D>,
-        erl_controllers: Arc<
-            RwLock<
-                HashMap<
-                    (PodIdentifier, u32),
-                    HypervisorUtilizationController<
-                        usize,
-                        ErlSharedMemoryAdapter,
-                        WorkloadAwareCubicController,
-                    >,
-                >,
-            >,
-        >,
+        erl_controllers: Arc<RwLock<ErlControllers>>,
         cancellation_token: CancellationToken,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
@@ -253,18 +236,7 @@ where
         device_idx: u32,
         pod_state: &Arc<P>,
         snapshot: &Arc<D>,
-        erl_controllers: &Arc<
-            RwLock<
-                HashMap<
-                    (PodIdentifier, u32),
-                    HypervisorUtilizationController<
-                        usize,
-                        ErlSharedMemoryAdapter,
-                        WorkloadAwareCubicController,
-                    >,
-                >,
-            >,
-        >,
+        erl_controllers: &Arc<RwLock<ErlControllers>>,
         last_seen_timestamp: &mut u64,
     ) -> Result<()> {
         let pods_for_device = pod_state.get_pods_using_device(device_idx);
@@ -342,18 +314,7 @@ where
         host_pids: &[u32],
         device_config: &DeviceConfig,
         device_snapshot: &DeviceSnapshot,
-        erl_controllers: &Arc<
-            RwLock<
-                HashMap<
-                    (PodIdentifier, u32),
-                    HypervisorUtilizationController<
-                        usize,
-                        ErlSharedMemoryAdapter,
-                        WorkloadAwareCubicController,
-                    >,
-                >,
-            >,
-        >,
+        erl_controllers: &Arc<RwLock<ErlControllers>>,
     ) -> Result<()> {
         let pod_path = pod_state.pod_path(pod_identifier);
         let handle = SharedMemoryHandle::open(&pod_path).context("Failed to open shared memory")?;
@@ -379,7 +340,7 @@ where
         // Dispatch to version-specific update
         match state.version() {
             1 => Self::update_v1_state(
-                &state,
+                state,
                 pod_identifier,
                 device_config,
                 device_index,
@@ -455,18 +416,7 @@ where
         device_index: usize,
         pod_utilization: &super::utilization::PodUtilization,
         pod_memory: u64,
-        erl_controllers: &Arc<
-            RwLock<
-                HashMap<
-                    (PodIdentifier, u32),
-                    HypervisorUtilizationController<
-                        usize,
-                        ErlSharedMemoryAdapter,
-                        WorkloadAwareCubicController,
-                    >,
-                >,
-            >,
-        >,
+        erl_controllers: &Arc<RwLock<ErlControllers>>,
     ) {
         let key = (pod_identifier.clone(), device_config.device_idx);
 

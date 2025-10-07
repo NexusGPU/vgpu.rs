@@ -31,7 +31,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
             .with_device_v2(*key, |device| device.device_info.load_erl_token_state())
             .ok_or_else(|| {
                 Report::new(ErlError::MonitoringFailed {
-                    reason: format!("Device {} not found or not using V2", key),
+                    reason: format!("Device {key} not found or not using V2"),
                 })
             })
     }
@@ -45,7 +45,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
             })
             .ok_or_else(|| {
                 Report::new(ErlError::MonitoringFailed {
-                    reason: format!("Device {} not found or not using V2", key),
+                    reason: format!("Device {key} not found or not using V2"),
                 })
             })
     }
@@ -57,7 +57,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
             .with_device_v2(*key, |device| device.device_info.load_erl_quota())
             .ok_or_else(|| {
                 Report::new(ErlError::MonitoringFailed {
-                    reason: format!("Device {} not found or not using V2", key),
+                    reason: format!("Device {key} not found or not using V2"),
                 })
             })
     }
@@ -72,7 +72,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
             })
             .ok_or_else(|| {
                 Report::new(ErlError::InvalidConfiguration {
-                    reason: format!("Device {} not found or not using V2", key),
+                    reason: format!("Device {key} not found or not using V2"),
                 })
             })
     }
@@ -84,7 +84,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
             .with_device_v2(*key, |device| device.device_info.get_erl_avg_cost())
             .ok_or_else(|| {
                 Report::new(ErlError::MonitoringFailed {
-                    reason: format!("Device {} not found or not using V2", key),
+                    reason: format!("Device {key} not found or not using V2"),
                 })
             })
     }
@@ -98,7 +98,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
             })
             .ok_or_else(|| {
                 Report::new(ErlError::CongestionControlFailed {
-                    reason: format!("Device {} not found or not using V2", key),
+                    reason: format!("Device {key} not found or not using V2"),
                 })
             })
     }

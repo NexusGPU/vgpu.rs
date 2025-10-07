@@ -76,7 +76,7 @@ where
 
         tokens.get(key).copied().ok_or_else(|| {
             error_stack::report!(ErlError::InvalidConfiguration {
-                reason: format!("Token state not found for key: {:?}", key)
+                reason: format!("Token state not found for key: {key:?}")
             })
         })
     }
@@ -101,7 +101,7 @@ where
 
         quotas.get(key).copied().ok_or_else(|| {
             error_stack::report!(ErlError::InvalidConfiguration {
-                reason: format!("Quota not found for key: {:?}", key)
+                reason: format!("Quota not found for key: {key:?}")
             })
         })
     }
@@ -126,7 +126,7 @@ where
 
         avg_costs.get(key).copied().ok_or_else(|| {
             error_stack::report!(ErlError::InvalidConfiguration {
-                reason: format!("Avg cost not found for key: {:?}", key)
+                reason: format!("Avg cost not found for key: {key:?}")
             })
         })
     }
@@ -327,7 +327,7 @@ mod tests {
         let mut token_manager = WorkloadTokenManager::with_default_calculator(storage);
         // The system should be able to run basic acquire operation
         let result = token_manager.try_acquire_workload(&device_key, 32, 32);
-            prop_assert!(result.is_ok() || matches!(result, Err(_)));
+            prop_assert!(result.is_ok() || result.is_err());
         }
 
         /// Property test: Concurrent safety
@@ -413,7 +413,7 @@ mod tests {
 
         // The result should either succeed or be admission denied
         prop_assert!(
-            result.is_ok() || matches!(result, Err(_)),
+            result.is_ok() || result.is_err(),
             "Extreme workload should either succeed or be denied, not crash: {:?}", result
         );
 
@@ -460,13 +460,13 @@ mod tests {
         for i in 0..100 {
             let utilization = if i % 2 == 0 { 0.1 } else { 0.9 };
             let result = hypervisor.update_utilization(utilization);
-            assert!(result.is_ok(), "Update {} failed: {:?}", i, result);
+            assert!(result.is_ok(), "Update {i} failed: {result:?}");
             let _ = hypervisor.sync_avg_cost_to_devices(&[device_key]);
         }
 
         // The system should still be able to work normally
         let result = token_manager.try_acquire_workload(&device_key, 32, 32);
-        assert!(result.is_ok() || matches!(result, Err(_)));
+        assert!(result.is_ok() || result.is_err());
     }
 
     /// Performance test: ensure operations are completed within a reasonable time
@@ -500,8 +500,7 @@ mod tests {
         // 1000 operations should be completed within a reasonable time (e.g. 1 second)
         assert!(
             duration.as_secs() < 5,
-            "1000 operations took too long: {:?}",
-            duration
+            "1000 operations took too long: {duration:?}"
         );
     }
 }

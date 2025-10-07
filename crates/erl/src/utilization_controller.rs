@@ -132,7 +132,7 @@ where
             .update(utilization, self.target_utilization, delta_time)
             .map_err(|e| {
                 error_stack::report!(ErlError::CongestionControlFailed {
-                    reason: format!("Congestion controller update failed: {}", e)
+                    reason: format!("Congestion controller update failed: {e}")
                 })
             })?;
 
@@ -156,10 +156,7 @@ where
     fn set_target_utilization(&mut self, target: f64) -> Result<(), ErlError> {
         if !(0.0..=1.0).contains(&target) {
             return Err(error_stack::report!(ErlError::InvalidConfiguration {
-                reason: format!(
-                    "Target utilization must be between 0.0 and 1.0, got {}",
-                    target
-                )
+                reason: format!("Target utilization must be between 0.0 and 1.0, got {target}")
             }));
         }
 

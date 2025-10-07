@@ -521,6 +521,7 @@ pub struct SharedDeviceStateV2 {
 
 /// Versioned shared device state enum for future compatibility
 #[repr(C)]
+#[allow(clippy::large_enum_variant)]
 pub enum SharedDeviceState {
     V1(SharedDeviceStateV1),
     V2(SharedDeviceStateV2),
