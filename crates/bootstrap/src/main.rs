@@ -107,7 +107,7 @@ fn copy_dynamic_lib_files() -> Result<()> {
 }
 
 fn copy_nvidia_smi_to_path() -> Result<()> {
-    if std::env::var("RUN_INSIDE_GPU_NODE").map_or(false, |s| s == "true") {
+    if std::env::var("RUN_INSIDE_GPU_NODE").is_ok_and(|s| s == "true") {
         log_info("RUN_INSIDE_GPU_NODE=true, skipping nvidia-smi copy");
         return Ok(());
     }
