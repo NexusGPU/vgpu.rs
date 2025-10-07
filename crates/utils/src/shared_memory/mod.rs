@@ -702,14 +702,18 @@ impl SharedDeviceState {
     /// Iterates over all active devices with their indices (V2 only, returns DeviceEntryV2)
     pub fn iter_active_devices(&self) -> Box<dyn Iterator<Item = (usize, &DeviceEntryV2)> + '_> {
         match self {
+            // V1 doesn't have DeviceEntryV2, return empty iterator
+            // Tests expecting V1 iteration should use SharedDeviceStateV1 directly
             Self::V1(_) => Box::new(core::iter::empty()),
             Self::V2(inner) => Box::new(inner.iter_active_devices()),
         }
     }
 
-    /// Iterates over all devices (including inactive ones) with their indices (V2 only, returns DeviceEntryV2)
+    /// Iterates over all devices (including inactive ones) with their indices (returns DeviceEntryV2)
     pub fn iter_all_devices(&self) -> Box<dyn Iterator<Item = (usize, &DeviceEntryV2)> + '_> {
         match self {
+            // V1 doesn't have DeviceEntryV2, return empty iterator
+            // Tests expecting V1 iteration should use SharedDeviceStateV1 directly
             Self::V1(_) => Box::new(core::iter::empty()),
             Self::V2(inner) => Box::new(inner.iter_all_devices()),
         }
@@ -1097,33 +1101,48 @@ mod tests {
 
     #[test]
     fn shared_device_info_atomic_operations() {
-        let device_info = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
+        // Test V1 device info (has available_cores)
+        let device_info_v1 =
+            SharedDeviceInfoV1::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
 
-        // Test available cores operations
-        device_info.set_available_cores(512);
-        assert_eq!(device_info.get_available_cores(), 512);
+        // Test available cores operations (V1 only)
+        device_info_v1.set_available_cores(512);
+        assert_eq!(device_info_v1.get_available_cores(), 512);
 
-        let old_value = device_info.fetch_add_available_cores(100);
+        let old_value = device_info_v1.fetch_add_available_cores(100);
         assert_eq!(old_value, 512);
-        assert_eq!(device_info.get_available_cores(), 612);
+        assert_eq!(device_info_v1.get_available_cores(), 612);
 
-        let old_value = device_info.fetch_sub_available_cores(12);
+        let old_value = device_info_v1.fetch_sub_available_cores(12);
         assert_eq!(old_value, 612);
-        assert_eq!(device_info.get_available_cores(), 600);
+        assert_eq!(device_info_v1.get_available_cores(), 600);
 
         // Test negative values
-        device_info.set_available_cores(-50);
-        assert_eq!(device_info.get_available_cores(), -50);
+        device_info_v1.set_available_cores(-50);
+        assert_eq!(device_info_v1.get_available_cores(), -50);
 
         // Test other fields
-        device_info.set_up_limit(90);
-        assert_eq!(device_info.get_up_limit(), 90);
+        device_info_v1.set_up_limit(90);
+        assert_eq!(device_info_v1.get_up_limit(), 90);
 
-        device_info.set_mem_limit(2 * 1024 * 1024 * 1024);
-        assert_eq!(device_info.get_mem_limit(), 2 * 1024 * 1024 * 1024);
+        device_info_v1.set_mem_limit(2 * 1024 * 1024 * 1024);
+        assert_eq!(device_info_v1.get_mem_limit(), 2 * 1024 * 1024 * 1024);
 
-        device_info.set_pod_memory_used(512 * 1024 * 1024);
-        assert_eq!(device_info.get_pod_memory_used(), 512 * 1024 * 1024);
+        // Test V2 device info (has ERL fields)
+        let device_info_v2 = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
+
+        // V2 available_cores always returns 0
+        assert_eq!(device_info_v2.get_available_cores(), 0);
+
+        // Test ERL fields
+        device_info_v2.set_erl_avg_cost(2.5);
+        assert_eq!(device_info_v2.get_erl_avg_cost(), 2.5);
+
+        device_info_v2.set_erl_token_capacity(100.0);
+        assert_eq!(device_info_v2.get_erl_token_capacity(), 100.0);
+
+        device_info_v2.set_pod_memory_used(512 * 1024 * 1024);
+        assert_eq!(device_info_v2.get_pod_memory_used(), 512 * 1024 * 1024);
     }
 
     #[test]
@@ -1353,7 +1372,8 @@ mod tests {
             },
         ];
 
-        let state = SharedDeviceState::new(&configs);
+        // Use V2 since iter_active_devices only works with V2
+        let state = SharedDeviceState::new_v2(&configs);
 
         // Test iter_active_devices
         let active_devices: Vec<_> = state.iter_active_devices().collect();
