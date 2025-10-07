@@ -42,7 +42,7 @@ k8s-openapi = { version = "0.20", features = ["v1_28"] }
 tokio = "1.47"
 error-stack = "0.4"
 futures = "0.3"
-priority-queue = "2.5.0"
+priority-queue = "2.7.0"
 serde_yaml = "0.9"
 influxdb-line-protocol = "2.0.0"
 poem = { version = "3.1", features = ["sse", "test"] }
