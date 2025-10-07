@@ -12,7 +12,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 shared_memory = { workspace = true }
 spin = { version = "0.10", features = ["rwlock"], default-features = false }
-libc = "0.2.175"
+libc = "0.2.176"
 glob = { workspace = true }
 
 [dev-dependencies]
