@@ -9,12 +9,12 @@ pub unsafe fn culib() -> &'static Lib {
     LIB.get_or_init(|| {
         let lib_path = std::env::var("TF_CUDA_LIB_PATH").unwrap_or_else(|_| {
             let default_path = "/lib/x86_64-linux-gnu/libcuda.so";
-            
+
             // Check if default path exists
             if std::path::Path::new(default_path).exists() {
                 return default_path.to_string();
             }
-            
+
             // Try to find libcuda using ldconfig
             tracing::info!("Default CUDA library path not found, searching with ldconfig...");
             match find_libcuda_with_ldconfig() {
@@ -23,7 +23,9 @@ pub unsafe fn culib() -> &'static Lib {
                     path
                 }
                 None => {
-                    tracing::warn!("Could not find libcuda.so via ldconfig, falling back to default path");
+                    tracing::warn!(
+                        "Could not find libcuda.so via ldconfig, falling back to default path"
+                    );
                     default_path.to_string()
                 }
             }
@@ -48,7 +50,7 @@ fn find_libcuda_with_ldconfig() -> Option<String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     // Parse ldconfig output to find libcuda.so
     // Format: "	libcuda.so.1 (libc6,x86-64) => /usr/lib/x86_64-linux-gnu/libcuda.so.1"
     for line in stdout.lines() {
