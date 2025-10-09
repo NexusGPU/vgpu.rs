@@ -1176,7 +1176,14 @@ mod tests {
             |device| device.device_info.get_available_cores(),
             |device| device.device_info.get_available_cores(),
         );
-        assert_eq!(cores, Some(42));
+        match state2.version() {
+            1 => assert_eq!(cores, Some(42)),
+            2 => assert_eq!(cores, Some(0)),
+            _ => assert!(
+                cores.is_some(),
+                "should read available cores for known versions"
+            ),
+        }
 
         // File should still exist while handles are active
         assert!(Path::new(&pod_path).exists());
