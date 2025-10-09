@@ -83,68 +83,6 @@ impl SharedMemoryHandle {
         }
     }
 
-    /// Create a mock V2 shared memory handle for testing (with ERL support)
-    pub fn mock_v2(shm_path: impl AsRef<Path>, gpu_idx_uuids: Vec<(usize, String)>) -> Self {
-        // Create mock configs for testing
-        let mock_configs: Vec<_> = gpu_idx_uuids
-            .iter()
-            .map(|(idx, uuid)| {
-                DeviceConfig {
-                    device_idx: *idx as u32,
-                    device_uuid: uuid.clone(),
-                    up_limit: 80,
-                    mem_limit: 8 * 1024 * 1024 * 1024, // 8GB
-                    sm_count: 82,
-                    max_thread_per_sm: 1536,
-                    total_cuda_cores: 2048,
-                }
-            })
-            .collect();
-
-        // Create actual shared memory to get a valid pointer
-        let shm_path_v2 = format!("{}_v2", shm_path.as_ref().display());
-        let shmem = match ShmemConf::new()
-            .size(std::mem::size_of::<SharedDeviceState>())
-            .use_tmpfs_with_dir(&shm_path_v2)
-            .os_id(SHM_PATH_SUFFIX)
-            .open()
-        {
-            Ok(shmem) => shmem,
-            Err(e) => {
-                tracing::warn!(
-                    "failed to open shared memory shm_name: {:?}, err: {:?}, creating new one",
-                    shm_path_v2,
-                    e
-                );
-
-                std::fs::create_dir_all(&shm_path_v2)
-                    .expect("Failed to create mock shared memory directory");
-
-                let shmem = ShmemConf::new()
-                    .size(std::mem::size_of::<SharedDeviceState>())
-                    .use_tmpfs_with_dir(&shm_path_v2)
-                    .os_id(SHM_PATH_SUFFIX)
-                    .create()
-                    .expect("Failed to create mock shared memory");
-
-                let ptr = shmem.as_ptr() as *mut SharedDeviceState;
-
-                // Initialize with V2 mock data
-                unsafe {
-                    ptr.write(SharedDeviceState::new_v2(&mock_configs));
-                }
-                shmem
-            }
-        };
-
-        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
-
-        Self {
-            shmem: RefCell::new(shmem),
-            ptr,
-        }
-    }
-
     /// Opens an existing shared memory segment.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let shmem = ShmemConf::new()

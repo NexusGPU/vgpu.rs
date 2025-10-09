@@ -81,7 +81,7 @@ impl PodIdentifier {
             .join(format!("{}/{}", self.namespace, self.name))
     }
 
-    /// Parse a PodIdentifier from a full shared memory path  
+    /// Parse a PodIdentifier from a full shared memory path
     /// Path format: {base_path}/{namespace}/{name}/shm
     /// This method extracts namespace/name from any base path
     pub fn from_shm_file_path(path: &str) -> Option<Self> {
@@ -140,8 +140,6 @@ pub struct SharedDeviceInfoV1 {
 #[repr(C)]
 #[derive(Debug)]
 pub struct SharedDeviceInfoV2 {
-    /// Currently available CUDA cores (unused in V2, kept for memory layout compatibility).
-    pub available_cuda_cores: AtomicI32,
     /// Utilization limit percentage (0-100).
     pub up_limit: AtomicU32,
     /// Memory limit in bytes.
@@ -230,7 +228,6 @@ impl SharedDeviceInfoV1 {
 impl SharedDeviceInfoV2 {
     pub fn new(total_cuda_cores: u32, up_limit: u32, mem_limit: u64) -> Self {
         Self {
-            available_cuda_cores: AtomicI32::new(0), // V2 不使用此字段
             up_limit: AtomicU32::new(up_limit),
             mem_limit: AtomicU64::new(mem_limit),
             total_cuda_cores: AtomicU32::new(total_cuda_cores),
@@ -530,11 +527,6 @@ pub enum SharedDeviceState {
 impl SharedDeviceState {
     /// Creates a new SharedDeviceState V1 instance (legacy).
     pub fn new(configs: &[DeviceConfig]) -> Self {
-        Self::V1(SharedDeviceStateV1::new(configs))
-    }
-
-    /// Creates a new SharedDeviceState V2 instance with ERL support.
-    pub fn new_v2(configs: &[DeviceConfig]) -> Self {
         Self::V2(SharedDeviceStateV2::new(configs))
     }
 
@@ -888,8 +880,6 @@ impl SharedDeviceStateV2 {
             state.devices[device_idx].set_uuid(&config.device_uuid);
             let device_info = &state.devices[device_idx].device_info;
 
-            // Set basic device info (V2 不使用 available_cuda_cores，但需要初始化)
-            device_info.available_cuda_cores.store(0, Ordering::Relaxed);
             device_info
                 .total_cuda_cores
                 .store(config.total_cuda_cores, Ordering::Relaxed);
@@ -1372,8 +1362,7 @@ mod tests {
             },
         ];
 
-        // Use V2 since iter_active_devices only works with V2
-        let state = SharedDeviceState::new_v2(&configs);
+        let state = SharedDeviceState::new(&configs);
 
         // Test iter_active_devices
         let active_devices: Vec<_> = state.iter_active_devices().collect();

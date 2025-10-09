@@ -276,7 +276,6 @@ impl Limiter {
         })
     }
 
-    /// Common wait-and-retry logic for both V1 and V2
     fn wait_and_retry<F>(&self, raw_device_index: usize, mut check: F) -> Result<(), Error>
     where
         F: FnMut() -> Result<bool, Error>,

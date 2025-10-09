@@ -112,10 +112,8 @@ mod tests {
     #[test]
     fn test_erl_adapter_basic_operations() {
         // Create test shared memory with V2 (ERL support)
-        let handle = SharedMemoryHandle::mock_v2(
-            "/tmp/test_erl_basic",
-            vec![(0, "test-device".to_string())],
-        );
+        let handle =
+            SharedMemoryHandle::mock("/tmp/test_erl_basic", vec![(0, "test-device".to_string())]);
         let adapter = ErlSharedMemoryAdapter::new(Arc::new(handle));
 
         // Test quota setting and reading
@@ -144,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_erl_adapter_device_not_found() {
-        let handle = SharedMemoryHandle::mock_v2(
+        let handle = SharedMemoryHandle::mock(
             "/tmp/test_erl_notfound",
             vec![(0, "test-device".to_string())],
         );
