@@ -1046,8 +1046,8 @@ mod tests {
         let configs = create_test_configs();
         let state = SharedDeviceState::new(&configs);
 
-        // Test initial state
-        assert_eq!(state.version(), 1);
+        // Test initial state (V2 by default)
+        assert_eq!(state.version(), 2);
         assert_eq!(state.device_count(), 1);
 
         // Test that heartbeat is initialized to current time (should be non-zero and recent)
@@ -1146,7 +1146,7 @@ mod tests {
             .expect("should create shared memory successfully");
 
         let state1 = handle1.get_state();
-        assert_eq!(state1.version(), 1);
+        assert_eq!(state1.version(), 2);
         assert_eq!(state1.device_count(), 1);
 
         // Verify shared memory file exists after creation
@@ -1156,7 +1156,7 @@ mod tests {
             .expect("should open existing shared memory successfully");
 
         let state2 = handle2.get_state();
-        assert_eq!(state2.version(), 1);
+        assert_eq!(state2.version(), 2);
         assert_eq!(state2.device_count(), 1);
 
         // Verify they access the same memory
@@ -1266,7 +1266,7 @@ mod tests {
         // Test accessing through pointer
         unsafe {
             let state = &*ptr;
-            assert_eq!(state.version(), 1);
+            assert_eq!(state.version(), 2);
             assert_eq!(state.device_count(), 1);
         }
 
