@@ -450,10 +450,27 @@ where
 
             let erl_adapter = ErlSharedMemoryAdapter::new(Arc::new(handle));
             let target_utilization = device_config.up_limit as f64 / 100.0;
+
+            // Warn if target utilization is suspiciously low
+            if target_utilization < 0.1 {
+                tracing::warn!(
+                    pod_identifier = %pod_identifier,
+                    device_index = device_index,
+                    up_limit = device_config.up_limit,
+                    target_utilization = target_utilization,
+                    "Target utilization is very low (<10%). This will cause aggressive throttling. Verify up_limit is correct (should be percentage, e.g., 80 for 80%)"
+                );
+            }
+
             let mut ctrl = HypervisorUtilizationController::new(erl_adapter, target_utilization);
 
             // Initialize device quota
-            if let Err(e) = ctrl.initialize_device_quota(&device_index, 100.0, 1.0) {
+            // refill_rate should be high enough to support expected workload throughput
+            // With avg_cost range [0.1, 10.0] and typical workload_factor [0.1, 1.0],
+            // dynamic_cost can be [0.01, 10.0]. A refill rate of 10.0 tokens/sec
+            // allows ~1-100 workloads/sec depending on their size
+            let refill_rate = 10.0;
+            if let Err(e) = ctrl.initialize_device_quota(&device_index, 100.0, refill_rate) {
                 tracing::error!(
                     pod_identifier = %pod_identifier,
                     device_index = device_index,
@@ -465,6 +482,7 @@ where
                     pod_identifier = %pod_identifier,
                     device_index = device_index,
                     target_utilization = target_utilization,
+                    refill_rate = refill_rate,
                     "Initialized ERL controller for pod"
                 );
             }
@@ -495,6 +513,24 @@ where
                 memory = pod_memory,
                 target_utilization = controller.target_utilization(),
                 "V2: Updated ERL controller"
+            );
+        }
+
+        // Sync the updated avg_cost to shared memory so limiter can read it
+        if let Err(e) = controller.sync_avg_cost_to_devices(&[device_index]) {
+            tracing::error!(
+                pod_identifier = %pod_identifier,
+                device_index = device_index,
+                error = %e,
+                "Failed to sync avg_cost to device"
+            );
+        } else {
+            let avg_cost = controller.get_cubic_stats();
+            tracing::debug!(
+                pod_identifier = %pod_identifier,
+                device_index = device_index,
+                cost_stats = %avg_cost,
+                "Synced avg_cost to device shared memory"
             );
         }
     }
