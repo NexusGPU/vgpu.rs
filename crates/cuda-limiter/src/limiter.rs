@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -256,6 +257,12 @@ impl Limiter {
         grids: u32,
         blocks: u32,
     ) -> Result<(), Error> {
+        tracing::debug!(
+            device_idx = raw_device_index,
+            grids = grids,
+            blocks = blocks,
+            "V2 ERL admission control"
+        );
         self.wait_and_retry(raw_device_index, || {
             match self.try_erl_admission_control(raw_device_index, grids, blocks) {
                 Ok(true) => {
@@ -336,7 +343,7 @@ impl Limiter {
     ) -> Result<bool, Error> {
         // Create a temporary ERL adapter for this operation
         let handle = self.get_or_init_shared_memory()?;
-        let erl_adapter = ErlSharedMemoryAdapter::new(std::sync::Arc::new(unsafe {
+        let erl_adapter = ErlSharedMemoryAdapter::new(Arc::new(unsafe {
             // SAFETY: We create a fake Arc that doesn't actually own the data
             // This is only safe because we ensure the handle stays alive for the duration of this call
             std::ptr::read(handle as *const SharedMemoryHandle)
