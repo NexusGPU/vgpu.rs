@@ -46,7 +46,7 @@ impl ShmReader {
                 devices.push(ShmDeviceInfo {
                     device_index: i,
                     uuid: device.get_uuid_owned(),
-                    available_cores: device.device_info.get_available_cores(),
+                    available_cores: 0,
                     total_cores: device.device_info.get_total_cores(),
                     mem_limit: device.device_info.get_mem_limit(),
                     pod_memory_used: device.device_info.get_pod_memory_used(),

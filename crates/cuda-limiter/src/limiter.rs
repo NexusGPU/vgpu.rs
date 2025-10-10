@@ -223,7 +223,7 @@ impl Limiter {
                 .with_device(
                     raw_device_index,
                     |device| device.device_info.get_available_cores(),
-                    |device| device.device_info.get_available_cores(),
+                    |_| unreachable!(),
                 )
                 .ok_or_else(|| Error::DeviceNotConfigured(raw_device_index))?;
 
@@ -374,7 +374,7 @@ impl Limiter {
     ) -> Result<(u64, u64), Error> {
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
-
+        tracing::debug!(version = state.version(), "Getting pod memory usage");
         if !state.is_healthy(Duration::from_secs(2)) {
             let last_heartbeat = state.get_last_heartbeat();
             let now = std::time::SystemTime::now()
@@ -388,6 +388,10 @@ impl Limiter {
             tracing::warn!(now = now, "{err}");
         }
 
+        tracing::debug!(
+            "Getting pod memory usage. health: {}",
+            state.is_healthy(Duration::from_secs(2))
+        );
         if let Some((used, limit)) = state.with_device(
             raw_device_index,
             |device| {
@@ -527,12 +531,6 @@ mod tests {
             let state = Arc::new(SharedDeviceInfo::new(total_cores, up_limit, mem_limit));
             Self { state }
         }
-
-        /// Set available CUDA cores for testing
-        pub fn set_available_cores(&self, cores: i32) {
-            self.state.set_available_cores(cores);
-        }
-
         /// Set memory limit for testing
         #[allow(dead_code)]
         pub fn set_mem_limit(&self, limit: u64) {
@@ -587,33 +585,5 @@ mod tests {
         let free = total.saturating_sub(used);
 
         assert_eq!(free, 0, "Free memory should saturate to 0");
-    }
-
-    #[test]
-    fn test_shared_memory_trait_consistency() {
-        let mock = MockSharedMemory::new(2048, 90, 2048 * 1024 * 1024);
-        mock.set_available_cores(1500);
-        mock.set_pod_memory_used(1024 * 1024 * 1024);
-
-        let state = mock.get_state();
-
-        assert_eq!(state.get_total_cores(), 2048, "Total cores should match");
-        assert_eq!(state.get_up_limit(), 90, "Up limit should match");
-        assert_eq!(
-            state.get_mem_limit(),
-            2048 * 1024 * 1024,
-            "Memory limit should match"
-        );
-        // V2 always returns 0 for available_cores (uses ERL token mechanism instead)
-        assert_eq!(
-            state.get_available_cores(),
-            0,
-            "V2 available cores should always be 0"
-        );
-        assert_eq!(
-            state.get_pod_memory_used(),
-            1024 * 1024 * 1024,
-            "Pod memory used should match"
-        );
     }
 }

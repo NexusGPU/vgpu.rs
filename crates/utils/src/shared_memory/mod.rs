@@ -240,27 +240,6 @@ impl SharedDeviceInfoV2 {
         }
     }
 
-    // V2 保留 available_cuda_cores 以保持内存布局，但不提供操作方法（使用 ERL token 机制）
-    // 为了兼容性，提供一个总是返回 0 的方法
-    pub fn get_available_cores(&self) -> i32 {
-        0 // V2 不使用 available_cores，总是返回 0
-    }
-
-    // 为了测试兼容性，提供空实现
-    pub fn set_available_cores(&self, _cores: i32) {
-        // V2 不使用 available_cores，忽略
-    }
-
-    pub fn fetch_add_available_cores(&self, _cores: i32) -> i32 {
-        // V2 不使用 available_cores，返回 0
-        0
-    }
-
-    pub fn fetch_sub_available_cores(&self, _cores: i32) -> i32 {
-        // V2 不使用 available_cores，返回 0
-        0
-    }
-
     pub fn get_up_limit(&self) -> u32 {
         self.up_limit.load(Ordering::Acquire)
     }
@@ -292,8 +271,6 @@ impl SharedDeviceInfoV2 {
     pub fn set_pod_memory_used(&self, memory: u64) {
         self.pod_memory_used.store(memory, Ordering::Release);
     }
-
-    // ERL specific methods
 
     pub fn get_erl_avg_cost(&self) -> f64 {
         f64::from_bits(self.erl_avg_cost.load(Ordering::Acquire))
@@ -1120,10 +1097,6 @@ mod tests {
 
         // Test V2 device info (has ERL fields)
         let device_info_v2 = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
-
-        // V2 available_cores always returns 0
-        assert_eq!(device_info_v2.get_available_cores(), 0);
-
         // Test ERL fields
         device_info_v2.set_erl_avg_cost(2.5);
         assert_eq!(device_info_v2.get_erl_avg_cost(), 2.5);
@@ -1164,26 +1137,19 @@ mod tests {
         state1.with_device(
             device_idx,
             |device| {
-                device.device_info.set_available_cores(42);
+                device.device_info.set_mem_limit(42);
             },
             |device| {
-                device.device_info.set_available_cores(42);
+                device.device_info.set_mem_limit(42);
             },
         );
 
         let cores = state2.with_device(
             device_idx,
-            |device| device.device_info.get_available_cores(),
-            |device| device.device_info.get_available_cores(),
+            |device| device.device_info.get_mem_limit(),
+            |device| device.device_info.get_mem_limit(),
         );
-        match state2.version() {
-            1 => assert_eq!(cores, Some(42)),
-            2 => assert_eq!(cores, Some(0)),
-            _ => assert!(
-                cores.is_some(),
-                "should read available cores for known versions"
-            ),
-        }
+        assert_eq!(cores, Some(42));
 
         // File should still exist while handles are active
         assert!(Path::new(&pod_path).exists());
@@ -1221,10 +1187,10 @@ mod tests {
                     state.with_device(
                         device_idx,
                         |device| {
-                            device.device_info.set_available_cores(value);
+                            device.device_info.set_mem_limit(value);
                         },
                         |device| {
-                            device.device_info.set_available_cores(value);
+                            device.device_info.set_mem_limit(value);
                         },
                     );
 
@@ -1233,8 +1199,8 @@ mod tests {
                     let read_value = state
                         .with_device(
                             device_idx,
-                            |device| device.device_info.get_available_cores(),
-                            |device| device.device_info.get_available_cores(),
+                            |device| device.device_info.get_mem_limit(),
+                            |device| device.device_info.get_mem_limit(),
                         )
                         .unwrap();
 
