@@ -257,12 +257,6 @@ impl Limiter {
         grids: u32,
         blocks: u32,
     ) -> Result<(), Error> {
-        tracing::debug!(
-            device_idx = raw_device_index,
-            grids = grids,
-            blocks = blocks,
-            "V2 ERL admission control"
-        );
         self.wait_and_retry(raw_device_index, || {
             match self.try_erl_admission_control(raw_device_index, grids, blocks) {
                 Ok(true) => {
