@@ -41,7 +41,11 @@ pub struct CoordinatorConfig {
 
 type ErlControllers = HashMap<
     (PodIdentifier, u32),
-    HypervisorUtilizationController<usize, ErlSharedMemoryAdapter, WorkloadAwareCubicController>,
+    HypervisorUtilizationController<
+        usize,
+        ErlSharedMemoryAdapter<Arc<SharedMemoryHandle>>,
+        WorkloadAwareCubicController,
+    >,
 >;
 
 /// Generic limiter coordinator with dependency injection
@@ -307,7 +311,7 @@ where
         .await
     }
 
-    /// Static version for spawn tasks  
+    /// Static version for spawn tasks
     async fn process_pod_utilization_update_static(
         pod_state: &Arc<P>,
         pod_identifier: &PodIdentifier,

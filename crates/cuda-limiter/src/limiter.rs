@@ -3,7 +3,6 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -337,11 +336,7 @@ impl Limiter {
     ) -> Result<bool, Error> {
         // Create a temporary ERL adapter for this operation
         let handle = self.get_or_init_shared_memory()?;
-        let erl_adapter = ErlSharedMemoryAdapter::new(Arc::new(unsafe {
-            // SAFETY: We create a fake Arc that doesn't actually own the data
-            // This is only safe because we ensure the handle stays alive for the duration of this call
-            std::ptr::read(handle as *const SharedMemoryHandle)
-        }));
+        let erl_adapter = ErlSharedMemoryAdapter::new(handle);
 
         let mut token_manager = WorkloadTokenManager::with_default_calculator(erl_adapter);
 

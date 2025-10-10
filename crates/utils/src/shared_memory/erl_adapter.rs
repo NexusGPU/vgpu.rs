@@ -2,6 +2,7 @@
 //!
 //! Implement ERL SharedStorage trait for SharedMemoryHandle
 
+use std::ops::Deref;
 use std::sync::Arc;
 
 use erl::{ErlError, SharedStorage};
@@ -9,24 +10,42 @@ use error_stack::{Report, Result};
 
 use super::handle::SharedMemoryHandle;
 
+/// Trait to abstract access to SharedMemoryHandle
+pub trait SharedMemoryAccess: Send + Sync {
+    fn get_handle(&self) -> &SharedMemoryHandle;
+}
+
+impl SharedMemoryAccess for Arc<SharedMemoryHandle> {
+    fn get_handle(&self) -> &SharedMemoryHandle {
+        self.deref()
+    }
+}
+
+impl SharedMemoryAccess for &SharedMemoryHandle {
+    fn get_handle(&self) -> &SharedMemoryHandle {
+        self
+    }
+}
+
 /// ERL adapter for SharedMemoryHandle
 ///
 /// Bridge shared memory access to ERL's SharedStorage trait
-pub struct ErlSharedMemoryAdapter {
-    handle: Arc<SharedMemoryHandle>,
+pub struct ErlSharedMemoryAdapter<H: SharedMemoryAccess> {
+    handle: H,
 }
 
-impl ErlSharedMemoryAdapter {
+impl<H: SharedMemoryAccess> ErlSharedMemoryAdapter<H> {
     /// Create a new ERL adapter
-    pub fn new(handle: Arc<SharedMemoryHandle>) -> Self {
+    pub fn new(handle: H) -> Self {
         Self { handle }
     }
 }
 
-impl SharedStorage<usize> for ErlSharedMemoryAdapter {
+impl<H: SharedMemoryAccess> SharedStorage<usize> for ErlSharedMemoryAdapter<H> {
     /// Load token bucket state (limiter and hypervisor need)
     fn load_token_state(&self, key: &usize) -> Result<(f64, f64), ErlError> {
         self.handle
+            .get_handle()
             .get_state()
             .with_device_v2(*key, |device| device.device_info.load_erl_token_state())
             .ok_or_else(|| {
@@ -39,6 +58,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
     /// Save token bucket state (mainly used by limiter)
     fn save_token_state(&self, key: &usize, tokens: f64, timestamp: f64) -> Result<(), ErlError> {
         self.handle
+            .get_handle()
             .get_state()
             .with_device_v2(*key, |device| {
                 device.device_info.store_erl_token_state(tokens, timestamp);
@@ -53,6 +73,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
     /// Load quota information (limiter read, hypervisor set)
     fn load_quota(&self, key: &usize) -> Result<(f64, f64), ErlError> {
         self.handle
+            .get_handle()
             .get_state()
             .with_device_v2(*key, |device| device.device_info.load_erl_quota())
             .ok_or_else(|| {
@@ -65,6 +86,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
     /// Set quota information (only used by hypervisor)
     fn set_quota(&self, key: &usize, capacity: f64, refill_rate: f64) -> Result<(), ErlError> {
         self.handle
+            .get_handle()
             .get_state()
             .with_device_v2(*key, |device| {
                 device.device_info.set_erl_token_capacity(capacity);
@@ -80,6 +102,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
     /// Load current average cost (limiter read, hypervisor update)
     fn load_avg_cost(&self, key: &usize) -> Result<f64, ErlError> {
         self.handle
+            .get_handle()
             .get_state()
             .with_device_v2(*key, |device| device.device_info.get_erl_avg_cost())
             .ok_or_else(|| {
@@ -92,6 +115,7 @@ impl SharedStorage<usize> for ErlSharedMemoryAdapter {
     /// Save current average cost (only used by hypervisor)
     fn save_avg_cost(&self, key: &usize, avg_cost: f64) -> Result<(), ErlError> {
         self.handle
+            .get_handle()
             .get_state()
             .with_device_v2(*key, |device| {
                 device.device_info.set_erl_avg_cost(avg_cost);
@@ -114,7 +138,7 @@ mod tests {
         // Create test shared memory with V2 (ERL support)
         let handle =
             SharedMemoryHandle::mock("/tmp/test_erl_basic", vec![(0, "test-device".to_string())]);
-        let adapter = ErlSharedMemoryAdapter::new(Arc::new(handle));
+        let adapter = ErlSharedMemoryAdapter::new(&handle);
 
         // Test quota setting and reading
         adapter.set_quota(&0, 100.0, 1.0).expect("should set quota");
@@ -146,7 +170,7 @@ mod tests {
             "/tmp/test_erl_notfound",
             vec![(0, "test-device".to_string())],
         );
-        let adapter = ErlSharedMemoryAdapter::new(Arc::new(handle));
+        let adapter = ErlSharedMemoryAdapter::new(&handle);
 
         // Test access to non-existent device
         let result = adapter.load_quota(&999);
