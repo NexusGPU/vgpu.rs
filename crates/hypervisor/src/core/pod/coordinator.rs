@@ -465,13 +465,25 @@ where
             let mut ctrl = HypervisorUtilizationController::new(erl_adapter, target_utilization);
 
             // Initialize device quota
-            // refill_rate should be high enough to support expected workload throughput
-            // With large workloads (163K+ threads), workload_factor can reach max (8.0)
-            // Combined with base_avg_cost (0.1-10.0), dynamic_cost ranges [0.8, 80.0]
-            // A refill rate of 100.0 tokens/sec allows ~1-125 large workloads/sec
-            // This supports high-frequency kernel launches common in ML workloads
-            let capacity = 100.0;
-            let refill_rate = 100.0;
+            // Why refill_rate should be fixed:
+            // - It represents the physical GPU's token generation rate
+            // - CUBIC algorithm adjusts avg_cost to achieve target utilization
+            // - Scaling refill_rate would interfere with CUBIC convergence
+            //
+            // Token bucket model:
+            //   actual_throughput = refill_rate / (avg_cost × workload_factor)
+            //                       ↑ fixed       ↑ CUBIC adjusts this
+            //
+            // Example with refill_rate=100:
+            // - Pod A (target=80%): CUBIC adjusts avg_cost to achieve 80% utilization
+            // - Pod B (target=30%): CUBIC adjusts avg_cost to achieve 30% utilization
+            const BASE_CAPACITY: f64 = 100.0;
+            const REFILL_RATE: f64 = 100.0;
+            const MIN_CAPACITY: f64 = 10.0;
+
+            // Capacity scales with target_utilization to provide proportional burst capability
+            let capacity = (BASE_CAPACITY * target_utilization).max(MIN_CAPACITY);
+            let refill_rate = REFILL_RATE;  // Same for all Pods
             if let Err(e) = ctrl.initialize_device_quota(&device_index, capacity, refill_rate) {
                 tracing::error!(
                     pod_identifier = %pod_identifier,
@@ -483,10 +495,12 @@ where
                 debug!(
                     pod_identifier = %pod_identifier,
                     device_index = device_index,
+                    up_limit = device_config.up_limit,
                     target_utilization = target_utilization,
                     capacity = capacity,
                     refill_rate = refill_rate,
-                    "Initialized ERL controller for pod"
+                    base_capacity = BASE_CAPACITY,
+                    "Initialized ERL controller (capacity scaled by target, refill_rate fixed)"
                 );
             }
 
