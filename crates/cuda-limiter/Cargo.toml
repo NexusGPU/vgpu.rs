@@ -24,6 +24,7 @@ nvml-wrapper = { workspace = true }
 nvml-wrapper-sys = { workspace = true }
 once_cell = { workspace = true }
 dashmap = { workspace = true }
+erl = { path = "../erl" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
