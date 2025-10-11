@@ -466,11 +466,13 @@ where
 
             // Initialize device quota
             // refill_rate should be high enough to support expected workload throughput
-            // With avg_cost range [0.1, 10.0] and typical workload_factor [0.1, 1.0],
-            // dynamic_cost can be [0.01, 10.0]. A refill rate of 10.0 tokens/sec
-            // allows ~1-100 workloads/sec depending on their size
-            let refill_rate = 10.0;
-            if let Err(e) = ctrl.initialize_device_quota(&device_index, 100.0, refill_rate) {
+            // With large workloads (163K+ threads), workload_factor can reach max (8.0)
+            // Combined with base_avg_cost (0.1-10.0), dynamic_cost ranges [0.8, 80.0]
+            // A refill rate of 100.0 tokens/sec allows ~1-125 large workloads/sec
+            // This supports high-frequency kernel launches common in ML workloads
+            let capacity = 100.0;
+            let refill_rate = 100.0;
+            if let Err(e) = ctrl.initialize_device_quota(&device_index, capacity, refill_rate) {
                 tracing::error!(
                     pod_identifier = %pod_identifier,
                     device_index = device_index,
@@ -482,6 +484,7 @@ where
                     pod_identifier = %pod_identifier,
                     device_index = device_index,
                     target_utilization = target_utilization,
+                    capacity = capacity,
                     refill_rate = refill_rate,
                     "Initialized ERL controller for pod"
                 );

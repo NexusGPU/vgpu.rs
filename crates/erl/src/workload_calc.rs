@@ -34,17 +34,22 @@ pub struct PowerWorkloadCalculator {
     pub power: f64,
     /// Minimum factor
     pub min_factor: f64,
-    /// Maximum factor  
+    /// Maximum factor
     pub max_factor: f64,
 }
 
 impl Default for PowerWorkloadCalculator {
     fn default() -> Self {
         Self {
-            reference_threads: 1024,
+            // Modern ML kernels often launch 100K+ threads
+            // Setting reference to 16K provides better scaling for large workloads
+            reference_threads: 16384,
             power: 0.6,
             min_factor: 0.1,
-            max_factor: 8.0,
+            // Reduced max_factor to limit cost variability
+            // With base_avg_cost in [0.1, 10.0] and max_factor=4.0,
+            // dynamic_cost ranges [0.04, 40.0] which is sufficient for differentiation
+            max_factor: 4.0,
         }
     }
 }
@@ -81,10 +86,10 @@ pub struct LinearWorkloadCalculator {
 impl Default for LinearWorkloadCalculator {
     fn default() -> Self {
         Self {
-            reference_threads: 1024,
+            reference_threads: 16384,
             scale_factor: 1.0,
             min_factor: 0.1,
-            max_factor: 8.0,
+            max_factor: 4.0,
         }
     }
 }
@@ -138,7 +143,7 @@ mod tests {
     fn power_workload_calculator() {
         let calc = PowerWorkloadCalculator::default();
 
-        // Small workload
+        // Small workload (32 threads, well below reference)
         let small_factor = calc.calculate_factor(1, 32);
         assert!(
             small_factor < 1.0,
@@ -146,20 +151,20 @@ mod tests {
         );
         assert!(small_factor >= 0.1, "Factor should be >= min_factor");
 
-        // Baseline workload
-        let base_factor = calc.calculate_factor(1, 1024);
+        // Baseline workload (reference_threads = 16384)
+        let base_factor = calc.calculate_factor(16, 1024);
         assert!(
             (base_factor - 1.0).abs() < 0.1,
-            "Base workload should have factor ≈ 1.0"
+            "Base workload (16K threads) should have factor ≈ 1.0"
         );
 
-        // Large workload
+        // Large workload (1M threads)
         let large_factor = calc.calculate_factor(1024, 1024);
         assert!(
             large_factor > 1.0,
             "Large workload should have factor > 1.0"
         );
-        assert!(large_factor <= 8.0, "Factor should be <= max_factor");
+        assert!(large_factor <= 4.0, "Factor should be <= max_factor (4.0)");
 
         // Monotonicity check
         assert!(small_factor < base_factor);
@@ -170,16 +175,26 @@ mod tests {
     fn linear_workload_calculator() {
         let calc = LinearWorkloadCalculator::default();
 
-        let factor1 = calc.calculate_factor(1, 512);
-        let factor2 = calc.calculate_factor(1, 1024);
-        let factor3 = calc.calculate_factor(1, 2048);
+        // With reference_threads = 16384
+        let factor1 = calc.calculate_factor(1, 8192); // 8K threads: 0.5x reference
+        let factor2 = calc.calculate_factor(16, 1024); // 16K threads: 1.0x reference
+        let factor3 = calc.calculate_factor(32, 1024); // 32K threads: 2.0x reference
 
         // Linear growth
-        assert!(factor1 < factor2);
-        assert!(factor2 < factor3);
+        assert!(
+            factor1 < factor2,
+            "factor1 ({factor1}) should be < factor2 ({factor2})"
+        );
+        assert!(
+            factor2 < factor3,
+            "factor2 ({factor2}) should be < factor3 ({factor3})"
+        );
 
-        // Baseline check
-        assert!((factor2 - 1.0).abs() < 0.1);
+        // Baseline check (16K threads should give factor ≈ 1.0)
+        assert!(
+            (factor2 - 1.0).abs() < 0.1,
+            "Baseline factor should be ≈ 1.0, got {factor2}"
+        );
     }
 
     #[test]
@@ -194,17 +209,17 @@ mod tests {
     #[test]
     fn workload_factor_bounds() {
         let calc = PowerWorkloadCalculator {
-            reference_threads: 1024,
+            reference_threads: 16384,
             power: 0.6,
             min_factor: 0.2,
             max_factor: 5.0,
         };
 
-        // Test tiny value
+        // Test tiny value (1 thread)
         let tiny_factor = calc.calculate_factor(1, 1);
         assert!(tiny_factor >= 0.2, "Should respect min_factor");
 
-        // Test huge value
+        // Test huge value (100M threads)
         let huge_factor = calc.calculate_factor(10000, 10000);
         assert!(huge_factor <= 5.0, "Should respect max_factor");
     }
