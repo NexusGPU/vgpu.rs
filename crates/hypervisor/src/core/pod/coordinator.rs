@@ -464,9 +464,17 @@ where
 
             let mut ctrl = HypervisorUtilizationController::new(erl_adapter, target_utilization);
 
-            const CAPACITY: f64 = 100.0;
-            const REFILL_RATE: f64 = 100.0;
-            if let Err(e) = ctrl.initialize_device_quota(&device_index, CAPACITY, REFILL_RATE) {
+            // Token bucket parameters
+            // Design: refill_rate scales with target to provide proportional throughput
+            //         capacity provides fixed burst duration for fairness
+            const BASE_REFILL_RATE: f64 = 1000.0;  // Base tokens/sec, scaled by target_utilization
+            const BURST_DURATION: f64 = 1.0;       // Fixed 1 second burst capability for all Pods
+            const MIN_CAPACITY: f64 = 50.0;        // Minimum burst capacity
+
+            let refill_rate = BASE_REFILL_RATE * target_utilization;
+            let capacity = (refill_rate * BURST_DURATION).max(MIN_CAPACITY);
+
+            if let Err(e) = ctrl.initialize_device_quota(&device_index, capacity, refill_rate) {
                 tracing::error!(
                     pod_identifier = %pod_identifier,
                     device_index = device_index,
@@ -479,10 +487,10 @@ where
                     device_index = device_index,
                     up_limit = device_config.up_limit,
                     target_utilization = target_utilization,
-                    capacity = CAPACITY,
-                    refill_rate = REFILL_RATE,
-                    base_capacity = CAPACITY,
-                    "Initialized ERL controller (capacity scaled by target, refill_rate fixed)"
+                    capacity = capacity,
+                    refill_rate = refill_rate,
+                    burst_duration = BURST_DURATION,
+                    "Initialized ERL controller with scaled refill_rate"
                 );
             }
 
