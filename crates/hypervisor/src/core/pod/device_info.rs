@@ -8,10 +8,13 @@ use cudarc::driver::CudaContext;
 use nvml_wrapper::Nvml;
 use utils::shared_memory::DeviceConfig;
 
-// Configuration constant for CUDA cores calculation
+/// Configuration constant for CUDA cores calculation
+/// This factor is used to scale SM count and threads per SM to estimate total CUDA cores
+/// Formula: total_cuda_cores = sm_count * max_thread_per_sm * FACTOR
 const FACTOR: u32 = 64;
 
 /// Creates device configs from WorkerInfo (pod metadata) for pod-level registration
+#[tracing::instrument(skip(nvml), fields(pod = %worker_info.pod_name, namespace = %worker_info.namespace, gpu_count = worker_info.gpu_uuids.as_ref().map(|v| v.len()).unwrap_or(0)))]
 pub async fn create_device_configs_from_worker_info(
     worker_info: &WorkerInfo,
     nvml: &Nvml,
@@ -80,6 +83,7 @@ pub async fn create_device_configs_from_worker_info(
 }
 
 /// Calculate device limits from actual GPU hardware information
+#[tracing::instrument(skip(nvml), fields(device_idx = device_idx, tflops_limit = ?tflops_limit, vram_limit = ?vram_limit, tflops_capacity = ?tflops_capacity))]
 pub fn calculate_device_limits_from_gpu_info(
     nvml: &Nvml,
     device_idx: u32,

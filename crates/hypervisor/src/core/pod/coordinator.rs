@@ -27,6 +27,9 @@ use super::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
 use super::utilization::DeviceSnapshot;
 use utils::shared_memory::traits::SharedMemoryAccess;
 
+/// Cleanup interval for unused shared memory segments in seconds
+const CLEANUP_INTERVAL_SECS: u64 = 300;
+
 /// Configuration for the LimiterCoordinator
 pub struct CoordinatorConfig {
     /// Monitoring interval
@@ -39,7 +42,7 @@ pub struct CoordinatorConfig {
     pub base_path: PathBuf,
 }
 
-type ErlControllers = HashMap<
+type ErlControllerMap = HashMap<
     (PodIdentifier, u32),
     HypervisorUtilizationController<
         usize,
@@ -47,6 +50,29 @@ type ErlControllers = HashMap<
         WorkloadAwareCubicController,
     >,
 >;
+
+/// Newtype wrapper for ERL controllers indexed by (PodIdentifier, device_idx)
+struct ErlControllers(ErlControllerMap);
+
+impl ErlControllers {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+}
+
+impl core::ops::Deref for ErlControllers {
+    type Target = ErlControllerMap;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for ErlControllers {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 /// Generic limiter coordinator with dependency injection
 pub struct LimiterCoordinator<M, P, D, T> {
@@ -96,7 +122,7 @@ where
             time,
             device_watcher_tasks: RwLock::new(HashMap::new()),
             heartbeat_task: RwLock::new(None),
-            erl_controllers: Arc::new(RwLock::new(HashMap::new())),
+            erl_controllers: Arc::new(RwLock::new(ErlControllers::new())),
             watch_interval: config.watch_interval,
             device_count: config.device_count,
             shared_memory_glob_pattern: config.shared_memory_glob_pattern,
@@ -122,6 +148,7 @@ where
     }
 
     /// Run the coordinator with cancellation support
+    #[tracing::instrument(skip(self, cancellation_token), fields(device_count = self.device_count))]
     pub async fn run(&self, cancellation_token: CancellationToken) {
         tracing::info!(
             "Starting LimiterCoordinator with {} GPU devices",
@@ -220,9 +247,9 @@ where
 
                 if let Err(e) = Self::run_device_monitoring_cycle_static(
                     device_idx,
-                    &pod_state,
-                    &snapshot,
-                    &erl_controllers,
+                    pod_state.as_ref(),
+                    snapshot.as_ref(),
+                    erl_controllers.as_ref(),
                     &mut last_seen_timestamp,
                 )
                 .await
@@ -238,9 +265,9 @@ where
     /// Static version for spawn tasks
     async fn run_device_monitoring_cycle_static(
         device_idx: u32,
-        pod_state: &Arc<P>,
-        snapshot: &Arc<D>,
-        erl_controllers: &Arc<RwLock<ErlControllers>>,
+        pod_state: &P,
+        snapshot: &D,
+        erl_controllers: &RwLock<ErlControllers>,
         last_seen_timestamp: &mut u64,
     ) -> Result<()> {
         let pods_for_device = pod_state.get_pods_using_device(device_idx);
@@ -303,21 +330,21 @@ where
     ) -> Result<()> {
         Self::run_device_monitoring_cycle_static(
             device_idx,
-            &self.pod_state,
-            &self.snapshot,
-            &self.erl_controllers,
+            self.pod_state.as_ref(),
+            self.snapshot.as_ref(),
+            self.erl_controllers.as_ref(),
             last_seen_timestamp,
         )
         .await
     }
 
     async fn process_pod_utilization_update(
-        pod_state: &Arc<P>,
+        pod_state: &P,
         pod_identifier: &PodIdentifier,
         host_pids: &[u32],
         device_config: &DeviceConfig,
         device_snapshot: &DeviceSnapshot,
-        erl_controllers: &Arc<RwLock<ErlControllers>>,
+        erl_controllers: &RwLock<ErlControllers>,
     ) -> Result<()> {
         let pod_path = pod_state.pod_path(pod_identifier);
         let handle =
@@ -420,7 +447,7 @@ where
         device_index: usize,
         pod_utilization: &super::utilization::PodUtilization,
         pod_memory: u64,
-        erl_controllers: &Arc<RwLock<ErlControllers>>,
+        erl_controllers: &RwLock<ErlControllers>,
     ) {
         let key = (pod_identifier.clone(), device_config.device_idx);
 
@@ -523,6 +550,7 @@ where
     }
 
     /// Ensures a pod is registered with device configurations (idempotent operation)
+    #[tracing::instrument(skip(self, configs), fields(pod = %pod_identifier, device_count = configs.len()))]
     pub async fn ensure_pod_registered(
         &self,
         pod_identifier: &PodIdentifier,
@@ -603,11 +631,7 @@ where
     }
 
     /// Unregisters a single process from the coordinator.
-    pub async fn unregister_process(
-        &self,
-        pod_identifier: &PodIdentifier,
-        host_pid: u32,
-    ) -> Result<()> {
+    pub fn unregister_process(&self, pod_identifier: &PodIdentifier, host_pid: u32) -> Result<()> {
         let pod_path = self.pod_state.pod_path(pod_identifier);
         // Remove PID from shared memory
         self.shared_memory
@@ -632,14 +656,15 @@ where
         let pod_state = self.pod_state.clone();
         let base_path = self.base_path.clone();
         tokio::spawn(async move {
-            // Run cleanup every 5 minutes
-            let mut cleanup_interval = interval_at(
-                Instant::now() + Duration::from_secs(300),
-                Duration::from_secs(300),
-            );
+            let cleanup_duration = Duration::from_secs(CLEANUP_INTERVAL_SECS);
+            let mut cleanup_interval =
+                interval_at(Instant::now() + cleanup_duration, cleanup_duration);
             cleanup_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-            tracing::info!("Starting periodic shared memory cleanup task (every 5 minutes)");
+            tracing::info!(
+                interval_secs = CLEANUP_INTERVAL_SECS,
+                "Starting periodic shared memory cleanup task"
+            );
 
             loop {
                 tokio::select! {
@@ -681,6 +706,7 @@ where
     }
 
     /// Starts the heartbeat task that updates heartbeat every 0.5 seconds
+    #[tracing::instrument(skip(self, cancellation_token))]
     pub async fn start_heartbeat_task(&self, cancellation_token: CancellationToken) {
         let pod_state = self.pod_state.clone();
         let time = self.time.clone();
@@ -941,7 +967,7 @@ mod tests {
             .any(|op| op.contains("add_pid(/tmp/test_shm/test/pod, 1234)")));
 
         // Test process unregistration
-        let result = coordinator.unregister_process(&pod_id, 1234).await;
+        let result = coordinator.unregister_process(&pod_id, 1234);
         assert!(result.is_ok());
 
         // Verify operation was logged in mock
