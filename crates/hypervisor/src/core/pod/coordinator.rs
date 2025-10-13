@@ -133,7 +133,7 @@ where
             .await;
 
         // Start periodic cleanup task
-        let cleanup_task = self.start_periodic_cleanup_task(cancellation_token.clone());
+        let cleanup_task = self.start_cleanup_task(cancellation_token.clone());
 
         // Start the heartbeat task
         self.start_heartbeat_task(cancellation_token.clone()).await;
@@ -272,7 +272,7 @@ where
                 continue;
             };
 
-            if let Err(e) = Self::process_pod_utilization_update_static(
+            if let Err(e) = Self::process_pod_utilization_update(
                 pod_state,
                 &pod_id,
                 &host_pids,
@@ -311,8 +311,7 @@ where
         .await
     }
 
-    /// Static version for spawn tasks
-    async fn process_pod_utilization_update_static(
+    async fn process_pod_utilization_update(
         pod_state: &Arc<P>,
         pod_identifier: &PodIdentifier,
         host_pids: &[u32],
@@ -321,7 +320,8 @@ where
         erl_controllers: &Arc<RwLock<ErlControllers>>,
     ) -> Result<()> {
         let pod_path = pod_state.pod_path(pod_identifier);
-        let handle = SharedMemoryHandle::open(&pod_path).context("Failed to open shared memory")?;
+        let handle =
+            Arc::new(SharedMemoryHandle::open(&pod_path).context("Failed to open shared memory")?);
         let state = handle.get_state();
 
         let device_index = device_config.device_idx as usize;
@@ -352,7 +352,7 @@ where
             ),
             2 => {
                 Self::update_v2_state(
-                    pod_state,
+                    handle.clone(),
                     pod_identifier,
                     device_config,
                     device_index,
@@ -414,7 +414,7 @@ where
 
     /// V2: Update ERL controller with utilization feedback
     async fn update_v2_state(
-        pod_state: &Arc<P>,
+        handle: Arc<SharedMemoryHandle>,
         pod_identifier: &PodIdentifier,
         device_config: &DeviceConfig,
         device_index: usize,
@@ -426,29 +426,9 @@ where
 
         // Get or create ERL controller for this (pod, device) pair
         let mut controllers = erl_controllers.write().await;
-        let controller = controllers.entry(key.clone()).or_insert_with(|| {
+        let controller = controllers.entry(key).or_insert_with(|| {
             // Open shared memory for ERL adapter
-            let pod_path = pod_state.pod_path(pod_identifier);
-            let handle = match SharedMemoryHandle::open(&pod_path) {
-                Ok(h) => h,
-                Err(e) => {
-                    tracing::error!(
-                        pod_identifier = %pod_identifier,
-                        error = %e,
-                        "Failed to open shared memory for ERL controller"
-                    );
-                    // Return a dummy controller that will fail gracefully
-                    return HypervisorUtilizationController::new(
-                        ErlSharedMemoryAdapter::new(Arc::new(SharedMemoryHandle::mock(
-                            pod_path,
-                            vec![],
-                        ))),
-                        0.8,
-                    );
-                }
-            };
-
-            let erl_adapter = ErlSharedMemoryAdapter::new(Arc::new(handle));
+            let erl_adapter = ErlSharedMemoryAdapter::new(handle);
             let target_utilization = device_config.up_limit as f64 / 100.0;
 
             // Warn if target utilization is suspiciously low
@@ -645,7 +625,7 @@ where
     }
 
     /// Start periodic cleanup task for unused shared memory segments
-    fn start_periodic_cleanup_task(&self, cancellation_token: CancellationToken) -> JoinHandle<()> {
+    fn start_cleanup_task(&self, cancellation_token: CancellationToken) -> JoinHandle<()> {
         let shared_memory = self.shared_memory.clone();
 
         let shared_memory_glob_pattern = self.shared_memory_glob_pattern.clone();
