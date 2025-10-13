@@ -464,27 +464,9 @@ where
 
             let mut ctrl = HypervisorUtilizationController::new(erl_adapter, target_utilization);
 
-            // Initialize device quota
-            // Why refill_rate should be fixed:
-            // - It represents the physical GPU's token generation rate
-            // - CUBIC algorithm adjusts avg_cost to achieve target utilization
-            // - Scaling refill_rate would interfere with CUBIC convergence
-            //
-            // Token bucket model:
-            //   actual_throughput = refill_rate / (avg_cost × workload_factor)
-            //                       ↑ fixed       ↑ CUBIC adjusts this
-            //
-            // Example with refill_rate=100:
-            // - Pod A (target=80%): CUBIC adjusts avg_cost to achieve 80% utilization
-            // - Pod B (target=30%): CUBIC adjusts avg_cost to achieve 30% utilization
-            const BASE_CAPACITY: f64 = 100.0;
+            const CAPACITY: f64 = 100.0;
             const REFILL_RATE: f64 = 100.0;
-            const MIN_CAPACITY: f64 = 10.0;
-
-            // Capacity scales with target_utilization to provide proportional burst capability
-            let capacity = (BASE_CAPACITY * target_utilization).max(MIN_CAPACITY);
-            let refill_rate = REFILL_RATE;  // Same for all Pods
-            if let Err(e) = ctrl.initialize_device_quota(&device_index, capacity, refill_rate) {
+            if let Err(e) = ctrl.initialize_device_quota(&device_index, CAPACITY, REFILL_RATE) {
                 tracing::error!(
                     pod_identifier = %pod_identifier,
                     device_index = device_index,
@@ -497,9 +479,9 @@ where
                     device_index = device_index,
                     up_limit = device_config.up_limit,
                     target_utilization = target_utilization,
-                    capacity = capacity,
-                    refill_rate = refill_rate,
-                    base_capacity = BASE_CAPACITY,
+                    capacity = CAPACITY,
+                    refill_rate = REFILL_RATE,
+                    base_capacity = CAPACITY,
                     "Initialized ERL controller (capacity scaled by target, refill_rate fixed)"
                 );
             }
