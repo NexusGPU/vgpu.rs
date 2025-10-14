@@ -197,8 +197,8 @@ impl WorkloadAwareCubicController {
         let alpha = 0.1;
         self.avg_cost = self.avg_cost * (1.0 - alpha) + target_cost * alpha;
 
-        if utilization_error.abs() > 0.01 {
-            let adjustment = 1.0 + utilization_error * 0.2;
+        if utilization_error.abs() > 0.005 {
+            let adjustment = 1.0 + utilization_error * 0.4;
             self.avg_cost *= adjustment;
         }
 
@@ -227,10 +227,10 @@ impl WorkloadAwareCubicController {
                 w_max = self.w_max,
                 "Entered recovery phase, multiplicative decrease applied"
             );
-        } else if utilization_error > 0.02 {
-            self.avg_cost *= 1.15;
-        } else if utilization_error < 0.0 {
-            self.avg_cost *= 0.95;
+        } else if utilization_error > 0.01 {
+            self.avg_cost *= 1.2;
+        } else if utilization_error < -0.01 {
+            self.avg_cost *= 0.9;
         }
 
         self.avg_cost = self
