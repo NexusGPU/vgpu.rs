@@ -47,10 +47,16 @@ where
             .unwrap()
             .as_secs_f64();
 
+        // Use higher initial avg_cost to prevent over-launching
+        // With lower values (e.g., 1.0), CUBIC may converge to a too-low cost,
+        // causing utilization to exceed target. Starting higher and letting it
+        // decrease is safer than starting low and trying to increase.
+        let initial_avg_cost = 10.0;
+
         Self {
             storage,
             congestion_controller: WorkloadAwareCubicController::with_defaults(
-                1.0,                                          // Initial avg_cost
+                initial_avg_cost,                             // Initial avg_cost
                 now,                                          // Current time
                 Box::new(PowerWorkloadCalculator::default()), // Used for cost tracking
             ),

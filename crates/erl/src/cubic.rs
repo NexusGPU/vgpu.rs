@@ -31,8 +31,8 @@ impl Default for CubicParams {
             c: 0.4,                  // Empirical value, balance convergence speed and stability
             beta: 1.3, // Quickly increase avg_cost (reduce launch rate) during recovery
             slow_start_factor: 1.1, // Multiplicative factor for slow start
-            min_avg_cost: 0.01, // Lower minimum to allow higher throughput (was 0.1)
-            max_avg_cost: 10.0, // Prevent avg_cost from becoming too large
+            min_avg_cost: 0.5, // Prevent avg_cost from dropping too low (was 0.01)
+            max_avg_cost: 50.0, // Increased max to allow stronger throttling if needed (was 10.0)
             conservative_mode: true, // Enable conservative mode
         }
     }
@@ -272,12 +272,17 @@ impl CongestionController for WorkloadAwareCubicController {
     ) -> Result<f64, ErlError> {
         let current_time = self.last_update_time + delta_time;
 
-        // Use cost tracker to correct utilization feedback
-        let adjusted_utilization = if self.cost_tracker.has_sufficient_data() {
-            self.cost_tracker.adjust_utilization(current_utilization)
-        } else {
-            current_utilization
-        };
+        // Temporarily disable cost tracker adjustment to avoid overcorrection
+        // The cost tracker may cause inverse feedback when utilization exceeds target
+        let adjusted_utilization = current_utilization;
+
+        // Keep tracking costs for statistics, but don't adjust utilization
+        // TODO: Re-enable with improved logic that doesn't cause inverse feedback
+        // let adjusted_utilization = if self.cost_tracker.has_sufficient_data() {
+        //     self.cost_tracker.adjust_utilization(current_utilization)
+        // } else {
+        //     current_utilization
+        // };
 
         let utilization_error = adjusted_utilization - target_utilization;
 
