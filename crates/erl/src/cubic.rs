@@ -31,8 +31,8 @@ impl Default for CubicParams {
             c: 0.4,                  // Empirical value, balance convergence speed and stability
             beta: 1.3, // Quickly increase avg_cost (reduce launch rate) during recovery
             slow_start_factor: 1.1, // Multiplicative factor for slow start
-            min_avg_cost: 0.05, // Allow sufficient throughput while preventing too-low cost
-            max_avg_cost: 50.0, // Increased max to allow stronger throttling if needed (was 10.0)
+            min_avg_cost: 0.01, // Allow very high throughput for workloads with small kernels
+            max_avg_cost: 50.0, // Increased max to allow stronger throttling if needed
             conservative_mode: true, // Enable conservative mode
         }
     }
