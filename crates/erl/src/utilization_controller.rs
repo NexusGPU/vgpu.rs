@@ -47,11 +47,10 @@ where
             .unwrap()
             .as_secs_f64();
 
-        // Use higher initial avg_cost to prevent over-launching
-        // With lower values (e.g., 1.0), CUBIC may converge to a too-low cost,
-        // causing utilization to exceed target. Starting higher and letting it
-        // decrease is safer than starting low and trying to increase.
-        let initial_avg_cost = 10.0;
+        // Use moderately high initial avg_cost to prevent over-launching
+        // Start conservative but not too high to avoid slow convergence.
+        // CUBIC will quickly adjust down if utilization is too low.
+        let initial_avg_cost = 2.0;
 
         Self {
             storage,
