@@ -281,17 +281,12 @@ impl CongestionController for WorkloadAwareCubicController {
     ) -> Result<f64, ErlError> {
         let current_time = self.last_update_time + delta_time;
 
-        // Temporarily disable cost tracker adjustment to avoid overcorrection
-        // The cost tracker may cause inverse feedback when utilization exceeds target
-        let adjusted_utilization = current_utilization;
-
-        // Keep tracking costs for statistics, but don't adjust utilization
-        // TODO: Re-enable with improved logic that doesn't cause inverse feedback
-        // let adjusted_utilization = if self.cost_tracker.has_sufficient_data() {
-        //     self.cost_tracker.adjust_utilization(current_utilization)
-        // } else {
-        //     current_utilization
-        // };
+        let adjusted_utilization = if self.cost_tracker.has_sufficient_data() {
+            self.cost_tracker
+                .adjust_utilization(current_utilization, target_utilization)
+        } else {
+            current_utilization
+        };
 
         let utilization_error = adjusted_utilization - target_utilization;
 

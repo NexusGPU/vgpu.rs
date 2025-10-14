@@ -90,21 +90,49 @@ impl CostTracker {
     /// # Arguments
     ///
     /// * `raw_utilization` - Original GPU utilization
+    /// * `target_utilization` - Target utilization
     ///
     /// # Returns
     ///
     /// Return adjusted utilization, for CUBIC feedback
-    pub fn adjust_utilization(&self, raw_utilization: f64) -> f64 {
+    ///
+    /// # Logic
+    ///
+    /// The cost_ratio indicates whether actual workload cost differs from expected:
+    /// - cost_ratio > 1: Actual cost higher (heavier workload)
+    /// - cost_ratio < 1: Actual cost lower (lighter workload)
+    ///
+    /// We only adjust when utilization is BELOW target, to help CUBIC converge faster:
+    /// - If util < target && cost_ratio > 1: Heavy workload but low util → avg_cost too high → boost feedback
+    /// - If util < target && cost_ratio < 1: Light workload and low util → avg_cost OK → normal feedback
+    /// - If util >= target: Don't adjust, let CUBIC handle it normally
+    pub fn adjust_utilization(&self, raw_utilization: f64, target_utilization: f64) -> f64 {
         let cost_ratio = self.get_cost_ratio();
 
-        // If actual cost is higher than expected, it means we actually "bought" more resources
-        // Should reduce the utilization feedback to CUBIC, so CUBIC thinks resources are enough
-        let adjusted_utilization = raw_utilization / cost_ratio;
+        // Only apply correction when utilization is below target
+        // This prevents the inverse feedback problem when over-utilizing
+        let adjusted_utilization = if raw_utilization < target_utilization {
+            // Below target: if cost_ratio > 1, workload is heavy but util is low
+            // This means avg_cost is too high, boost the feedback to help CUBIC lower it faster
+            if cost_ratio > 1.0 {
+                // Amplify the feedback to encourage CUBIC to lower avg_cost
+                let amplification = 1.0 + (cost_ratio - 1.0) * 0.3;
+                (raw_utilization * amplification).min(target_utilization)
+            } else {
+                // Workload is light, no correction needed
+                raw_utilization
+            }
+        } else {
+            // At or above target: no correction, let CUBIC handle it
+            raw_utilization
+        };
 
         tracing::debug!(
             raw_utilization = raw_utilization,
+            target_utilization = target_utilization,
             cost_ratio = cost_ratio,
             adjusted_utilization = adjusted_utilization,
+            correction_applied = (adjusted_utilization - raw_utilization).abs() > 0.001,
             "Adjusted utilization for CUBIC feedback"
         );
 
@@ -196,16 +224,29 @@ mod tests {
     fn cost_tracker_adjustment() {
         let mut tracker = CostTracker::new(10);
 
-        // Record high actual cost cases
+        // Record high actual cost cases (cost_ratio = 3.0)
         for _ in 0..10 {
             tracker.record_cost(3.0, 1.0); // Actual cost is 3 times expected
         }
 
-        // Original utilization 90%, adjusted utilization should be 30%
-        let adjusted = tracker.adjust_utilization(0.9);
-        assert!((adjusted - 0.3).abs() < 0.01);
-
         assert!(tracker.has_sufficient_data());
+
+        // Test 1: When utilization (50%) is below target (80%)
+        // With high cost_ratio (3.0), should amplify feedback
+        let adjusted = tracker.adjust_utilization(0.5, 0.8);
+        assert!(
+            adjusted > 0.5,
+            "Should amplify when below target with high cost_ratio"
+        );
+        assert!(adjusted <= 0.8, "Should not exceed target");
+
+        // Test 2: When utilization (90%) is above target (80%)
+        // Should NOT adjust (no inverse feedback)
+        let adjusted = tracker.adjust_utilization(0.9, 0.8);
+        assert!(
+            (adjusted - 0.9).abs() < 0.01,
+            "Should not adjust when above target"
+        );
     }
 
     #[test]
