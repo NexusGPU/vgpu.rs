@@ -166,9 +166,16 @@ impl WorkloadAwareCubicController {
     /// Slow start update
     fn slow_start_update(&mut self, utilization_error: f64) {
         if utilization_error < 0.0 {
-            self.avg_cost /= self.params.slow_start_factor;
+            // More aggressive decrease when utilization is below target
+            let decrease_factor = if utilization_error < -0.1 {
+                // Very low utilization, decrease more aggressively
+                1.5
+            } else {
+                self.params.slow_start_factor
+            };
+            self.avg_cost /= decrease_factor;
         } else {
-            self.avg_cost *= 1.0 + utilization_error * 0.1;
+            self.avg_cost *= 1.0 + utilization_error * 0.2;
         }
 
         self.avg_cost = self
@@ -194,11 +201,13 @@ impl WorkloadAwareCubicController {
             cubic_cost
         };
 
-        let alpha = 0.1;
+        // Increased alpha for faster response to utilization changes
+        let alpha = 0.3;
         self.avg_cost = self.avg_cost * (1.0 - alpha) + target_cost * alpha;
 
+        // More aggressive adjustment when far from target
         if utilization_error.abs() > 0.005 {
-            let adjustment = 1.0 + utilization_error * 0.4;
+            let adjustment = 1.0 + utilization_error * 0.6;
             self.avg_cost *= adjustment;
         }
 
