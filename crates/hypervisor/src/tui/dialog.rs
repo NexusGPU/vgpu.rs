@@ -89,24 +89,59 @@ impl ShmDetailDialog {
                     .into(),
                 );
                 content_lines.push(vec!["• UUID: ".into(), device.uuid.clone().dim()].into());
-                content_lines.push(
-                    vec![
-                        "• Available Cores: ".into(),
-                        format!("{}", device.available_cores).into(),
-                        " / ".dim(),
-                        format!("{}", device.total_cores).into(),
-                        format!(
-                            " ({:.1}%)",
-                            if device.total_cores > 0 {
-                                (device.available_cores as f64 / device.total_cores as f64) * 100.0
-                            } else {
-                                0.0
-                            }
-                        )
-                        .dim(),
-                    ]
-                    .into(),
-                );
+
+                // Version-specific content
+                if device.erl_avg_cost.is_some() {
+                    // V2 (ERL) metrics
+                    let avg_cost = device.erl_avg_cost.unwrap_or_default();
+                    let token_capacity = device.erl_token_capacity.unwrap_or_default();
+                    let refill_rate = device.erl_token_refill_rate.unwrap_or_default();
+                    let current_tokens = device.erl_current_tokens.unwrap_or_default();
+                    let last_update = device.erl_last_token_update.unwrap_or_default();
+
+                    content_lines.push(
+                        vec!["• ERL Avg Cost: ".into(), format!("{avg_cost:.3}").into()].into(),
+                    );
+                    content_lines.push(
+                        vec![
+                            "• ERL Tokens: ".into(),
+                            format!("{current_tokens:.3}").into(),
+                            " / ".dim(),
+                            format!("{token_capacity:.3}").into(),
+                            ", refill ".dim(),
+                            format!("{refill_rate:.3}/s").into(),
+                        ]
+                        .into(),
+                    );
+                    content_lines.push(
+                        vec![
+                            "• ERL Last Update (s): ".into(),
+                            format!("{last_update:.0}").into(),
+                        ]
+                        .into(),
+                    );
+                } else {
+                    // V1 available cores view
+                    content_lines.push(
+                        vec![
+                            "• Available Cores: ".into(),
+                            format!("{}", device.available_cores).into(),
+                            " / ".dim(),
+                            format!("{}", device.total_cores).into(),
+                            format!(
+                                " ({:.1}%)",
+                                if device.total_cores > 0 {
+                                    (device.available_cores as f64 / device.total_cores as f64)
+                                        * 100.0
+                                } else {
+                                    0.0
+                                }
+                            )
+                            .dim(),
+                        ]
+                        .into(),
+                    );
+                }
                 content_lines.push(
                     vec![
                         "• Memory Used: ".into(),

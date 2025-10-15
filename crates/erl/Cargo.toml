@@ -1,0 +1,13 @@
+[package]
+name = "erl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tracing = { workspace = true }
+derive_more = { workspace = true, features = ["display"] }
+error-stack = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+proptest-derive = { workspace = true }

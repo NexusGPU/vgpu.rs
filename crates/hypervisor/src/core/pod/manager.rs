@@ -25,6 +25,9 @@ use super::device_info::create_device_configs_from_worker_info;
 use super::pod_state_store::PodStateStore;
 use super::types::{PodManagementError, Result};
 
+/// Timeout for PID discovery subscription in seconds
+const PID_DISCOVERY_TIMEOUT_SECS: u64 = 5;
+
 /// Simplified pod manager with unified state management
 pub struct PodManager<M, P, D, T> {
     /// Centralized pod state store
@@ -164,6 +167,7 @@ where
     }
 
     /// Initialize a CUDA process: discover PID and register to all components
+    #[tracing::instrument(skip(self), fields(pod = pod_name, namespace = namespace, container = container_name, container_pid = container_pid))]
     pub async fn initialize_process(
         &self,
         pod_name: &str,
@@ -192,6 +196,7 @@ where
     }
 
     /// Start the resource monitoring task
+    #[tracing::instrument(skip(self, cancellation_token), fields(interval_ms = interval.as_millis()))]
     pub async fn start_resource_monitor(
         &self,
         interval: Duration,
@@ -223,6 +228,7 @@ where
     }
 
     /// Ensure pod is registered in all components (lazy loading)
+    #[tracing::instrument(skip(self), fields(namespace = namespace, pod = pod_name))]
     pub async fn ensure_pod_registered(&self, namespace: &str, pod_name: &str) -> Result<()> {
         let pod_identifier = PodIdentifier::new(namespace, pod_name);
 
@@ -303,7 +309,10 @@ where
 
         let receiver = self
             .host_pid_probe
-            .subscribe(subscription_request, Duration::from_secs(5))
+            .subscribe(
+                subscription_request,
+                Duration::from_secs(PID_DISCOVERY_TIMEOUT_SECS),
+            )
             .await;
 
         let process_info = receiver.await.map_err(|_| PodManagementError::StateError {
@@ -319,6 +328,7 @@ where
     }
 
     /// Register process to all components
+    #[tracing::instrument(skip(self), fields(pod = pod_name, namespace = namespace, container = container_name, host_pid = host_pid))]
     async fn register_process_to_all_components(
         &self,
         pod_name: &str,
@@ -387,6 +397,7 @@ where
     }
 
     /// check_and_cleanup_dead_processes for use in monitoring task
+    #[tracing::instrument(skip(self))]
     async fn check_and_cleanup_dead_processes(&self) -> Result<Vec<u32>> {
         let mut dead_pids = Vec::new();
 
@@ -468,6 +479,7 @@ where
     }
 
     /// Handle process exit cleanup
+    #[tracing::instrument(skip(self), fields(host_pid = host_pid))]
     async fn handle_process_exited(&self, host_pid: u32) -> Result<()> {
         info!("Processing process exit: host_pid={}", host_pid);
 
@@ -495,7 +507,6 @@ where
         if let Err(e) = self
             .limiter_coordinator
             .unregister_process(&pod_id, host_pid)
-            .await
         {
             tracing::error!(
                 "Failed to unregister process {} from limiter coordinator: {}",

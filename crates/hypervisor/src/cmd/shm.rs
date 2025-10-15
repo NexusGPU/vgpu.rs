@@ -49,19 +49,54 @@ pub async fn run_show_shm(show_shm_args: ShowShmArgs) -> Result<()> {
     let version = state.get_version();
     tracing::info!("Shared memory state version: v{}", version);
 
-    // Print device details one by one
-    state.for_each_active_device(|_, device| {
-        let info = format!("uuid: {}, Available cores: {}, Total cores: {}, Up limit: {}%, Memory limit: {} bytes, Pod memory used: {} bytes",
-            device.get_uuid(),
-            device.device_info.get_available_cores(),
-            device.device_info.get_total_cores(),
-            device.device_info.get_up_limit(),
-            device.device_info.get_mem_limit(),
-            device.device_info.get_pod_memory_used()
-        );
-
-        tracing::info!("Device info: {}", info);
-    });
+    // Print device details depending on version
+    match state.get_version() {
+        1 => {
+            for i in 0..device_count {
+                if let Some((
+                    uuid,
+                    available_cores,
+                    total_cores,
+                    mem_limit,
+                    pod_memory_used,
+                    up_limit,
+                    is_active,
+                )) = state.get_device_info(i)
+                {
+                    if is_active {
+                        tracing::info!(
+                            "Device {}: UUID={}, Available={}, Total={}, MemLimit={}, MemUsed={}, UpLimit={}%, Active={}",
+                            i, uuid, available_cores, total_cores, mem_limit, pod_memory_used, up_limit, is_active
+                        );
+                    }
+                }
+            }
+        }
+        2 => {
+            for (i, device) in state.iter_active_devices() {
+                tracing::info!(
+                    "Device {}: UUID={}, TotalCores={}, MemLimit={}, MemUsed={}, UpLimit={}%, ERL(avg_cost={:.3}, tokens={:.3}/{:.3}, refill={:.3}/s, last_update={:.0})",
+                    i,
+                    device.get_uuid(),
+                    device.device_info.get_total_cores(),
+                    device.device_info.get_mem_limit(),
+                    device.device_info.get_pod_memory_used(),
+                    device.device_info.get_up_limit(),
+                    device.device_info.get_erl_avg_cost(),
+                    device.device_info.get_erl_current_tokens(),
+                    device.device_info.get_erl_token_capacity(),
+                    device.device_info.get_erl_token_refill_rate(),
+                    device.device_info.get_erl_last_token_update(),
+                );
+            }
+        }
+        other => {
+            tracing::warn!(
+                version = other,
+                "Unknown shared memory version; skipping device details"
+            );
+        }
+    }
 
     // Print additional state information
     let heartbeat = state.get_last_heartbeat();
@@ -78,24 +113,7 @@ pub async fn run_show_shm(show_shm_args: ShowShmArgs) -> Result<()> {
         tracing::info!("Active PIDs: {:?}", pids);
     }
 
-    // Print individual device information using the new API
-    for i in 0..device_count {
-        if let Some((
-            uuid,
-            available_cores,
-            total_cores,
-            mem_limit,
-            pod_memory_used,
-            up_limit,
-            is_active,
-        )) = state.get_device_info(i)
-        {
-            tracing::info!(
-                "Device {}: UUID={}, Available={}, Total={}, MemLimit={}, MemUsed={}, UpLimit={}%, Active={}",
-                i, uuid, available_cores, total_cores, mem_limit, pod_memory_used, up_limit, is_active
-            );
-        }
-    }
+    // Detailed device information printed above per version
 
     Ok(())
 }

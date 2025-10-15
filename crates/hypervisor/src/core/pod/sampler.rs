@@ -27,6 +27,7 @@ impl NvmlDeviceSampler {
 impl DeviceSnapshotProvider for NvmlDeviceSampler {
     type Error = anyhow::Error;
 
+    #[tracing::instrument(skip(self), fields(device_idx = device_idx, last_seen_ts = last_seen_ts))]
     fn get_device_snapshot(
         &self,
         device_idx: u32,
@@ -107,7 +108,7 @@ impl DeviceSnapshotProvider for NvmlDeviceSampler {
 pub struct SystemClock;
 
 impl SystemClock {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
