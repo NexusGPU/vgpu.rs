@@ -474,9 +474,9 @@ where
             // Token bucket parameters
             // Design: refill_rate scales with target to provide proportional throughput
             //         capacity provides fixed burst duration for fairness
-            const BASE_REFILL_RATE: f64 = 1000.0;  // Base tokens/sec, scaled by target_utilization
+            const BASE_REFILL_RATE: f64 = 100.0;   // Base tokens/sec, scaled by target_utilization
             const BURST_DURATION: f64 = 1.0;       // Fixed 1 second burst capability for all Pods
-            const MIN_CAPACITY: f64 = 50.0;        // Minimum burst capacity
+            const MIN_CAPACITY: f64 = 10.0;        // Minimum burst capacity
 
             let refill_rate = BASE_REFILL_RATE * target_utilization;
             let capacity = (refill_rate * BURST_DURATION).max(MIN_CAPACITY);
