@@ -131,7 +131,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "ERL base token refill rate per second (scaled by target utilization)",
-        default_value = "100.0",
+        default_value = "250.0",
         env = "ERL_BASE_REFILL_RATE"
     )]
     pub erl_base_refill_rate: f64,
@@ -147,7 +147,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "ERL minimum token bucket capacity",
-        default_value = "10.0",
+        default_value = "20.0",
         env = "ERL_MIN_CAPACITY"
     )]
     pub erl_min_capacity: f64,
@@ -155,7 +155,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "ERL initial average cost for new controllers",
-        default_value = "0.5",
+        default_value = "0.2",
         env = "ERL_INITIAL_AVG_COST"
     )]
     pub erl_initial_avg_cost: f64,
@@ -203,7 +203,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "ERL congestion avoidance alpha (smoothing factor, 0-1)",
-        default_value = "0.3",
+        default_value = "0.35",
         env = "ERL_CONGESTION_ALPHA"
     )]
     pub erl_congestion_alpha: f64,
@@ -219,7 +219,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "ERL congestion avoidance adjustment coefficient",
-        default_value = "0.6",
+        default_value = "0.7",
         env = "ERL_ADJUSTMENT_COEFFICIENT"
     )]
     pub erl_adjustment_coefficient: f64,
