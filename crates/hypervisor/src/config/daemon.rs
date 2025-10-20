@@ -126,4 +126,101 @@ pub struct DaemonArgs {
         value_hint = clap::ValueHint::DirPath,
     )]
     pub shared_memory_base_path: PathBuf,
+
+    // ==================== ERL (Elastic Rate Limiter) Parameters ====================
+    #[arg(
+        long,
+        help = "ERL base token refill rate per second (scaled by target utilization)",
+        default_value = "100.0",
+        env = "ERL_BASE_REFILL_RATE"
+    )]
+    pub erl_base_refill_rate: f64,
+
+    #[arg(
+        long,
+        help = "ERL token bucket burst duration in seconds",
+        default_value = "1.0",
+        env = "ERL_BURST_DURATION"
+    )]
+    pub erl_burst_duration: f64,
+
+    #[arg(
+        long,
+        help = "ERL minimum token bucket capacity",
+        default_value = "10.0",
+        env = "ERL_MIN_CAPACITY"
+    )]
+    pub erl_min_capacity: f64,
+
+    #[arg(
+        long,
+        help = "ERL initial average cost for new controllers",
+        default_value = "0.5",
+        env = "ERL_INITIAL_AVG_COST"
+    )]
+    pub erl_initial_avg_cost: f64,
+
+    #[arg(
+        long,
+        help = "ERL minimum average cost (lower bound)",
+        default_value = "0.01",
+        env = "ERL_MIN_AVG_COST"
+    )]
+    pub erl_min_avg_cost: f64,
+
+    #[arg(
+        long,
+        help = "ERL maximum average cost (upper bound)",
+        default_value = "50.0",
+        env = "ERL_MAX_AVG_COST"
+    )]
+    pub erl_max_avg_cost: f64,
+
+    #[arg(
+        long,
+        help = "ERL CUBIC congestion control C parameter",
+        default_value = "0.4",
+        env = "ERL_CUBIC_C"
+    )]
+    pub erl_cubic_c: f64,
+
+    #[arg(
+        long,
+        help = "ERL CUBIC beta (multiplicative decrease factor for recovery)",
+        default_value = "1.3",
+        env = "ERL_CUBIC_BETA"
+    )]
+    pub erl_cubic_beta: f64,
+
+    #[arg(
+        long,
+        help = "ERL CUBIC slow start factor",
+        default_value = "1.1",
+        env = "ERL_CUBIC_SLOW_START_FACTOR"
+    )]
+    pub erl_cubic_slow_start_factor: f64,
+
+    #[arg(
+        long,
+        help = "ERL congestion avoidance alpha (smoothing factor, 0-1)",
+        default_value = "0.3",
+        env = "ERL_CONGESTION_ALPHA"
+    )]
+    pub erl_congestion_alpha: f64,
+
+    #[arg(
+        long,
+        help = "ERL congestion avoidance adjustment threshold",
+        default_value = "0.005",
+        env = "ERL_ADJUSTMENT_THRESHOLD"
+    )]
+    pub erl_adjustment_threshold: f64,
+
+    #[arg(
+        long,
+        help = "ERL congestion avoidance adjustment coefficient",
+        default_value = "0.6",
+        env = "ERL_ADJUSTMENT_COEFFICIENT"
+    )]
+    pub erl_adjustment_coefficient: f64,
 }

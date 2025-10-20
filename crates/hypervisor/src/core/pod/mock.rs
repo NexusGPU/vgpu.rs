@@ -350,11 +350,28 @@ impl TestLimiterCoordinator {
         let snapshot = Arc::new(MockDeviceSnapshotProvider::new());
         let time = Arc::new(MockTime::default());
 
+        // Create default ERL config for testing
+        let erl_config = crate::config::ErlConfig {
+            base_refill_rate: 100.0,
+            burst_duration: 1.0,
+            min_capacity: 10.0,
+            initial_avg_cost: 0.5,
+            min_avg_cost: 0.01,
+            max_avg_cost: 50.0,
+            cubic_c: 0.4,
+            cubic_beta: 1.3,
+            cubic_slow_start_factor: 1.1,
+            congestion_alpha: 0.3,
+            adjustment_threshold: 0.005,
+            adjustment_coefficient: 0.6,
+        };
+
         let config = super::coordinator::CoordinatorConfig {
             watch_interval,
             device_count,
             shared_memory_glob_pattern,
             base_path,
+            erl_config,
         };
 
         let coordinator = Self::new(

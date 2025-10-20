@@ -40,6 +40,8 @@ pub struct CoordinatorConfig {
     pub shared_memory_glob_pattern: String,
     /// Base path for shared memory operations
     pub base_path: PathBuf,
+    /// ERL (Elastic Rate Limiter) configuration
+    pub erl_config: crate::config::ErlConfig,
 }
 
 type ErlControllerMap = HashMap<
@@ -98,6 +100,8 @@ pub struct LimiterCoordinator<M, P, D, T> {
     shared_memory_glob_pattern: String,
     /// Base path for shared memory operations
     base_path: PathBuf,
+    /// ERL configuration
+    erl_config: crate::config::ErlConfig,
 }
 
 impl<M, P, D, T> LimiterCoordinator<M, P, D, T>
@@ -127,6 +131,7 @@ where
             device_count: config.device_count,
             shared_memory_glob_pattern: config.shared_memory_glob_pattern,
             base_path: config.base_path,
+            erl_config: config.erl_config,
         }
     }
 
@@ -227,6 +232,7 @@ where
         erl_controllers: Arc<RwLock<ErlControllers>>,
         cancellation_token: CancellationToken,
     ) -> JoinHandle<()> {
+        let erl_config = self.erl_config.clone();
         tokio::spawn(async move {
             let mut interval_timer = interval(watch_interval);
             let mut last_seen_timestamp = 0u64;
@@ -251,6 +257,7 @@ where
                     snapshot.as_ref(),
                     erl_controllers.as_ref(),
                     &mut last_seen_timestamp,
+                    &erl_config,
                 )
                 .await
                 {
@@ -269,6 +276,7 @@ where
         snapshot: &D,
         erl_controllers: &RwLock<ErlControllers>,
         last_seen_timestamp: &mut u64,
+        erl_config: &crate::config::ErlConfig,
     ) -> Result<()> {
         let pods_for_device = pod_state.get_pods_using_device(device_idx);
 
@@ -306,6 +314,7 @@ where
                 &device_config,
                 &device_snapshot,
                 erl_controllers,
+                erl_config,
             )
             .await
             {
@@ -334,6 +343,7 @@ where
             self.snapshot.as_ref(),
             self.erl_controllers.as_ref(),
             last_seen_timestamp,
+            &self.erl_config,
         )
         .await
     }
@@ -345,6 +355,7 @@ where
         device_config: &DeviceConfig,
         device_snapshot: &DeviceSnapshot,
         erl_controllers: &RwLock<ErlControllers>,
+        erl_config: &crate::config::ErlConfig,
     ) -> Result<()> {
         let pod_path = pod_state.pod_path(pod_identifier);
         let handle =
@@ -386,6 +397,7 @@ where
                     &pod_utilization,
                     pod_memory,
                     erl_controllers,
+                    erl_config,
                 )
                 .await
             }
@@ -440,6 +452,10 @@ where
     }
 
     /// V2: Update ERL controller with utilization feedback
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Required parameters for ERL controller update"
+    )]
     async fn update_v2_state(
         handle: Arc<SharedMemoryHandle>,
         pod_identifier: &PodIdentifier,
@@ -448,6 +464,7 @@ where
         pod_utilization: &super::utilization::PodUtilization,
         pod_memory: u64,
         erl_controllers: &RwLock<ErlControllers>,
+        erl_config: &crate::config::ErlConfig,
     ) {
         let key = (pod_identifier.clone(), device_config.device_idx);
 
@@ -469,17 +486,19 @@ where
                 );
             }
 
-            let mut ctrl = HypervisorUtilizationController::new(erl_adapter, target_utilization);
+            // Create controller with ERL configuration
+            let erl_dynamic_config: erl::ErlDynamicConfig = erl_config.into();
+            let mut ctrl = HypervisorUtilizationController::new_with_config(
+                erl_adapter,
+                target_utilization,
+                &erl_dynamic_config,
+            );
 
-            // Token bucket parameters
+            // Token bucket parameters from ERL configuration
             // Design: refill_rate scales with target to provide proportional throughput
             //         capacity provides fixed burst duration for fairness
-            const BASE_REFILL_RATE: f64 = 100.0;   // Base tokens/sec, scaled by target_utilization
-            const BURST_DURATION: f64 = 1.0;       // Fixed 1 second burst capability for all Pods
-            const MIN_CAPACITY: f64 = 10.0;        // Minimum burst capacity
-
-            let refill_rate = BASE_REFILL_RATE * target_utilization;
-            let capacity = (refill_rate * BURST_DURATION).max(MIN_CAPACITY);
+            let refill_rate = erl_config.base_refill_rate * target_utilization;
+            let capacity = (refill_rate * erl_config.burst_duration).max(erl_config.min_capacity);
 
             if let Err(e) = ctrl.initialize_device_quota(&device_index, capacity, refill_rate) {
                 tracing::error!(
@@ -496,7 +515,7 @@ where
                     target_utilization = target_utilization,
                     capacity = capacity,
                     refill_rate = refill_rate,
-                    burst_duration = BURST_DURATION,
+                    burst_duration = erl_config.burst_duration,
                     "Initialized ERL controller with scaled refill_rate"
                 );
             }

@@ -64,6 +64,43 @@ where
         }
     }
 
+    /// Create new utilization controller with custom ERL configuration
+    pub fn new_with_config(
+        storage: S,
+        target_utilization: f64,
+        config: &crate::ErlDynamicConfig,
+    ) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+
+        let cubic_params = CubicParams {
+            c: config.cubic_c,
+            beta: config.cubic_beta,
+            slow_start_factor: config.cubic_slow_start_factor,
+            min_avg_cost: config.min_avg_cost,
+            max_avg_cost: config.max_avg_cost,
+            conservative_mode: true, // Keep conservative mode enabled
+        };
+
+        Self {
+            storage,
+            congestion_controller: WorkloadAwareCubicController::with_config(
+                config.initial_avg_cost,
+                cubic_params,
+                now,
+                Box::new(PowerWorkloadCalculator::default()),
+                config.congestion_alpha,
+                config.adjustment_threshold,
+                config.adjustment_coefficient,
+            ),
+            target_utilization,
+            last_update_time: now,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
     /// Create new utilization controller with custom CUBIC parameters
     pub fn with_custom_params(
         storage: S,

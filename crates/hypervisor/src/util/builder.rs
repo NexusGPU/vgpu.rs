@@ -87,6 +87,8 @@ impl ApplicationBuilder {
         let snapshot = Arc::new(NvmlDeviceSampler::init()?);
         let time = Arc::new(SystemClock::new());
 
+        let erl_config = crate::config::ErlConfig::from(&self.daemon_args);
+
         let config = CoordinatorConfig {
             watch_interval: Duration::from_millis(70),
             device_count: gpu_system.device_count,
@@ -94,8 +96,8 @@ impl ApplicationBuilder {
                 "{}/*/*",
                 self.daemon_args.shared_memory_base_path.to_string_lossy(),
             ),
-
             base_path: shm_base_path,
+            erl_config,
         };
 
         let limiter_coordinator = Arc::new(LimiterCoordinator::new(

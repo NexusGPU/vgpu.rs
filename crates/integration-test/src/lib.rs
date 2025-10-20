@@ -296,11 +296,28 @@ pub async fn mock_coordinator(
     let time = Arc::new(SystemClock::new());
 
     // Create coordinator with mock dependencies
+    // Create default ERL config for testing
+    let erl_config = hypervisor::config::ErlConfig {
+        base_refill_rate: 100.0,
+        burst_duration: 1.0,
+        min_capacity: 10.0,
+        initial_avg_cost: 0.5,
+        min_avg_cost: 0.01,
+        max_avg_cost: 50.0,
+        cubic_c: 0.4,
+        cubic_beta: 1.3,
+        cubic_slow_start_factor: 1.1,
+        congestion_alpha: 0.3,
+        adjustment_threshold: 0.005,
+        adjustment_coefficient: 0.6,
+    };
+
     let config = CoordinatorConfig {
         watch_interval: Duration::from_millis(50), // Fast monitoring for tests
         device_count: 1,                           // Single GPU
         shared_memory_glob_pattern: format!("{test_shm_id}*"),
         base_path,
+        erl_config,
     };
 
     let coordinator = Arc::new(LimiterCoordinator::new(

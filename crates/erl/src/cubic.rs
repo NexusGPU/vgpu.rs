@@ -61,6 +61,12 @@ pub struct WorkloadAwareCubicController {
     workload_calculator: Box<dyn WorkloadCalculator>,
     /// Cost tracker (used to correct feedback)
     cost_tracker: CostTracker,
+    /// Congestion avoidance alpha (smoothing factor)
+    congestion_alpha: f64,
+    /// Adjustment threshold
+    adjustment_threshold: f64,
+    /// Adjustment coefficient
+    adjustment_coefficient: f64,
 }
 
 impl WorkloadAwareCubicController {
@@ -93,6 +99,9 @@ impl WorkloadAwareCubicController {
             just_recovered: false,
             workload_calculator,
             cost_tracker: CostTracker::with_defaults(),
+            congestion_alpha: 0.3, // Default values
+            adjustment_threshold: 0.005,
+            adjustment_coefficient: 0.6,
         }
     }
 
@@ -108,6 +117,37 @@ impl WorkloadAwareCubicController {
             current_time,
             workload_calculator,
         )
+    }
+
+    /// Create CUBIC controller with custom configuration
+    pub fn with_config(
+        initial_avg_cost: f64,
+        params: CubicParams,
+        current_time: f64,
+        workload_calculator: Box<dyn WorkloadCalculator>,
+        congestion_alpha: f64,
+        adjustment_threshold: f64,
+        adjustment_coefficient: f64,
+    ) -> Self {
+        let state_context = StateMachineContext::new(initial_avg_cost * 2.0, current_time);
+        let min_cost = params.min_avg_cost;
+        let max_cost = params.max_avg_cost;
+
+        Self {
+            params,
+            state_context,
+            avg_cost: initial_avg_cost.clamp(min_cost, max_cost),
+            w_max: initial_avg_cost,
+            congestion_epoch: current_time,
+            last_update_time: current_time,
+            conservative_cost: initial_avg_cost,
+            just_recovered: false,
+            workload_calculator,
+            cost_tracker: CostTracker::with_defaults(),
+            congestion_alpha,
+            adjustment_threshold,
+            adjustment_coefficient,
+        }
     }
 
     /// Calculate dynamic cost for specific workload
@@ -201,13 +241,13 @@ impl WorkloadAwareCubicController {
             cubic_cost
         };
 
-        // Increased alpha for faster response to utilization changes
-        let alpha = 0.3;
+        // Use configured alpha for faster response to utilization changes
+        let alpha = self.congestion_alpha;
         self.avg_cost = self.avg_cost * (1.0 - alpha) + target_cost * alpha;
 
         // More aggressive adjustment when far from target
-        if utilization_error.abs() > 0.005 {
-            let adjustment = 1.0 + utilization_error * 0.6;
+        if utilization_error.abs() > self.adjustment_threshold {
+            let adjustment = 1.0 + utilization_error * self.adjustment_coefficient;
             self.avg_cost *= adjustment;
         }
 
