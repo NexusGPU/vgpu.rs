@@ -33,7 +33,7 @@ impl DeviceSnapshotProvider for NvmlDeviceSampler {
         device_idx: u32,
         last_seen_ts: u64,
     ) -> Result<DeviceSnapshot, Self::Error> {
-        let device: nvml_wrapper::Device<'_> = self
+        let device = self
             .nvml
             .device_by_index(device_idx)
             .context("Failed to get device by index")?;
@@ -44,8 +44,10 @@ impl DeviceSnapshotProvider for NvmlDeviceSampler {
             timestamp: last_seen_ts,
         };
 
-        // Get utilization data from last seen timestamp
-        let process_utilization_samples = match device.process_utilization_stats(last_seen_ts) {
+        // Get utilization data from current time - 1 second
+        let current_time = SystemClock.now_unix_secs();
+        let query_time = current_time.saturating_sub(1);
+        let process_utilization_samples = match device.process_utilization_stats(query_time) {
             Ok(process_utilization_samples) => process_utilization_samples,
             Err(NvmlError::NotFound) => {
                 vec![]
