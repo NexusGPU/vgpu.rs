@@ -261,8 +261,21 @@ impl WorkloadAwareCubicController {
                 decrease_factor = decrease_factor,
                 "Congestion avoidance: aggressive decrease due to low utilization"
             );
+        } else if utilization_error < 0.0 {
+            // Utilization below target but not far: use proportional decrease
+            // Don't use CUBIC growth function when under-utilizing
+            // Apply more aggressive adjustment to help system converge faster
+            let adjustment = 1.0 + utilization_error * (self.adjustment_coefficient * 2.0);
+            self.avg_cost *= adjustment;
+
+            tracing::debug!(
+                avg_cost = self.avg_cost,
+                utilization_error = utilization_error,
+                adjustment = adjustment,
+                "Congestion avoidance: proportional decrease for below-target utilization"
+            );
         } else {
-            // Normal congestion avoidance: follow cubic function
+            // Utilization at or above target: follow CUBIC growth
             let cubic_cost = self.cubic_function(current_time);
 
             let target_cost = if self.params.conservative_mode {
@@ -287,7 +300,7 @@ impl WorkloadAwareCubicController {
                 avg_cost = self.avg_cost,
                 cubic_cost = cubic_cost,
                 utilization_error = utilization_error,
-                "Congestion avoidance update"
+                "Congestion avoidance: CUBIC growth for at/above-target utilization"
             );
         }
 
