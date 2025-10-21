@@ -53,9 +53,6 @@ impl CongestionState {
                 if utilization_error > 0.01 {
                     // Utilization significantly exceeds target (1% or more), enter recovery phase
                     CongestionState::Recovery
-                } else if utilization_error < -0.2 && avg_cost > slow_start_threshold {
-                    // Utilization is far below target and cost is high, return to slow start for aggressive reduction
-                    CongestionState::SlowStart
                 } else {
                     // Continue congestion avoidance
                     CongestionState::CongestionAvoidance

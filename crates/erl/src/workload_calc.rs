@@ -42,14 +42,14 @@ impl Default for PowerWorkloadCalculator {
     fn default() -> Self {
         Self {
             // Modern ML kernels often launch 100K+ threads
-            // Setting reference to 16K provides better scaling for large workloads
-            reference_threads: 16384,
+            // Setting reference to 64K provides better scaling for large workloads
+            reference_threads: 65536,
             power: 0.6,
-            min_factor: 0.1,
-            // Reduced max_factor to limit cost variability
-            // With base_avg_cost in [0.1, 10.0] and max_factor=4.0,
-            // dynamic_cost ranges [0.04, 40.0] which is sufficient for differentiation
-            max_factor: 4.0,
+            min_factor: 0.2,
+            // Reduced max_factor to limit cost variability for fairness
+            // With max_factor=2.5 and min_factor=0.2, ratio is 12.5x (was 40x)
+            // This ensures large kernels don't get starved while still differentiating workloads
+            max_factor: 2.5,
         }
     }
 }

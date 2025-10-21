@@ -84,7 +84,7 @@ impl WorkloadAwareCubicController {
         current_time: f64,
         workload_calculator: Box<dyn WorkloadCalculator>,
     ) -> Self {
-        let state_context = StateMachineContext::new(initial_avg_cost * 2.0, current_time);
+        let state_context = StateMachineContext::new(initial_avg_cost * 10.0, current_time);
         let min_cost = params.min_avg_cost;
         let max_cost = params.max_avg_cost;
 
@@ -129,7 +129,7 @@ impl WorkloadAwareCubicController {
         adjustment_threshold: f64,
         adjustment_coefficient: f64,
     ) -> Self {
-        let state_context = StateMachineContext::new(initial_avg_cost * 2.0, current_time);
+        let state_context = StateMachineContext::new(initial_avg_cost * 10.0, current_time);
         let min_cost = params.min_avg_cost;
         let max_cost = params.max_avg_cost;
 
@@ -207,60 +207,93 @@ impl WorkloadAwareCubicController {
     fn slow_start_update(&mut self, utilization_error: f64) {
         if utilization_error < 0.0 {
             // More aggressive decrease when utilization is below target
-            let decrease_factor = if utilization_error < -0.1 {
-                // Very low utilization, decrease more aggressively
+            let decrease_factor = if utilization_error < -0.4 {
+                // Zero or near-zero utilization: extremely aggressive decrease
+                2.0
+            } else if utilization_error < -0.2 {
+                // Very low utilization: aggressive decrease
                 1.5
+            } else if utilization_error < -0.1 {
+                // Low utilization: moderate decrease
+                1.3
             } else {
+                // Slightly below target: gentle decrease
                 self.params.slow_start_factor
             };
             self.avg_cost /= decrease_factor;
+
+            tracing::debug!(
+                avg_cost = self.avg_cost,
+                utilization_error = utilization_error,
+                decrease_factor = decrease_factor,
+                "Slow start: decreasing cost"
+            );
         } else {
             self.avg_cost *= 1.0 + utilization_error * 0.2;
+            tracing::debug!(
+                avg_cost = self.avg_cost,
+                utilization_error = utilization_error,
+                "Slow start: increasing cost"
+            );
         }
 
         self.avg_cost = self
             .avg_cost
             .clamp(self.params.min_avg_cost, self.params.max_avg_cost);
-
-        tracing::debug!(
-            avg_cost = self.avg_cost,
-            utilization_error = utilization_error,
-            "Slow start update"
-        );
     }
 
     /// Congestion avoidance update
     fn congestion_avoidance_update(&mut self, current_time: f64, utilization_error: f64) {
-        let cubic_cost = self.cubic_function(current_time);
+        // When utilization is far below target, aggressively decrease cost
+        // instead of following cubic function (which grows over time)
+        if utilization_error < -0.2 {
+            // Direct multiplicative decrease, similar to slow start
+            let decrease_factor = if utilization_error < -0.3 {
+                1.3 // Very low utilization, decrease aggressively
+            } else {
+                1.15 // Moderately low, decrease moderately
+            };
+            self.avg_cost /= decrease_factor;
 
-        let target_cost = if self.params.conservative_mode {
-            let time_scale = 0.5;
-            let conservative_cost = self.conservative_function(current_time, time_scale);
-            cubic_cost.max(conservative_cost)
+            tracing::debug!(
+                avg_cost = self.avg_cost,
+                utilization_error = utilization_error,
+                decrease_factor = decrease_factor,
+                "Congestion avoidance: aggressive decrease due to low utilization"
+            );
         } else {
-            cubic_cost
-        };
+            // Normal congestion avoidance: follow cubic function
+            let cubic_cost = self.cubic_function(current_time);
 
-        // Use configured alpha for faster response to utilization changes
-        let alpha = self.congestion_alpha;
-        self.avg_cost = self.avg_cost * (1.0 - alpha) + target_cost * alpha;
+            let target_cost = if self.params.conservative_mode {
+                let time_scale = 0.5;
+                let conservative_cost = self.conservative_function(current_time, time_scale);
+                cubic_cost.max(conservative_cost)
+            } else {
+                cubic_cost
+            };
 
-        // More aggressive adjustment when far from target
-        if utilization_error.abs() > self.adjustment_threshold {
-            let adjustment = 1.0 + utilization_error * self.adjustment_coefficient;
-            self.avg_cost *= adjustment;
+            // Use configured alpha for faster response to utilization changes
+            let alpha = self.congestion_alpha;
+            self.avg_cost = self.avg_cost * (1.0 - alpha) + target_cost * alpha;
+
+            // More aggressive adjustment when far from target
+            if utilization_error.abs() > self.adjustment_threshold {
+                let adjustment = 1.0 + utilization_error * self.adjustment_coefficient;
+                self.avg_cost *= adjustment;
+            }
+
+            tracing::debug!(
+                avg_cost = self.avg_cost,
+                cubic_cost = cubic_cost,
+                utilization_error = utilization_error,
+                "Congestion avoidance update"
+            );
         }
 
         self.avg_cost = self
             .avg_cost
             .clamp(self.params.min_avg_cost, self.params.max_avg_cost);
-
-        tracing::debug!(
-            avg_cost = self.avg_cost,
-            cubic_cost = cubic_cost,
-            utilization_error = utilization_error,
-            "Congestion avoidance update"
-        );
     }
 
     /// Recovery phase update
