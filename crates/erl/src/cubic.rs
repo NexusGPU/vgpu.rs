@@ -29,10 +29,10 @@ impl Default for CubicParams {
     fn default() -> Self {
         Self {
             c: 0.4,                  // Empirical value, balance convergence speed and stability
-            beta: 1.3, // Quickly increase avg_cost (reduce launch rate) during recovery
-            slow_start_factor: 1.1, // Multiplicative factor for slow start
-            min_avg_cost: 0.01, // Allow very high throughput for workloads with small kernels
-            max_avg_cost: 50.0, // Increased max to allow stronger throttling if needed
+            beta: 1.5, // Quickly increase avg_cost (reduce launch rate) during recovery
+            slow_start_factor: 1.2, // Multiplicative factor for slow start
+            min_avg_cost: 0.001, // Allow very high throughput for workloads with small kernels
+            max_avg_cost: 10.0, // Lower max to prevent excessive throttling
             conservative_mode: true, // Enable conservative mode
         }
     }
@@ -99,9 +99,9 @@ impl WorkloadAwareCubicController {
             just_recovered: false,
             workload_calculator,
             cost_tracker: CostTracker::with_defaults(),
-            congestion_alpha: 0.3, // Default values
-            adjustment_threshold: 0.005,
-            adjustment_coefficient: 0.6,
+            congestion_alpha: 0.5, // Default values
+            adjustment_threshold: 0.01,
+            adjustment_coefficient: 1.0,
         }
     }
 

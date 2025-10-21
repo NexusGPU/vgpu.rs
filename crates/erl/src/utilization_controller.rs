@@ -49,7 +49,7 @@ where
 
         // Start with a lower initial avg_cost for faster convergence
         // This will be quickly adjusted up by CUBIC if utilization exceeds target
-        let initial_avg_cost = 0.5;
+        let initial_avg_cost = 0.05;
 
         Self {
             storage,
