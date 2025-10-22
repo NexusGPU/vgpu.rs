@@ -47,6 +47,12 @@ where
 
     /// Save current average cost (only used by hypervisor)
     fn save_avg_cost(&self, key: &K, avg_cost: f64) -> Result<(), ErlError>;
+
+    /// Increment kernel count (called by limiter on each successful acquire)
+    fn increment_kernel_count(&self, key: &K) -> Result<(), ErlError>;
+
+    /// Load and reset kernel count (called by hypervisor periodically)
+    fn load_and_reset_kernel_count(&self, key: &K) -> Result<u64, ErlError>;
 }
 
 /// Token manager trait (limiter process专用）
@@ -93,24 +99,8 @@ where
     /// Associated storage type
     type Storage: SharedStorage<K>;
 
-    /// Update resource utilization feedback
-    ///
-    /// Hypervisor periodically collects GPU utilization and updates CUBIC algorithm state
-    ///
-    /// # Arguments
-    ///
-    /// * `utilization` - Current resource utilization (0.0 - 1.0)
-    fn update_utilization(&mut self, utilization: f64) -> Result<(), ErlError>;
-
     /// Get target utilization
     fn target_utilization(&self) -> f64;
-
-    /// Set target utilization
-    ///
-    /// # Arguments
-    ///
-    /// * `target` - New target utilization (0.0 - 1.0)
-    fn set_target_utilization(&mut self, target: f64) -> Result<(), ErlError>;
 
     /// Initialize device quota (called by hypervisor at startup)
     ///
@@ -125,9 +115,6 @@ where
         capacity: f64,
         refill_rate: f64,
     ) -> Result<(), ErlError>;
-
-    /// Get all device status overview (for monitoring)
-    fn get_devices_overview(&self) -> Result<Vec<(K, f64, f64, f64)>, ErlError>;
 }
 
 /// Congestion control algorithm trait

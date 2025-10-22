@@ -1,44 +1,58 @@
-//! lastic Rate Limiter, ERL
+//! Elastic Rate Limiter (ERL) - Simplified Version
+//!
+//! A simple, robust GPU rate limiting system with per-Pod control.
+//!
+//! Key simplifications:
+//! - All kernels consume fixed 1.0 token (no workload prediction)
+//! - Simple PI controller (2 parameters: Kp, Ki)
+//! - Per-Pod independent control
+//! - Statistical utilization estimation (no complex event tracking)
 
 mod traits;
 
-mod cost_tracker;
-mod cubic;
-mod state;
-mod workload_calc;
-
+mod pi_controller;
 mod token_manager;
 mod utilization_controller;
 
 #[cfg(test)]
 mod fuzz_tests;
 
-pub use cost_tracker::*;
-pub use cubic::{CubicParams, WorkloadAwareCubicController};
+pub use pi_controller::{PIController, PIParams};
 pub use token_manager::*;
 pub use traits::*;
 pub use utilization_controller::*;
-pub use workload_calc::*;
 
-/// ERL dynamic configuration (subset of parameters that can be adjusted at runtime)
+/// Simplified ERL configuration
 #[derive(Debug, Clone)]
-pub struct ErlDynamicConfig {
-    /// Initial average cost
-    pub initial_avg_cost: f64,
-    /// Minimum average cost
-    pub min_avg_cost: f64,
-    /// Maximum average cost
-    pub max_avg_cost: f64,
-    /// CUBIC C parameter
-    pub cubic_c: f64,
-    /// CUBIC beta
-    pub cubic_beta: f64,
-    /// CUBIC slow start factor
-    pub cubic_slow_start_factor: f64,
-    /// Congestion avoidance alpha
-    pub congestion_alpha: f64,
-    /// Adjustment threshold
-    pub adjustment_threshold: f64,
-    /// Adjustment coefficient
-    pub adjustment_coefficient: f64,
+pub struct ErlConfig {
+    /// PI controller proportional gain
+    pub kp: f64,
+    /// PI controller integral gain
+    pub ki: f64,
+    /// Minimum refill rate
+    pub min_rate: f64,
+    /// Maximum refill rate
+    pub max_rate: f64,
+}
+
+impl Default for ErlConfig {
+    fn default() -> Self {
+        Self {
+            kp: 0.5,
+            ki: 0.1,
+            min_rate: 0.1,
+            max_rate: 100.0,
+        }
+    }
+}
+
+impl From<ErlConfig> for PIParams {
+    fn from(config: ErlConfig) -> Self {
+        PIParams {
+            kp: config.kp,
+            ki: config.ki,
+            min_rate: config.min_rate,
+            max_rate: config.max_rate,
+        }
+    }
 }

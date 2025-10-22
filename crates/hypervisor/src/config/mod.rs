@@ -51,22 +51,6 @@ impl From<&daemon::DaemonArgs> for ErlConfig {
     }
 }
 
-impl From<&ErlConfig> for erl::ErlDynamicConfig {
-    fn from(config: &ErlConfig) -> Self {
-        Self {
-            initial_avg_cost: config.initial_avg_cost,
-            min_avg_cost: config.min_avg_cost,
-            max_avg_cost: config.max_avg_cost,
-            cubic_c: config.cubic_c,
-            cubic_beta: config.cubic_beta,
-            cubic_slow_start_factor: config.cubic_slow_start_factor,
-            congestion_alpha: config.congestion_alpha,
-            adjustment_threshold: config.adjustment_threshold,
-            adjustment_coefficient: config.adjustment_coefficient,
-        }
-    }
-}
-
 pub use cli::*;
 pub use daemon::*;
 pub use gpu::*;
