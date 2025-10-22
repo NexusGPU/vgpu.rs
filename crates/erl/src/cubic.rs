@@ -29,9 +29,9 @@ impl Default for CubicParams {
     fn default() -> Self {
         Self {
             c: 0.4,                  // Empirical value, balance convergence speed and stability
-            beta: 1.5, // Quickly increase avg_cost (reduce launch rate) during recovery
+            beta: 1.3, // Moderate increase in avg_cost during recovery (reduced from 1.5)
             slow_start_factor: 1.2, // Multiplicative factor for slow start
-            min_avg_cost: 0.001, // Allow very high throughput for workloads with small kernels
+            min_avg_cost: 0.005, // Prevent avg_cost from dropping too low (increased from 0.001)
             max_avg_cost: 10.0, // Lower max to prevent excessive throttling
             conservative_mode: true, // Enable conservative mode
         }
@@ -206,19 +206,19 @@ impl WorkloadAwareCubicController {
     /// Slow start update
     fn slow_start_update(&mut self, utilization_error: f64) {
         if utilization_error < 0.0 {
-            // More aggressive decrease when utilization is below target
+            // Reduce decrease aggressiveness to prevent rapid drops to min_avg_cost
             let decrease_factor = if utilization_error < -0.4 {
-                // Zero or near-zero utilization: extremely aggressive decrease
-                2.0
+                // Zero or near-zero utilization: moderate decrease (reduced from 2.0)
+                1.4
             } else if utilization_error < -0.2 {
-                // Very low utilization: aggressive decrease
-                1.5
+                // Very low utilization: gentle decrease (reduced from 1.5)
+                1.25
             } else if utilization_error < -0.1 {
-                // Low utilization: moderate decrease
-                1.3
+                // Low utilization: mild decrease (reduced from 1.3)
+                1.15
             } else {
-                // Slightly below target: gentle decrease
-                self.params.slow_start_factor
+                // Slightly below target: very gentle decrease
+                1.05
             };
             self.avg_cost /= decrease_factor;
 
@@ -323,9 +323,11 @@ impl WorkloadAwareCubicController {
                 "Entered recovery phase, multiplicative decrease applied"
             );
         } else if utilization_error > 0.01 {
-            self.avg_cost *= 1.2;
+            // Reduce growth rate in recovery to prevent overshooting (reduced from 1.2)
+            self.avg_cost *= 1.1;
         } else if utilization_error < -0.01 {
-            self.avg_cost *= 0.9;
+            // Slightly faster decrease when under-utilized (reduced from 0.9)
+            self.avg_cost *= 0.92;
         }
 
         self.avg_cost = self
