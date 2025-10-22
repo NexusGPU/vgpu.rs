@@ -38,8 +38,9 @@ impl CongestionState {
     ) -> Self {
         match self {
             CongestionState::SlowStart => {
-                if utilization_error > 0.0 {
-                    // Utilization exceeds target, enter recovery phase
+                if utilization_error > 0.05 {
+                    // Utilization significantly exceeds target (5% or more), enter recovery phase
+                    // Use higher threshold than CongestionAvoidance to prevent premature recovery
                     CongestionState::Recovery
                 } else if avg_cost >= slow_start_threshold {
                     // Reached slow start threshold, enter congestion avoidance phase
@@ -196,7 +197,7 @@ mod tests {
         // The initial state should be slow start
         assert_eq!(context.current_state, CongestionState::SlowStart);
 
-        // Utilization is too high, should transition to recovery state
+        // Utilization is significantly too high (10% over target), should transition to recovery state
         let changed = context.update(0.1, 1.5, initial_time + 1.0);
         assert!(changed);
         assert_eq!(context.current_state, CongestionState::Recovery);
@@ -254,5 +255,26 @@ mod tests {
         // Second update, should have time accumulated
         context.update(0.1, 3.0, 102.0);
         assert!(context.time_in_state > 0.0); // Now should have time
+    }
+
+    #[test]
+    fn slow_start_deadband_prevents_premature_recovery() {
+        let initial_time = 100.0;
+        let mut context = StateMachineContext::new(2.0, initial_time);
+
+        // Small positive error (1%) should NOT trigger recovery from SlowStart
+        let changed = context.update(0.01, 0.5, initial_time + 1.0);
+        assert!(!changed);
+        assert_eq!(context.current_state, CongestionState::SlowStart);
+
+        // Moderate positive error (3%) should still NOT trigger recovery
+        let changed = context.update(0.03, 0.5, initial_time + 2.0);
+        assert!(!changed);
+        assert_eq!(context.current_state, CongestionState::SlowStart);
+
+        // Larger positive error (6%) SHOULD trigger recovery
+        let changed = context.update(0.06, 0.5, initial_time + 3.0);
+        assert!(changed);
+        assert_eq!(context.current_state, CongestionState::Recovery);
     }
 }
