@@ -21,6 +21,12 @@ pub struct ShmDeviceInfo {
     pub pod_memory_used: u64,
     pub up_limit: u32,
     pub is_active: bool,
+    // V2 ERL fields (None for V1)
+    pub erl_avg_cost: Option<f64>,
+    pub erl_token_capacity: Option<f64>,
+    pub erl_token_refill_rate: Option<f64>,
+    pub erl_current_tokens: Option<f64>,
+    pub erl_last_token_update: Option<f64>,
 }
 
 #[derive(Debug, Clone)]

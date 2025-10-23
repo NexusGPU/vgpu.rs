@@ -33,9 +33,10 @@ use crate::GLOBAL_LIMITER;
 macro_rules! check_and_alloc {
     ($request_size:expr, $alloc_name:expr, $alloc_fn:expr) => {{
         let device_result = with_device!(|limiter: &crate::limiter::Limiter, device_idx: usize| {
+            tracing::debug!(device_idx = device_idx, "Checking pod memory usage");
             (limiter.get_pod_memory_usage(device_idx), device_idx)
         });
-
+        tracing::debug!(device_result = ?device_result);
         match device_result {
             Ok((result, device_idx)) => {
                 match result {
