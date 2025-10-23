@@ -99,6 +99,18 @@ fn copy_dynamic_lib_files() -> Result<()> {
                 format!("Failed to copy {} to {}: {e}", path.display(), target_path,)
             })?;
 
+            // Create symbolic link for every .so file (filename -> filename.1)
+            let symlink_path = format!("{}.1", target_path);
+            // Remove existing symlink if it exists
+            if fs::metadata(&symlink_path).is_ok() {
+                fs::remove_file(&symlink_path)
+                    .map_err(|e| format!("Failed to remove existing symlink {}: {e}", symlink_path))?;
+            }
+            symlink(&target_path, &symlink_path).map_err(|e| {
+                format!("Failed to create symlink from {} to {}: {e}", target_path, symlink_path)
+            })?;
+            log_debug(&format!("Created symlink from {} to {}", target_path, symlink_path));
+
             copied_count += 1;
         }
     }
