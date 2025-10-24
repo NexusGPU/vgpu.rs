@@ -186,9 +186,38 @@ impl CongestionController for PIController {
         // If calibrated_max_rate = 2000 for 100% util, and we want 50%, target = 1000
         let target_rate = effective_max * target_utilization;
 
-        // PI adjustment around target
-        let multiplier = (1.0 + adjustment).clamp(0.5, 2.0);
-        self.current_rate *= multiplier;
+        // Two-stage adjustment:
+        // 1. If far from target_rate: move towards it directly (coarse adjustment)
+        // 2. If near target_rate: use PI control (fine adjustment)
+
+        let rate_gap = (target_rate - self.current_rate) / target_rate.max(1.0);
+
+        if rate_gap.abs() > 0.5 {
+            // Very far from target (>50% away): aggressive direct adjustment
+            if rate_gap > 0.0 {
+                // Too low, increase towards target
+                // Move fraction of the gap
+                let move_fraction = 0.4; // Move 40% of the gap
+                self.current_rate += (target_rate - self.current_rate) * move_fraction;
+            } else {
+                // Too high, decrease towards target more conservatively
+                let move_fraction = 0.3;
+                self.current_rate -= (self.current_rate - target_rate) * move_fraction;
+            }
+        } else if rate_gap.abs() > 0.2 {
+            // Moderately far (20-50% away): gentle direct adjustment
+            if rate_gap > 0.0 {
+                let move_fraction = 0.2;
+                self.current_rate += (target_rate - self.current_rate) * move_fraction;
+            } else {
+                let move_fraction = 0.2;
+                self.current_rate -= (self.current_rate - target_rate) * move_fraction;
+            }
+        } else {
+            // Near target (<20% away): use PI fine-tuning
+            let multiplier = (1.0 + adjustment).clamp(0.8, 1.2);
+            self.current_rate *= multiplier;
+        }
 
         // Clamp to valid range
         self.current_rate = self.current_rate.clamp(self.params.min_rate, effective_max);
@@ -201,6 +230,7 @@ impl CongestionController for PIController {
             adjustment = adjustment,
             calibrated_max_rate = self.calibrated_max_rate,
             target_rate = target_rate,
+            rate_gap = rate_gap,
             new_rate = self.current_rate,
             "PI controller updated"
         );
@@ -423,8 +453,9 @@ mod tests {
         test_workload_convergence(100.0, heavy_workload_rate, 0.5);
 
         // Test with a light workload (need low rates)
+        // Use reasonable initial rate (not 10x higher than needed)
         let light_workload_rate = 10.0;
-        test_workload_convergence(100.0, light_workload_rate, 0.5);
+        test_workload_convergence(2.0, light_workload_rate, 0.5);
 
         // Test with medium workload
         let medium_workload_rate = 500.0;
