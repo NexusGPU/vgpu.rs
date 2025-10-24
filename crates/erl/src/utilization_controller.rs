@@ -20,6 +20,10 @@ struct PodControllerState<K> {
     last_kernel_count: u64,
     /// Device key this Pod is using
     device_key: K,
+    /// Exponential moving average of estimated utilization (for smoothing)
+    utilization_ema: f64,
+    /// EMA smoothing factor (0.0-1.0, higher = more responsive)
+    ema_alpha: f64,
 }
 
 /// Hypervisor utilization controller with per-Pod control
@@ -103,6 +107,8 @@ where
                 controller,
                 last_kernel_count: 0,
                 device_key,
+                utilization_ema: target_utilization, // Initialize to target
+                ema_alpha: 0.3, // 30% new data, 70% history (smooth but responsive)
             },
         );
 
@@ -176,12 +182,19 @@ where
             if let Some(state) = self.pod_controllers.get_mut(&pod_name) {
                 // Estimate this Pod's utilization based on its kernel count ratio
                 let kernel_ratio = (kernel_count as f64) / (total_kernel_count as f64);
-                let estimated_utilization = global_utilization * kernel_ratio;
+                let raw_estimated_utilization = global_utilization * kernel_ratio;
 
-                // Update PI controller
+                // Apply exponential moving average for smoothing
+                // EMA(t) = alpha * new_value + (1 - alpha) * EMA(t-1)
+                state.utilization_ema = state.ema_alpha * raw_estimated_utilization
+                    + (1.0 - state.ema_alpha) * state.utilization_ema;
+
+                let smoothed_utilization = state.utilization_ema;
+
+                // Update PI controller with smoothed value
                 let new_rate = state
                     .controller
-                    .update(estimated_utilization, state.target_utilization, delta_time)
+                    .update(smoothed_utilization, state.target_utilization, delta_time)
                     .map_err(|e| {
                         error_stack::report!(ErlError::CongestionControlFailed {
                             reason: format!("PI controller update failed for {pod_name}: {e}")
@@ -195,7 +208,8 @@ where
                     pod_name = pod_name,
                     kernel_count = kernel_count,
                     kernel_ratio = kernel_ratio,
-                    estimated_utilization = estimated_utilization,
+                    raw_utilization = raw_estimated_utilization,
+                    smoothed_utilization = smoothed_utilization,
                     target_utilization = state.target_utilization,
                     new_rate = new_rate,
                     "Pod controller updated"

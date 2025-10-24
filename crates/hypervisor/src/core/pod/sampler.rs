@@ -50,7 +50,7 @@ impl DeviceSnapshotProvider for NvmlDeviceSampler {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap();
         let current_time_us = now.as_micros() as u64;
-        let query_time_us = current_time_us.saturating_sub(500_000); // 0.5 second = 500,000 μs
+        let query_time_us = current_time_us.saturating_sub(300_000); // 0.3 second = 300,000 μs
         let process_utilization_samples = match device.process_utilization_stats(query_time_us) {
             Ok(process_utilization_samples) => process_utilization_samples,
             Err(NvmlError::NotFound) => {
