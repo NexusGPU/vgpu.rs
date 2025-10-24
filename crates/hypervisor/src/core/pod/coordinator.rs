@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use anyhow::Context;
 use anyhow::Result;
 
-use erl::{HypervisorUtilizationController, UtilizationController, WorkloadAwareCubicController};
+use erl::{HypervisorUtilizationController, UtilizationController};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, interval_at, Instant};
 use tokio_util::sync::CancellationToken;
@@ -46,11 +46,7 @@ pub struct CoordinatorConfig {
 
 type ErlControllerMap = HashMap<
     (PodIdentifier, u32),
-    HypervisorUtilizationController<
-        usize,
-        ErlSharedMemoryAdapter<Arc<SharedMemoryHandle>>,
-        WorkloadAwareCubicController,
-    >,
+    HypervisorUtilizationController<usize, ErlSharedMemoryAdapter<Arc<SharedMemoryHandle>>>,
 >;
 
 /// Newtype wrapper for ERL controllers indexed by (PodIdentifier, device_idx)
@@ -486,19 +482,30 @@ where
                 );
             }
 
-            // Create controller with ERL configuration
-            let erl_dynamic_config: erl::ErlDynamicConfig = erl_config.into();
-            let mut ctrl = HypervisorUtilizationController::new_with_config(
-                erl_adapter,
-                target_utilization,
-                &erl_dynamic_config,
-            );
+            // Create controller with simplified PI-based ERL
+            let mut ctrl = HypervisorUtilizationController::new(erl_adapter);
 
             // Token bucket parameters from ERL configuration
             // Design: refill_rate scales with target to provide proportional throughput
             //         capacity provides fixed burst duration for fairness
             let refill_rate = erl_config.base_refill_rate * target_utilization;
             let capacity = (refill_rate * erl_config.burst_duration).max(erl_config.min_capacity);
+
+            // Register this pod with the controller
+            let pod_name = format!("{pod_identifier}");
+            if let Err(e) = ctrl.register_pod(
+                pod_name,
+                device_index,
+                target_utilization,
+                refill_rate,
+            ) {
+                tracing::error!(
+                    pod_identifier = %pod_identifier,
+                    device_index = device_index,
+                    error = %e,
+                    "Failed to register pod with ERL controller"
+                );
+            }
 
             if let Err(e) = ctrl.initialize_device_quota(&device_index, capacity, refill_rate) {
                 tracing::error!(
@@ -523,19 +530,21 @@ where
             ctrl
         });
 
-        // Update utilization feedback
+        // Update PI controller with global GPU utilization
         // Normalize: total_utilization is sum of (sm_util + codec_util) for all processes
         // Clamp to [0.0, 1.0] to handle edge cases where it might exceed 100
         let utilization_ratio = (pod_utilization.total_utilization as f64 / 100.0).clamp(0.0, 1.0);
 
-        if let Err(e) = controller.update_utilization(utilization_ratio) {
+        // Call update_control() which reads kernel counts from shared memory
+        // and updates per-Pod PI controllers
+        if let Err(e) = controller.update_control(utilization_ratio) {
             tracing::error!(
                 pod_identifier = %pod_identifier,
                 device_index = device_index,
                 raw_utilization = pod_utilization.total_utilization,
                 normalized_utilization = utilization_ratio,
                 error = %e,
-                "Failed to update ERL utilization"
+                "Failed to update ERL controller"
             );
         } else {
             debug!(
@@ -545,25 +554,7 @@ where
                 normalized_utilization = utilization_ratio,
                 memory = pod_memory,
                 target_utilization = controller.target_utilization(),
-                "V2: Updated ERL controller"
-            );
-        }
-
-        // Sync the updated avg_cost to shared memory so limiter can read it
-        if let Err(e) = controller.sync_avg_cost_to_devices(&[device_index]) {
-            tracing::error!(
-                pod_identifier = %pod_identifier,
-                device_index = device_index,
-                error = %e,
-                "Failed to sync avg_cost to device"
-            );
-        } else {
-            let avg_cost = controller.get_cubic_stats();
-            tracing::debug!(
-                pod_identifier = %pod_identifier,
-                device_index = device_index,
-                cost_stats = %avg_cost,
-                "Synced avg_cost to device shared memory"
+                "V2: Updated ERL controller with PI feedback"
             );
         }
     }

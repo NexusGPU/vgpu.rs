@@ -136,7 +136,7 @@ pub struct SharedDeviceInfoV1 {
     pub pod_memory_used: AtomicU64,
 }
 
-/// V2 device state with ERL support (uses token-based limiting)
+/// V2 device state with ERL support (uses token-based limiting with PI controller)
 #[repr(C)]
 #[derive(Debug)]
 pub struct SharedDeviceInfoV2 {
@@ -149,17 +149,18 @@ pub struct SharedDeviceInfoV2 {
     /// Current pod memory usage in bytes.
     pub pod_memory_used: AtomicU64,
 
-    // ERL (Elastic Rate Limiting) related fields
-    /// Current average cost from CUBIC congestion controller (as f64 bits)
-    pub erl_avg_cost: AtomicU64,
-    /// Token bucket capacity for this device
-    pub erl_token_capacity: AtomicU64,
+    // ERL (Elastic Rate Limiting) related fields - Simplified PI controller version
     /// Token bucket refill rate (tokens per second, as f64 bits)
+    /// Adjusted by hypervisor's PI controller for this Pod
     pub erl_token_refill_rate: AtomicU64,
+    /// Token bucket capacity for this Pod
+    pub erl_token_capacity: AtomicU64,
     /// Current tokens in bucket (as f64 bits)
     pub erl_current_tokens: AtomicU64,
     /// Last token update timestamp (as f64 bits)
     pub erl_last_token_update: AtomicU64,
+    /// Kernel launch count (incremented by limiter, reset by hypervisor)
+    pub erl_kernel_count: AtomicU64,
 }
 
 // Type alias for backward compatibility
@@ -232,11 +233,11 @@ impl SharedDeviceInfoV2 {
             mem_limit: AtomicU64::new(mem_limit),
             total_cuda_cores: AtomicU32::new(total_cuda_cores),
             pod_memory_used: AtomicU64::new(0),
-            erl_avg_cost: AtomicU64::new(1.0_f64.to_bits()),
+            erl_token_refill_rate: AtomicU64::new(10.0_f64.to_bits()), // Default 10 tokens/sec
             erl_token_capacity: AtomicU64::new(100.0_f64.to_bits()),
-            erl_token_refill_rate: AtomicU64::new(1.0_f64.to_bits()),
             erl_current_tokens: AtomicU64::new(100.0_f64.to_bits()),
             erl_last_token_update: AtomicU64::new(0.0_f64.to_bits()),
+            erl_kernel_count: AtomicU64::new(0),
         }
     }
 
@@ -272,13 +273,7 @@ impl SharedDeviceInfoV2 {
         self.pod_memory_used.store(memory, Ordering::Release);
     }
 
-    pub fn get_erl_avg_cost(&self) -> f64 {
-        f64::from_bits(self.erl_avg_cost.load(Ordering::Acquire))
-    }
-
-    pub fn set_erl_avg_cost(&self, cost: f64) {
-        self.erl_avg_cost.store(cost.to_bits(), Ordering::Release);
-    }
+    // ERL token-related methods
 
     pub fn get_erl_token_capacity(&self) -> f64 {
         f64::from_bits(self.erl_token_capacity.load(Ordering::Acquire))
@@ -333,6 +328,20 @@ impl SharedDeviceInfoV2 {
             self.get_erl_token_capacity(),
             self.get_erl_token_refill_rate(),
         )
+    }
+
+    // Kernel count methods (for PI controller statistics)
+
+    pub fn get_erl_kernel_count(&self) -> u64 {
+        self.erl_kernel_count.load(Ordering::Acquire)
+    }
+
+    pub fn increment_erl_kernel_count(&self) {
+        self.erl_kernel_count.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub fn reset_erl_kernel_count(&self) -> u64 {
+        self.erl_kernel_count.swap(0, Ordering::AcqRel)
     }
 }
 
@@ -868,9 +877,8 @@ impl SharedDeviceStateV2 {
                 .store(config.mem_limit, Ordering::Relaxed);
 
             // Initialize ERL fields with defaults (will be set by hypervisor)
-            device_info.set_erl_avg_cost(1.0);
             device_info.set_erl_token_capacity(100.0);
-            device_info.set_erl_token_refill_rate(1.0);
+            device_info.set_erl_token_refill_rate(10.0); // Default 10 tokens/sec
             device_info.set_erl_current_tokens(100.0);
             device_info.set_erl_last_token_update(now as f64);
 
@@ -1097,9 +1105,9 @@ mod tests {
 
         // Test V2 device info (has ERL fields)
         let device_info_v2 = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
-        // Test ERL fields
-        device_info_v2.set_erl_avg_cost(2.5);
-        assert_eq!(device_info_v2.get_erl_avg_cost(), 2.5);
+        // Test ERL fields - refill rate is now the control parameter
+        device_info_v2.set_erl_token_refill_rate(15.0);
+        assert_eq!(device_info_v2.get_erl_token_refill_rate(), 15.0);
 
         device_info_v2.set_erl_token_capacity(100.0);
         assert_eq!(device_info_v2.get_erl_token_capacity(), 100.0);

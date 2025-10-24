@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use cudarc::driver::sys::CUdevice;
 use dashmap::DashMap;
-use erl::{TokenManager, WorkloadTokenManager};
+use erl::{SimpleTokenManager, TokenManager};
 use nvml_wrapper::error::nvml_try;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
@@ -328,7 +328,7 @@ impl Limiter {
         let handle = self.get_or_init_shared_memory()?;
         let erl_adapter = ErlSharedMemoryAdapter::new(handle);
 
-        let mut token_manager = WorkloadTokenManager::with_default_calculator(erl_adapter);
+        let mut token_manager = SimpleTokenManager::new(erl_adapter);
 
         match token_manager.try_acquire_workload(&raw_device_index, grids, blocks) {
             Ok(()) => {

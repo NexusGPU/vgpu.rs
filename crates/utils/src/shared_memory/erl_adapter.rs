@@ -99,12 +99,14 @@ impl<H: SharedMemoryAccess> SharedStorage<usize> for ErlSharedMemoryAdapter<H> {
             })
     }
 
-    /// Load current average cost (limiter read, hypervisor update)
+    /// Load current refill rate (used as the control parameter, replaces avg_cost)
     fn load_avg_cost(&self, key: &usize) -> Result<f64, ErlError> {
         self.handle
             .get_handle()
             .get_state()
-            .with_device_v2(*key, |device| device.device_info.get_erl_avg_cost())
+            .with_device_v2(*key, |device| {
+                device.device_info.get_erl_token_refill_rate()
+            })
             .ok_or_else(|| {
                 Report::new(ErlError::MonitoringFailed {
                     reason: format!("Device {key} not found or not using V2"),
@@ -112,16 +114,44 @@ impl<H: SharedMemoryAccess> SharedStorage<usize> for ErlSharedMemoryAdapter<H> {
             })
     }
 
-    /// Save current average cost (only used by hypervisor)
-    fn save_avg_cost(&self, key: &usize, avg_cost: f64) -> Result<(), ErlError> {
+    /// Save current refill rate (only used by hypervisor, replaces avg_cost)
+    fn save_avg_cost(&self, key: &usize, refill_rate: f64) -> Result<(), ErlError> {
         self.handle
             .get_handle()
             .get_state()
             .with_device_v2(*key, |device| {
-                device.device_info.set_erl_avg_cost(avg_cost);
+                device.device_info.set_erl_token_refill_rate(refill_rate);
             })
             .ok_or_else(|| {
                 Report::new(ErlError::CongestionControlFailed {
+                    reason: format!("Device {key} not found or not using V2"),
+                })
+            })
+    }
+
+    /// Increment kernel count (called by limiter on each successful acquire)
+    fn increment_kernel_count(&self, key: &usize) -> Result<(), ErlError> {
+        self.handle
+            .get_handle()
+            .get_state()
+            .with_device_v2(*key, |device| {
+                device.device_info.increment_erl_kernel_count();
+            })
+            .ok_or_else(|| {
+                Report::new(ErlError::MonitoringFailed {
+                    reason: format!("Device {key} not found or not using V2"),
+                })
+            })
+    }
+
+    /// Load and reset kernel count (called by hypervisor periodically)
+    fn load_and_reset_kernel_count(&self, key: &usize) -> Result<u64, ErlError> {
+        self.handle
+            .get_handle()
+            .get_state()
+            .with_device_v2(*key, |device| device.device_info.reset_erl_kernel_count())
+            .ok_or_else(|| {
+                Report::new(ErlError::MonitoringFailed {
                     reason: format!("Device {key} not found or not using V2"),
                 })
             })
@@ -146,12 +176,12 @@ mod tests {
         assert_eq!(capacity, 100.0);
         assert_eq!(refill_rate, 1.0);
 
-        // Test average cost setting and reading
+        // Test refill rate setting and reading (via avg_cost methods for compatibility)
         adapter
-            .save_avg_cost(&0, 2.5)
-            .expect("should save avg cost");
-        let avg_cost = adapter.load_avg_cost(&0).expect("should load avg cost");
-        assert_eq!(avg_cost, 2.5);
+            .save_avg_cost(&0, 5.0)
+            .expect("should save refill rate");
+        let refill_rate = adapter.load_avg_cost(&0).expect("should load refill rate");
+        assert_eq!(refill_rate, 5.0);
 
         // Test token state setting and reading
         adapter

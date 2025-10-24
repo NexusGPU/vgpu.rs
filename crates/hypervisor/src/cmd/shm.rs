@@ -82,7 +82,7 @@ pub async fn run_show_shm(show_shm_args: ShowShmArgs) -> Result<()> {
                     device.device_info.get_mem_limit(),
                     device.device_info.get_pod_memory_used(),
                     device.device_info.get_up_limit(),
-                    device.device_info.get_erl_avg_cost(),
+                    device.device_info.get_erl_token_refill_rate(),
                     device.device_info.get_erl_current_tokens(),
                     device.device_info.get_erl_token_capacity(),
                     device.device_info.get_erl_token_refill_rate(),
