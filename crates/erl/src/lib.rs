@@ -53,6 +53,8 @@ impl From<ErlConfig> for PIParams {
             ki: config.ki,
             min_rate: config.min_rate,
             max_rate: config.max_rate,
+            // Use default bootstrap parameters
+            ..Default::default()
         }
     }
 }
