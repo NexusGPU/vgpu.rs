@@ -151,7 +151,7 @@ pub struct SharedDeviceInfoV2 {
 
     // ERL (Elastic Rate Limiting) related fields - Simplified PI controller version
     /// Token bucket refill rate (tokens per second, as f64 bits)
-    /// Adjusted by hypervisor's PI controller for this Pod
+    /// Adjusted by hypervisor's PID controller for this Pod
     pub erl_token_refill_rate: AtomicU64,
     /// Token bucket capacity for this Pod
     pub erl_token_capacity: AtomicU64,
@@ -159,8 +159,6 @@ pub struct SharedDeviceInfoV2 {
     pub erl_current_tokens: AtomicU64,
     /// Last token update timestamp (as f64 bits)
     pub erl_last_token_update: AtomicU64,
-    /// Kernel launch count (incremented by limiter, reset by hypervisor)
-    pub erl_kernel_count: AtomicU64,
 }
 
 // Type alias for backward compatibility
@@ -237,7 +235,6 @@ impl SharedDeviceInfoV2 {
             erl_token_capacity: AtomicU64::new(100.0_f64.to_bits()),
             erl_current_tokens: AtomicU64::new(100.0_f64.to_bits()),
             erl_last_token_update: AtomicU64::new(0.0_f64.to_bits()),
-            erl_kernel_count: AtomicU64::new(0),
         }
     }
 
@@ -328,20 +325,6 @@ impl SharedDeviceInfoV2 {
             self.get_erl_token_capacity(),
             self.get_erl_token_refill_rate(),
         )
-    }
-
-    // Kernel count methods (for PI controller statistics)
-
-    pub fn get_erl_kernel_count(&self) -> u64 {
-        self.erl_kernel_count.load(Ordering::Acquire)
-    }
-
-    pub fn increment_erl_kernel_count(&self) {
-        self.erl_kernel_count.fetch_add(1, Ordering::AcqRel);
-    }
-
-    pub fn reset_erl_kernel_count(&self) -> u64 {
-        self.erl_kernel_count.swap(0, Ordering::AcqRel)
     }
 }
 

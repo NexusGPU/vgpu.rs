@@ -3,19 +3,30 @@ pub mod daemon;
 pub mod gpu;
 pub mod shm;
 
-/// ERL (Elastic Rate Limiter) configuration for the PID controller.
+/// ERL (Elastic Rate Limiter) configuration passed from daemon CLI to the PID controller.
 #[derive(Debug, Clone)]
 pub struct ErlConfig {
+    /// Proportional gain for the PID loop.
     pub pid_kp: f64,
+    /// Integral gain for the PID loop.
     pub pid_ki: f64,
+    /// Derivative gain for the PID loop.
     pub pid_kd: f64,
+    /// Lower bound of the token refill rate that hypervisor may write.
     pub min_refill_rate: f64,
+    /// Upper bound of the token refill rate that hypervisor may write.
     pub max_refill_rate: f64,
+    /// Initial refill rate when a controller is created.
     pub initial_refill_rate: f64,
+    /// Burst allowance (seconds) used to compute token bucket capacity from refill rate.
     pub burst_seconds: f64,
+    /// Minimal capacity allowed for the token bucket.
     pub capacity_floor: f64,
+    /// Exponential smoothing factor for the derivative term.
     pub derivative_filter: f64,
+    /// Clamp for the accumulated integral term (anti-windup).
     pub integral_limit: f64,
+    /// Minimum delta time between PID updates to avoid division by zero.
     pub min_delta_time: f64,
 }
 
