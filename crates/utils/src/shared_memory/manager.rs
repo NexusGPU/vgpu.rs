@@ -310,14 +310,14 @@ impl super::traits::SharedMemoryAccess for ThreadSafeSharedMemoryManager {
     fn cleanup_orphaned_files<F, P>(
         &self,
         glob: &str,
-        should_remove: F,
+        is_pod_tracking: F,
         base_path: P,
     ) -> Result<Vec<PodIdentifier>, Self::Error>
     where
         F: Fn(&PodIdentifier) -> bool,
         P: AsRef<Path>,
     {
-        self.cleanup_orphaned_files(glob, should_remove, base_path)
+        self.cleanup_orphaned_files(glob, is_pod_tracking, base_path)
     }
 
     fn cleanup_unused<F, P>(

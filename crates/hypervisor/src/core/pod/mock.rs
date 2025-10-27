@@ -295,7 +295,7 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
     fn cleanup_orphaned_files<F, P>(
         &self,
         glob: &str,
-        _should_remove: F,
+        _is_pod_tracking: F,
         base_path: P,
     ) -> Result<Vec<PodIdentifier>, Self::Error>
     where
