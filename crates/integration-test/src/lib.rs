@@ -298,18 +298,17 @@ pub async fn mock_coordinator(
     // Create coordinator with mock dependencies
     // Create default ERL config for testing
     let erl_config = hypervisor::config::ErlConfig {
-        base_refill_rate: 100.0,
-        burst_duration: 1.0,
-        min_capacity: 10.0,
-        initial_avg_cost: 0.5,
-        min_avg_cost: 0.01,
-        max_avg_cost: 50.0,
-        cubic_c: 0.4,
-        cubic_beta: 1.3,
-        cubic_slow_start_factor: 1.1,
-        congestion_alpha: 0.3,
-        adjustment_threshold: 0.005,
-        adjustment_coefficient: 0.6,
+        pid_kp: 1.5,
+        pid_ki: 0.4,
+        pid_kd: 0.1,
+        min_refill_rate: 1.0,
+        max_refill_rate: 5_000.0,
+        initial_refill_rate: 100.0,
+        burst_seconds: 0.25,
+        capacity_floor: 10.0,
+        derivative_filter: 0.2,
+        integral_limit: 500.0,
+        min_delta_time: 0.05,
     };
 
     let config = CoordinatorConfig {

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use cudarc::driver::sys::CUdevice;
 use dashmap::DashMap;
-use erl::{SimpleTokenManager, TokenManager};
+use erl::KernelLimiter;
 use nvml_wrapper::error::nvml_try;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
@@ -327,27 +327,39 @@ impl Limiter {
         // Create a temporary ERL adapter for this operation
         let handle = self.get_or_init_shared_memory()?;
         let erl_adapter = ErlSharedMemoryAdapter::new(handle);
+        let limiter = KernelLimiter::new(erl_adapter);
 
-        let mut token_manager = SimpleTokenManager::new(erl_adapter);
-
-        match token_manager.try_acquire_workload(&raw_device_index, grids, blocks) {
-            Ok(()) => {
+        match limiter.try_acquire(raw_device_index, grids, blocks) {
+            Ok(true) => {
                 tracing::debug!(
                     device_idx = raw_device_index,
-                    grids = grids,
-                    blocks = blocks,
+                    grids,
+                    blocks,
                     "ERL workload admission granted"
                 );
                 Ok(true)
             }
-            Err(_) => {
+            Ok(false) => {
                 tracing::debug!(
                     device_idx = raw_device_index,
-                    grids = grids,
-                    blocks = blocks,
+                    grids,
+                    blocks,
                     "ERL workload admission denied"
                 );
                 Ok(false)
+            }
+            Err(err) => {
+                tracing::error!(
+                    device_idx = raw_device_index,
+                    grids,
+                    blocks,
+                    error = %err,
+                    "ERL admission check failed"
+                );
+                Err(Error::ErlAdmissionFailed {
+                    device_idx: raw_device_index,
+                    message: err.to_string(),
+                })
             }
         }
     }

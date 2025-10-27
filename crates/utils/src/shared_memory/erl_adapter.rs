@@ -1,11 +1,11 @@
 //! ERL (Elastic Rate Limiting) adapter
 //!
-//! Implement ERL SharedStorage trait for SharedMemoryHandle
+//! Implement ERL `DeviceBackend` trait for `SharedMemoryHandle`
 
 use std::ops::Deref;
 use std::sync::Arc;
 
-use erl::{ErlError, SharedStorage};
+use erl::{DeviceBackend, DeviceQuota, ErlError, TokenState};
 use error_stack::{Report, Result};
 
 use super::handle::SharedMemoryHandle;
@@ -29,7 +29,7 @@ impl SharedMemoryAccess for &SharedMemoryHandle {
 
 /// ERL adapter for SharedMemoryHandle
 ///
-/// Bridge shared memory access to ERL's SharedStorage trait
+/// Bridge shared memory access to ERL's `DeviceBackend` trait.
 pub struct ErlSharedMemoryAdapter<H: SharedMemoryAccess> {
     handle: H,
 }
@@ -41,119 +41,77 @@ impl<H: SharedMemoryAccess> ErlSharedMemoryAdapter<H> {
     }
 }
 
-impl<H: SharedMemoryAccess> SharedStorage<usize> for ErlSharedMemoryAdapter<H> {
-    /// Load token bucket state (limiter and hypervisor need)
-    fn load_token_state(&self, key: &usize) -> Result<(f64, f64), ErlError> {
+impl<H: SharedMemoryAccess> DeviceBackend for ErlSharedMemoryAdapter<H> {
+    fn read_token_state(&self, device: usize) -> Result<TokenState, ErlError> {
         self.handle
             .get_handle()
             .get_state()
-            .with_device_v2(*key, |device| device.device_info.load_erl_token_state())
+            .with_device_v2(device, |dev| {
+                let (tokens, ts) = dev.device_info.load_erl_token_state();
+                TokenState::new(tokens, ts)
+            })
             .ok_or_else(|| {
-                Report::new(ErlError::MonitoringFailed {
-                    reason: format!("Device {key} not found or not using V2"),
-                })
+                Report::new(ErlError::storage(format!(
+                    "Device {device} not found or not using V2"
+                )))
             })
     }
 
-    /// Save token bucket state (mainly used by limiter)
-    fn save_token_state(&self, key: &usize, tokens: f64, timestamp: f64) -> Result<(), ErlError> {
+    fn write_token_state(&self, device: usize, state: TokenState) -> Result<(), ErlError> {
         self.handle
             .get_handle()
             .get_state()
-            .with_device_v2(*key, |device| {
-                device.device_info.store_erl_token_state(tokens, timestamp);
+            .with_device_v2(device, |dev| {
+                dev.device_info
+                    .store_erl_token_state(state.tokens, state.last_update);
             })
             .ok_or_else(|| {
-                Report::new(ErlError::MonitoringFailed {
-                    reason: format!("Device {key} not found or not using V2"),
-                })
+                Report::new(ErlError::storage(format!(
+                    "Device {device} not found or not using V2"
+                )))
             })
     }
 
-    /// Load quota information (limiter read, hypervisor set)
-    fn load_quota(&self, key: &usize) -> Result<(f64, f64), ErlError> {
+    fn read_quota(&self, device: usize) -> Result<DeviceQuota, ErlError> {
         self.handle
             .get_handle()
             .get_state()
-            .with_device_v2(*key, |device| device.device_info.load_erl_quota())
+            .with_device_v2(device, |dev| {
+                let (capacity, rate) = dev.device_info.load_erl_quota();
+                DeviceQuota::new(capacity, rate)
+            })
             .ok_or_else(|| {
-                Report::new(ErlError::MonitoringFailed {
-                    reason: format!("Device {key} not found or not using V2"),
-                })
+                Report::new(ErlError::storage(format!(
+                    "Device {device} not found or not using V2"
+                )))
             })
     }
 
-    /// Set quota information (only used by hypervisor)
-    fn set_quota(&self, key: &usize, capacity: f64, refill_rate: f64) -> Result<(), ErlError> {
+    fn write_refill_rate(&self, device: usize, refill_rate: f64) -> Result<(), ErlError> {
         self.handle
             .get_handle()
             .get_state()
-            .with_device_v2(*key, |device| {
-                device.device_info.set_erl_token_capacity(capacity);
-                device.device_info.set_erl_token_refill_rate(refill_rate);
+            .with_device_v2(device, |dev| {
+                dev.device_info.set_erl_token_refill_rate(refill_rate);
             })
             .ok_or_else(|| {
-                Report::new(ErlError::InvalidConfiguration {
-                    reason: format!("Device {key} not found or not using V2"),
-                })
+                Report::new(ErlError::invalid_config(format!(
+                    "Device {device} not found or not using V2"
+                )))
             })
     }
 
-    /// Load current refill rate (used as the control parameter, replaces avg_cost)
-    fn load_avg_cost(&self, key: &usize) -> Result<f64, ErlError> {
+    fn write_capacity(&self, device: usize, capacity: f64) -> Result<(), ErlError> {
         self.handle
             .get_handle()
             .get_state()
-            .with_device_v2(*key, |device| {
-                device.device_info.get_erl_token_refill_rate()
+            .with_device_v2(device, |dev| {
+                dev.device_info.set_erl_token_capacity(capacity);
             })
             .ok_or_else(|| {
-                Report::new(ErlError::MonitoringFailed {
-                    reason: format!("Device {key} not found or not using V2"),
-                })
-            })
-    }
-
-    /// Save current refill rate (only used by hypervisor, replaces avg_cost)
-    fn save_avg_cost(&self, key: &usize, refill_rate: f64) -> Result<(), ErlError> {
-        self.handle
-            .get_handle()
-            .get_state()
-            .with_device_v2(*key, |device| {
-                device.device_info.set_erl_token_refill_rate(refill_rate);
-            })
-            .ok_or_else(|| {
-                Report::new(ErlError::CongestionControlFailed {
-                    reason: format!("Device {key} not found or not using V2"),
-                })
-            })
-    }
-
-    /// Increment kernel count (called by limiter on each successful acquire)
-    fn increment_kernel_count(&self, key: &usize) -> Result<(), ErlError> {
-        self.handle
-            .get_handle()
-            .get_state()
-            .with_device_v2(*key, |device| {
-                device.device_info.increment_erl_kernel_count();
-            })
-            .ok_or_else(|| {
-                Report::new(ErlError::MonitoringFailed {
-                    reason: format!("Device {key} not found or not using V2"),
-                })
-            })
-    }
-
-    /// Load and reset kernel count (called by hypervisor periodically)
-    fn load_and_reset_kernel_count(&self, key: &usize) -> Result<u64, ErlError> {
-        self.handle
-            .get_handle()
-            .get_state()
-            .with_device_v2(*key, |device| device.device_info.reset_erl_kernel_count())
-            .ok_or_else(|| {
-                Report::new(ErlError::MonitoringFailed {
-                    reason: format!("Device {key} not found or not using V2"),
-                })
+                Report::new(ErlError::invalid_config(format!(
+                    "Device {device} not found or not using V2"
+                )))
             })
     }
 }
@@ -171,27 +129,29 @@ mod tests {
         let adapter = ErlSharedMemoryAdapter::new(&handle);
 
         // Test quota setting and reading
-        adapter.set_quota(&0, 100.0, 1.0).expect("should set quota");
-        let (capacity, refill_rate) = adapter.load_quota(&0).expect("should load quota");
-        assert_eq!(capacity, 100.0);
-        assert_eq!(refill_rate, 1.0);
-
-        // Test refill rate setting and reading (via avg_cost methods for compatibility)
         adapter
-            .save_avg_cost(&0, 5.0)
-            .expect("should save refill rate");
-        let refill_rate = adapter.load_avg_cost(&0).expect("should load refill rate");
-        assert_eq!(refill_rate, 5.0);
+            .write_capacity(0, 100.0)
+            .expect("should set capacity");
+        adapter
+            .write_refill_rate(0, 1.0)
+            .expect("should set refill rate");
+        let quota = adapter.read_quota(0).expect("should load quota");
+        assert_eq!(quota.capacity, 100.0);
+        assert_eq!(quota.refill_rate, 1.0);
+
+        adapter.write_refill_rate(0, 5.0).expect("set new rate");
+        let quota = adapter.read_quota(0).expect("reload quota");
+        assert_eq!(quota.refill_rate, 5.0);
 
         // Test token state setting and reading
         adapter
-            .save_token_state(&0, 50.0, 1234567890.0)
+            .write_token_state(0, TokenState::new(50.0, 1234567890.0))
             .expect("should save token state");
-        let (tokens, timestamp) = adapter
-            .load_token_state(&0)
+        let state = adapter
+            .read_token_state(0)
             .expect("should load token state");
-        assert_eq!(tokens, 50.0);
-        assert_eq!(timestamp, 1234567890.0);
+        assert_eq!(state.tokens, 50.0);
+        assert_eq!(state.last_update, 1234567890.0);
     }
 
     #[test]
@@ -203,7 +163,7 @@ mod tests {
         let adapter = ErlSharedMemoryAdapter::new(&handle);
 
         // Test access to non-existent device
-        let result = adapter.load_quota(&999);
+        let result = adapter.read_quota(999);
         assert!(result.is_err());
     }
 }

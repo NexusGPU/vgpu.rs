@@ -1,60 +1,26 @@
-//! Elastic Rate Limiter (ERL) - Simplified Version
+//! Elastic GPU rate limiter primitives built around a PID controller.
 //!
-//! A simple, robust GPU rate limiting system with per-Pod control.
+//! The crate deliberately keeps the surface area small so the CUDA
+//! limiter and the hypervisor can share a single definition of:
+//! * how token buckets are stored in shared memory (`DeviceBackend`)
+//! * how kernel launches are admitted (`KernelLimiter`)
+//! * how utilization feedback updates refill rates (`DeviceController`)
 //!
-//! Key simplifications:
-//! - All kernels consume fixed 1.0 token (no workload prediction)
-//! - Simple PI controller (2 parameters: Kp, Ki)
-//! - Per-Pod independent control
-//! - Statistical utilization estimation (no complex event tracking)
+//! The limiter process only needs `KernelLimiter` with a backend that
+//! can read/write token state. The hypervisor instantiates
+//! `DeviceController` for each GPU it manages and feeds it the current
+//! utilization samples from NVML (or any other source). Both sides
+//! share the same `PidController` so tuning can be reasoned about in
+//! one place.
 
-mod traits;
+mod backend;
+mod error;
+mod hypervisor;
+mod limiter;
+mod pid;
 
-mod pi_controller;
-mod token_manager;
-mod utilization_controller;
-
-#[cfg(test)]
-mod fuzz_tests;
-
-pub use pi_controller::{PIController, PIParams};
-pub use token_manager::*;
-pub use traits::*;
-pub use utilization_controller::*;
-
-/// Simplified ERL configuration
-#[derive(Debug, Clone)]
-pub struct ErlConfig {
-    /// PI controller proportional gain
-    pub kp: f64,
-    /// PI controller integral gain
-    pub ki: f64,
-    /// Minimum refill rate
-    pub min_rate: f64,
-    /// Maximum refill rate
-    pub max_rate: f64,
-}
-
-impl Default for ErlConfig {
-    fn default() -> Self {
-        Self {
-            kp: 0.5,
-            ki: 0.1,
-            min_rate: 0.1,
-            max_rate: 100.0,
-        }
-    }
-}
-
-impl From<ErlConfig> for PIParams {
-    fn from(config: ErlConfig) -> Self {
-        PIParams {
-            kp: config.kp,
-            ki: config.ki,
-            min_rate: config.min_rate,
-            max_rate: config.max_rate,
-            // Use default bootstrap parameters
-            ..Default::default()
-        }
-    }
-}
+pub use backend::{DeviceBackend, DeviceQuota, TokenState};
+pub use error::ErlError;
+pub use hypervisor::{DeviceController, DeviceControllerConfig, DeviceControllerState};
+pub use limiter::{KernelLimiter, KernelLimiterConfig};
+pub use pid::{PidConfig, PidController, PidTuning};

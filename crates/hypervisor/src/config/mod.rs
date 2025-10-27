@@ -3,50 +3,36 @@ pub mod daemon;
 pub mod gpu;
 pub mod shm;
 
-/// ERL (Elastic Rate Limiter) configuration
+/// ERL (Elastic Rate Limiter) configuration for the PID controller.
 #[derive(Debug, Clone)]
 pub struct ErlConfig {
-    /// Base token refill rate per second
-    pub base_refill_rate: f64,
-    /// Token bucket burst duration
-    pub burst_duration: f64,
-    /// Minimum token bucket capacity
-    pub min_capacity: f64,
-    /// Initial average cost
-    pub initial_avg_cost: f64,
-    /// Minimum average cost
-    pub min_avg_cost: f64,
-    /// Maximum average cost
-    pub max_avg_cost: f64,
-    /// CUBIC C parameter
-    pub cubic_c: f64,
-    /// CUBIC beta
-    pub cubic_beta: f64,
-    /// CUBIC slow start factor
-    pub cubic_slow_start_factor: f64,
-    /// Congestion avoidance alpha
-    pub congestion_alpha: f64,
-    /// Adjustment threshold
-    pub adjustment_threshold: f64,
-    /// Adjustment coefficient
-    pub adjustment_coefficient: f64,
+    pub pid_kp: f64,
+    pub pid_ki: f64,
+    pub pid_kd: f64,
+    pub min_refill_rate: f64,
+    pub max_refill_rate: f64,
+    pub initial_refill_rate: f64,
+    pub burst_seconds: f64,
+    pub capacity_floor: f64,
+    pub derivative_filter: f64,
+    pub integral_limit: f64,
+    pub min_delta_time: f64,
 }
 
 impl From<&daemon::DaemonArgs> for ErlConfig {
     fn from(args: &daemon::DaemonArgs) -> Self {
         Self {
-            base_refill_rate: args.erl_base_refill_rate,
-            burst_duration: args.erl_burst_duration,
-            min_capacity: args.erl_min_capacity,
-            initial_avg_cost: args.erl_initial_avg_cost,
-            min_avg_cost: args.erl_min_avg_cost,
-            max_avg_cost: args.erl_max_avg_cost,
-            cubic_c: args.erl_cubic_c,
-            cubic_beta: args.erl_cubic_beta,
-            cubic_slow_start_factor: args.erl_cubic_slow_start_factor,
-            congestion_alpha: args.erl_congestion_alpha,
-            adjustment_threshold: args.erl_adjustment_threshold,
-            adjustment_coefficient: args.erl_adjustment_coefficient,
+            pid_kp: args.erl_pid_kp,
+            pid_ki: args.erl_pid_ki,
+            pid_kd: args.erl_pid_kd,
+            min_refill_rate: args.erl_min_refill_rate,
+            max_refill_rate: args.erl_max_refill_rate,
+            initial_refill_rate: args.erl_initial_refill_rate,
+            burst_seconds: args.erl_burst_seconds,
+            capacity_floor: args.erl_capacity_floor,
+            derivative_filter: args.erl_derivative_filter,
+            integral_limit: args.erl_integral_limit,
+            min_delta_time: args.erl_min_delta_time,
         }
     }
 }

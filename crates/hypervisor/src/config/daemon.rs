@@ -130,97 +130,89 @@ pub struct DaemonArgs {
     // ==================== ERL (Elastic Rate Limiter) Parameters ====================
     #[arg(
         long,
-        help = "ERL base token refill rate per second (scaled by target utilization)",
-        default_value = "500.0",
-        env = "ERL_BASE_REFILL_RATE"
-    )]
-    pub erl_base_refill_rate: f64,
-
-    #[arg(
-        long,
-        help = "ERL token bucket burst duration in seconds",
+        help = "PID proportional gain (Kp)",
         default_value = "1.5",
-        env = "ERL_BURST_DURATION"
+        env = "ERL_PID_KP"
     )]
-    pub erl_burst_duration: f64,
+    pub erl_pid_kp: f64,
 
     #[arg(
         long,
-        help = "ERL minimum token bucket capacity",
-        default_value = "50.0",
-        env = "ERL_MIN_CAPACITY"
-    )]
-    pub erl_min_capacity: f64,
-
-    #[arg(
-        long,
-        help = "ERL initial average cost for new controllers",
-        default_value = "0.05",
-        env = "ERL_INITIAL_AVG_COST"
-    )]
-    pub erl_initial_avg_cost: f64,
-
-    #[arg(
-        long,
-        help = "ERL minimum average cost (lower bound)",
-        default_value = "0.001",
-        env = "ERL_MIN_AVG_COST"
-    )]
-    pub erl_min_avg_cost: f64,
-
-    #[arg(
-        long,
-        help = "ERL maximum average cost (upper bound)",
-        default_value = "10.0",
-        env = "ERL_MAX_AVG_COST"
-    )]
-    pub erl_max_avg_cost: f64,
-
-    #[arg(
-        long,
-        help = "ERL CUBIC congestion control C parameter",
+        help = "PID integral gain (Ki)",
         default_value = "0.4",
-        env = "ERL_CUBIC_C"
+        env = "ERL_PID_KI"
     )]
-    pub erl_cubic_c: f64,
+    pub erl_pid_ki: f64,
 
     #[arg(
         long,
-        help = "ERL CUBIC beta (multiplicative decrease factor for recovery)",
-        default_value = "1.5",
-        env = "ERL_CUBIC_BETA"
+        help = "PID derivative gain (Kd)",
+        default_value = "0.1",
+        env = "ERL_PID_KD"
     )]
-    pub erl_cubic_beta: f64,
+    pub erl_pid_kd: f64,
 
     #[arg(
         long,
-        help = "ERL CUBIC slow start factor",
-        default_value = "1.2",
-        env = "ERL_CUBIC_SLOW_START_FACTOR"
-    )]
-    pub erl_cubic_slow_start_factor: f64,
-
-    #[arg(
-        long,
-        help = "ERL congestion avoidance alpha (smoothing factor, 0-1)",
-        default_value = "0.5",
-        env = "ERL_CONGESTION_ALPHA"
-    )]
-    pub erl_congestion_alpha: f64,
-
-    #[arg(
-        long,
-        help = "ERL congestion avoidance adjustment threshold",
-        default_value = "0.01",
-        env = "ERL_ADJUSTMENT_THRESHOLD"
-    )]
-    pub erl_adjustment_threshold: f64,
-
-    #[arg(
-        long,
-        help = "ERL congestion avoidance adjustment coefficient",
+        help = "Minimum token refill rate (tokens/sec)",
         default_value = "1.0",
-        env = "ERL_ADJUSTMENT_COEFFICIENT"
+        env = "ERL_MIN_REFILL_RATE"
     )]
-    pub erl_adjustment_coefficient: f64,
+    pub erl_min_refill_rate: f64,
+
+    #[arg(
+        long,
+        help = "Maximum token refill rate (tokens/sec)",
+        default_value = "5000.0",
+        env = "ERL_MAX_REFILL_RATE"
+    )]
+    pub erl_max_refill_rate: f64,
+
+    #[arg(
+        long,
+        help = "Initial token refill rate for new controllers (tokens/sec)",
+        default_value = "100.0",
+        env = "ERL_INITIAL_REFILL_RATE"
+    )]
+    pub erl_initial_refill_rate: f64,
+
+    #[arg(
+        long,
+        help = "Token bucket burst allowance in seconds",
+        default_value = "0.25",
+        env = "ERL_BURST_SECONDS"
+    )]
+    pub erl_burst_seconds: f64,
+
+    #[arg(
+        long,
+        help = "Minimum token bucket capacity",
+        default_value = "10.0",
+        env = "ERL_CAPACITY_FLOOR"
+    )]
+    pub erl_capacity_floor: f64,
+
+    #[arg(
+        long,
+        help = "Derivative term smoothing factor (0.0 disables)",
+        default_value = "0.2",
+        env = "ERL_DERIVATIVE_FILTER"
+    )]
+    pub erl_derivative_filter: f64,
+
+    #[arg(
+        long,
+        help = "Integral term clamp limit",
+        default_value = "500.0",
+        env = "ERL_INTEGRAL_LIMIT"
+    )]
+    pub erl_integral_limit: f64,
+
+    #[arg(
+        long,
+        help = "Minimum delta time between PID updates in seconds",
+        default_value = "0.05",
+        env = "ERL_MIN_DELTA_TIME"
+    )]
+    pub erl_min_delta_time: f64,
 }

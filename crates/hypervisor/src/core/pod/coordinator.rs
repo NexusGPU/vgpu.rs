@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use anyhow::Context;
 use anyhow::Result;
 
-use erl::{HypervisorUtilizationController, UtilizationController};
+use erl::{DeviceController, DeviceControllerConfig, PidConfig, PidTuning};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, interval_at, Instant};
 use tokio_util::sync::CancellationToken;
@@ -46,7 +46,7 @@ pub struct CoordinatorConfig {
 
 type ErlControllerMap = HashMap<
     (PodIdentifier, u32),
-    HypervisorUtilizationController<usize, ErlSharedMemoryAdapter<Arc<SharedMemoryHandle>>>,
+    DeviceController<ErlSharedMemoryAdapter<Arc<SharedMemoryHandle>>>,
 >;
 
 /// Newtype wrapper for ERL controllers indexed by (PodIdentifier, device_idx)
@@ -392,6 +392,7 @@ where
                     device_index,
                     &pod_utilization,
                     pod_memory,
+                    device_snapshot.timestamp,
                     erl_controllers,
                     erl_config,
                 )
@@ -459,85 +460,72 @@ where
         device_index: usize,
         pod_utilization: &super::utilization::PodUtilization,
         pod_memory: u64,
+        snapshot_timestamp: u64,
         erl_controllers: &RwLock<ErlControllers>,
         erl_config: &crate::config::ErlConfig,
     ) {
         let key = (pod_identifier.clone(), device_config.device_idx);
+        let target_utilization = (device_config.up_limit as f64 / 100.0).clamp(0.0, 1.0);
+        if target_utilization < 0.05 {
+            tracing::warn!(
+                pod_identifier = %pod_identifier,
+                device_index = device_index,
+                up_limit = device_config.up_limit,
+                target_utilization = target_utilization,
+                "Target utilization is very low; kernel launches may be throttled aggressively"
+            );
+        }
 
-        // Get or create ERL controller for this (pod, device) pair
+        use std::collections::hash_map::Entry;
         let mut controllers = erl_controllers.write().await;
-        let controller = controllers.entry(key).or_insert_with(|| {
-            // Open shared memory for ERL adapter
-            let erl_adapter = ErlSharedMemoryAdapter::new(handle);
-            let target_utilization = device_config.up_limit as f64 / 100.0;
+        let controller = match controllers.entry(key) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(vacant) => {
+                let backend = ErlSharedMemoryAdapter::new(handle.clone());
+                let pid_cfg = PidConfig {
+                    tuning: PidTuning::new(erl_config.pid_kp, erl_config.pid_ki, erl_config.pid_kd),
+                    output_min: erl_config.min_refill_rate,
+                    output_max: erl_config.max_refill_rate,
+                    initial_output: erl_config.initial_refill_rate,
+                    integral_limit: erl_config.integral_limit,
+                    derivative_filter: erl_config.derivative_filter,
+                    min_delta_time: erl_config.min_delta_time,
+                };
 
-            // Warn if target utilization is suspiciously low
-            if target_utilization < 0.1 {
-                tracing::warn!(
-                    pod_identifier = %pod_identifier,
-                    device_index = device_index,
-                    up_limit = device_config.up_limit,
-                    target_utilization = target_utilization,
-                    "Target utilization is very low (<10%). This will cause aggressive throttling. Verify up_limit is correct (should be percentage, e.g., 80 for 80%)"
-                );
+                let ctrl_cfg = DeviceControllerConfig {
+                    target_utilization,
+                    burst_seconds: erl_config.burst_seconds,
+                    capacity_floor: erl_config.capacity_floor,
+                    pid: pid_cfg,
+                };
+
+                match DeviceController::new(backend, device_index, ctrl_cfg) {
+                    Ok(ctrl) => {
+                        debug!(
+                            pod_identifier = %pod_identifier,
+                            device_index = device_index,
+                            target_utilization = target_utilization,
+                            initial_rate = ctrl.state().last_refill_rate,
+                            "Initialized PID controller for pod/device"
+                        );
+                        vacant.insert(ctrl)
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            pod_identifier = %pod_identifier,
+                            device_index = device_index,
+                            error = %e,
+                            "Failed to create PID controller for ERL"
+                        );
+                        return;
+                    }
+                }
             }
+        };
 
-            // Create controller with simplified PI-based ERL
-            let mut ctrl = HypervisorUtilizationController::new(erl_adapter);
-
-            // Token bucket parameters from ERL configuration
-            // Design: refill_rate scales with target to provide proportional throughput
-            //         capacity provides fixed burst duration for fairness
-            let refill_rate = erl_config.base_refill_rate * target_utilization;
-            let capacity = (refill_rate * erl_config.burst_duration).max(erl_config.min_capacity);
-
-            // Register this pod with the controller
-            let pod_name = format!("{pod_identifier}");
-            if let Err(e) = ctrl.register_pod(
-                pod_name,
-                device_index,
-                target_utilization,
-                refill_rate,
-            ) {
-                tracing::error!(
-                    pod_identifier = %pod_identifier,
-                    device_index = device_index,
-                    error = %e,
-                    "Failed to register pod with ERL controller"
-                );
-            }
-
-            if let Err(e) = ctrl.initialize_device_quota(&device_index, capacity, refill_rate) {
-                tracing::error!(
-                    pod_identifier = %pod_identifier,
-                    device_index = device_index,
-                    error = %e,
-                    "Failed to initialize ERL device quota"
-                );
-            } else {
-                debug!(
-                    pod_identifier = %pod_identifier,
-                    device_index = device_index,
-                    up_limit = device_config.up_limit,
-                    target_utilization = target_utilization,
-                    capacity = capacity,
-                    refill_rate = refill_rate,
-                    burst_duration = erl_config.burst_duration,
-                    "Initialized ERL controller with scaled refill_rate"
-                );
-            }
-
-            ctrl
-        });
-
-        // Update PI controller with global GPU utilization
-        // Normalize: total_utilization is sum of (sm_util + codec_util) for all processes
-        // Clamp to [0.0, 1.0] to handle edge cases where it might exceed 100
         let utilization_ratio = (pod_utilization.total_utilization as f64 / 100.0).clamp(0.0, 1.0);
 
-        // Call update_control() which reads kernel counts from shared memory
-        // and updates per-Pod PI controllers
-        if let Err(e) = controller.update_control(utilization_ratio) {
+        if let Err(e) = controller.update_with_timestamp(utilization_ratio, snapshot_timestamp) {
             tracing::error!(
                 pod_identifier = %pod_identifier,
                 device_index = device_index,
@@ -553,8 +541,9 @@ where
                 raw_utilization = pod_utilization.total_utilization,
                 normalized_utilization = utilization_ratio,
                 memory = pod_memory,
-                target_utilization = controller.target_utilization(),
-                "V2: Updated ERL controller with PI feedback"
+                new_rate = controller.state().last_refill_rate,
+                target_utilization = controller.state().target_utilization,
+                "V2: Updated ERL controller with PID feedback"
             );
         }
     }

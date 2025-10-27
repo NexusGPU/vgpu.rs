@@ -1,9 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 60eb3e0a97731b6d6550cc858dc497a8037190bf7fe1b83bd86651e7932243a6 # shrinks to small_workload = (3, 10), large_workload = (592, 996), (capacity, refill_rate) = (6919.564242484126, 759.9834793206911)
-cc 93354a99eece92a6c82e0045807843d0d7ecbdd5836c4aabaab22cc9f9e6d8fd # shrinks to operations = [Noop, Acquire { grid_count: 5847, block_count: 1580 }, Acquire { grid_count: 3465, block_count: 1473 }, Noop], (capacity, refill_rate) = (6606.283421017039, 490.2151828537191)
-cc 48abf14e83cb657cb9389c20bb8689b7c8bbac795681bd837f212a7ee1cd0a3b # shrinks to operations = [Acquire { grid_count: 5257, block_count: 837 }, Acquire { grid_count: 6913, block_count: 1972 }, Acquire { grid_count: 5298, block_count: 1520 }, Acquire { grid_count: 3518, block_count: 256 }, Acquire { grid_count: 7399, block_count: 655 }, Acquire { grid_count: 7969, block_count: 191 }, Acquire { grid_count: 9288, block_count: 1859 }, Noop, Noop, Acquire { grid_count: 2021, block_count: 774 }], (capacity, refill_rate) = (9207.808190098916, 189.39916223370207)
