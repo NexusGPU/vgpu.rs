@@ -43,15 +43,8 @@ impl DeviceSnapshotProvider for NvmlDeviceSampler {
             timestamp: last_seen_ts,
         };
 
-        // Get utilization data from current time - 1 second
-        // Note: NVML expects timestamps in microseconds (μs), not seconds
-        // This matches the C implementation: (cur.tv_sec - 1) * 1000000 + cur.tv_usec
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap();
-        let current_time_us = now.as_micros() as u64;
-        let query_time_us = current_time_us.saturating_sub(300_000); // 0.3 second = 300,000 μs
-        let process_utilization_samples = match device.process_utilization_stats(query_time_us) {
+        // Get utilization data from last seen timestamp
+        let process_utilization_samples = match device.process_utilization_stats(last_seen_ts) {
             Ok(process_utilization_samples) => process_utilization_samples,
             Err(NvmlError::NotFound) => {
                 vec![]
