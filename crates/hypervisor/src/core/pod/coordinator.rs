@@ -691,7 +691,7 @@ where
                         tracing::info!("Running periodic cleanup of unused shared memory segments");
 
                         if let Err(e) = shared_memory.cleanup_orphaned_files(&shared_memory_glob_pattern, |identifier| {
-                            !pod_state.contains_pod(identifier)
+                            pod_state.contains_pod(identifier)
                         }, &base_path) {
                             tracing::warn!("Failed to cleanup orphaned shared memory files: {}", e);
                         }
