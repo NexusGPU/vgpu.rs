@@ -13,14 +13,19 @@ pub struct KernelLimiterConfig {
     pub min_cost: f64,
     /// Normalization factor for `grid_count * block_count`.
     pub baseline_threads: f64,
+    /// Cost scaling factor (applied after normalization to reduce cost)
+    pub cost_scale: f64,
 }
 
 impl Default for KernelLimiterConfig {
     fn default() -> Self {
         Self {
             base_cost: 1.0,
-            min_cost: 0.25,
+            min_cost: 0.1,
             baseline_threads: 1024.0,
+            // Scale down cost by 100x to make it more reasonable
+            // A 4M-thread kernel will cost ~40 tokens instead of 4096
+            cost_scale: 0.01,
         }
     }
 }
@@ -93,7 +98,8 @@ impl<B: DeviceBackend> KernelLimiter<B> {
         } else {
             total_threads / self.cfg.baseline_threads
         };
-        (self.cfg.base_cost * normalized).max(self.cfg.min_cost)
+        let raw_cost = self.cfg.base_cost * normalized * self.cfg.cost_scale;
+        raw_cost.max(self.cfg.min_cost)
     }
 }
 

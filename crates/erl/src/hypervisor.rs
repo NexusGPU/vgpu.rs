@@ -28,6 +28,8 @@ pub struct DeviceControllerState {
     pub target_utilization: f64,
     pub last_utilization: f64,
     pub last_refill_rate: f64,
+    pub last_token_level: f64,
+    pub token_drain_rate: f64,
 }
 
 /// Hypervisor-side controller that updates refill rates based on utilization samples.
@@ -93,6 +95,8 @@ impl<B: DeviceBackend> DeviceController<B> {
                 target_utilization: cfg.target_utilization,
                 last_utilization: 0.0,
                 last_refill_rate: start_rate,
+                last_token_level: initial_capacity,
+                token_drain_rate: 0.0,
             },
             last_timestamp: None,
         })
@@ -129,6 +133,12 @@ impl<B: DeviceBackend> DeviceController<B> {
         } else {
             0.0
         };
+
+        // Calculate token consumption rate for logging/debugging
+        let expected_tokens =
+            self.state.last_token_level + self.state.last_refill_rate * delta_time;
+        let actual_tokens = current_state.tokens;
+        let token_drain_rate = (expected_tokens - actual_tokens) / delta_time; // tokens/sec consumed
 
         // If tokens are highly saturated (>95%) AND utilization is very low (<5%),
         // treat this as "no demand" scenario - don't let PID increase rate further
@@ -175,6 +185,7 @@ impl<B: DeviceBackend> DeviceController<B> {
             new_rate = %format!("{:.1}", new_rate),
             delta_time = %format!("{:.3}s", delta_time),
             token_add = %format!("{:.1}", token_amount),
+            token_drain = %format!("{:.1}/s", token_drain_rate),
             tokens_before = %format!("{:.1}", tokens_before),
             tokens_after = %format!("{:.1}", tokens_after),
             capacity = %format!("{:.1}", quota.capacity),
@@ -193,6 +204,8 @@ impl<B: DeviceBackend> DeviceController<B> {
 
         self.state.last_utilization = measured;
         self.state.last_refill_rate = new_rate;
+        self.state.last_token_level = tokens_after;
+        self.state.token_drain_rate = token_drain_rate;
         Ok(self.state.clone())
     }
 
