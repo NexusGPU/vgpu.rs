@@ -271,13 +271,24 @@ impl Limiter {
         F: FnMut() -> Result<bool, Error>,
     {
         const SLEEP_MS: u64 = 10;
-        const HEALTH_CHECK_INTERVAL: u32 = 10;
+        const HEALTH_CHECK_INTERVAL: u64 = 10;
+        const LOG_INTERVAL: u64 = 50; // Log every 500ms when waiting
 
-        let mut wait_times = 0;
+        let mut wait_times: u64 = 0;
 
         loop {
             match check() {
-                Ok(true) => return Ok(()),
+                Ok(true) => {
+                    if wait_times > 0 {
+                        tracing::info!(
+                            device_idx = raw_device_index,
+                            wait_times,
+                            total_wait_ms = wait_times * SLEEP_MS,
+                            "ERL: Request approved after waiting"
+                        );
+                    }
+                    return Ok(());
+                }
                 Ok(false) => {
                     thread::sleep(Duration::from_millis(SLEEP_MS));
                     wait_times += 1;
@@ -287,6 +298,16 @@ impl Limiter {
                         let handle = self.get_or_init_shared_memory()?;
                         let state = handle.get_state();
                         self.check_device_health(state, raw_device_index)?;
+                    }
+
+                    // Periodic logging when waiting too long
+                    if wait_times % LOG_INTERVAL == 0 {
+                        tracing::warn!(
+                            device_idx = raw_device_index,
+                            wait_times,
+                            total_wait_ms = wait_times * SLEEP_MS,
+                            "ERL: Still waiting for tokens (possible starvation)"
+                        );
                     }
                 }
                 Err(e) => return Err(e),
@@ -329,22 +350,31 @@ impl Limiter {
         let erl_adapter = ErlSharedMemoryAdapter::new(handle);
         let limiter = KernelLimiter::new(erl_adapter);
 
+        // Get current state before trying to acquire
+        let current_tokens = limiter.current_tokens(raw_device_index).unwrap_or(0.0);
+
         match limiter.try_acquire(raw_device_index, grids, blocks) {
             Ok(true) => {
-                tracing::debug!(
+                let tokens_after = limiter.current_tokens(raw_device_index).unwrap_or(0.0);
+                let cost = current_tokens - tokens_after;
+                tracing::info!(
                     device_idx = raw_device_index,
                     grids,
                     blocks,
-                    "ERL workload admission granted"
+                    tokens_before = %format!("{:.1}", current_tokens),
+                    tokens_after = %format!("{:.1}", tokens_after),
+                    cost = %format!("{:.1}", cost),
+                    "ERL: Admission GRANTED"
                 );
                 Ok(true)
             }
             Ok(false) => {
-                tracing::debug!(
+                tracing::info!(
                     device_idx = raw_device_index,
                     grids,
                     blocks,
-                    "ERL workload admission denied"
+                    tokens = %format!("{:.1}", current_tokens),
+                    "ERL: Admission DENIED (insufficient tokens)"
                 );
                 Ok(false)
             }

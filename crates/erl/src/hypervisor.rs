@@ -135,11 +135,20 @@ impl<B: DeviceBackend> DeviceController<B> {
         let effective_utilization = if token_saturation_ratio > 0.95 && measured < 0.05 {
             // Clamp measured utilization to target to prevent PID from increasing rate
             // This creates a "soft ceiling" that prevents runaway in no-load scenarios
+            tracing::info!(
+                device = self.device,
+                tokens = current_state.tokens,
+                capacity = quota.capacity,
+                saturation = %format!("{:.1}%", token_saturation_ratio * 100.0),
+                measured_utilization = %format!("{:.1}%", measured * 100.0),
+                "ERL: Token bucket saturated with low utilization - clamping to target to prevent runaway"
+            );
             self.cfg.target_utilization
         } else {
             measured
         };
 
+        let old_rate = self.state.last_refill_rate;
         let new_rate = self.pid.update(
             self.cfg.target_utilization,
             effective_utilization,
@@ -148,21 +157,30 @@ impl<B: DeviceBackend> DeviceController<B> {
 
         // Refill tokens using the NEW rate (PID-adjusted amount)
         let token_amount = new_rate * delta_time;
-        if token_amount > 0.0 {
-            let tokens_before = self.backend.fetch_add_tokens(self.device, token_amount)?;
+        let tokens_before = if token_amount > 0.0 {
+            self.backend.fetch_add_tokens(self.device, token_amount)?
+        } else {
+            current_state.tokens
+        };
 
-            // Log when we're saturated (for debugging convergence issues)
-            if tokens_before >= quota.capacity * 0.99 {
-                tracing::debug!(
-                    device = self.device,
-                    tokens_before,
-                    capacity = quota.capacity,
-                    new_rate,
-                    utilization = measured,
-                    "Token bucket saturated - may indicate low demand or over-provisioning"
-                );
-            }
-        }
+        let tokens_after = self.backend.read_token_state(self.device)?.tokens;
+
+        // Detailed logging for debugging
+        tracing::info!(
+            device = self.device,
+            measured_util = %format!("{:.1}%", measured * 100.0),
+            effective_util = %format!("{:.1}%", effective_utilization * 100.0),
+            target_util = %format!("{:.1}%", self.cfg.target_utilization * 100.0),
+            old_rate = %format!("{:.1}", old_rate),
+            new_rate = %format!("{:.1}", new_rate),
+            delta_time = %format!("{:.3}s", delta_time),
+            token_add = %format!("{:.1}", token_amount),
+            tokens_before = %format!("{:.1}", tokens_before),
+            tokens_after = %format!("{:.1}", tokens_after),
+            capacity = %format!("{:.1}", quota.capacity),
+            pid_error = %format!("{:.1}%", (self.cfg.target_utilization - effective_utilization) * 100.0),
+            "ERL: Controller update"
+        );
 
         // Update shared memory with new rate and capacity
         self.backend.write_refill_rate(self.device, new_rate)?;
