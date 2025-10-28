@@ -166,6 +166,9 @@ mod tests {
 
     #[test]
     fn admits_when_tokens_available() {
+        // With cost_scale=0.01, a kernel with 16×256=4096 threads costs:
+        // (4096/1024) × 1.0 × 0.01 = 0.04 tokens
+        // 5.0 tokens is more than enough
         let backend = MockBackend::new(10.0, 5.0, 5.0);
         let limiter = KernelLimiter::new(backend);
         let allowed = limiter.try_acquire_at(0, 16, 256, 1.0).unwrap();
@@ -174,7 +177,10 @@ mod tests {
 
     #[test]
     fn denies_when_tokens_insufficient() {
-        let backend = MockBackend::new(5.0, 0.0, 0.2);
+        // With cost_scale=0.01, a kernel with 32×256=8192 threads costs:
+        // (8192/1024) × 1.0 × 0.01 = 0.08 tokens
+        // So we need very low tokens to trigger denial
+        let backend = MockBackend::new(5.0, 0.0, 0.05);
         let limiter = KernelLimiter::new(backend);
         let allowed = limiter.try_acquire_at(0, 32, 256, 1.0).unwrap();
         assert!(!allowed, "should deny when tokens are insufficient");
