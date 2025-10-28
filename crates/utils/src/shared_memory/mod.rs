@@ -326,6 +326,56 @@ impl SharedDeviceInfoV2 {
             self.get_erl_token_refill_rate(),
         )
     }
+
+    /// Atomically subtract tokens and return the value before subtraction.
+    ///
+    /// Uses compare-exchange loop to ensure atomicity across multiple processes.
+    pub fn fetch_sub_erl_tokens(&self, cost: f64) -> f64 {
+        use std::sync::atomic::Ordering;
+
+        loop {
+            let current_bits = self.erl_current_tokens.load(Ordering::Acquire);
+            let current = f64::from_bits(current_bits);
+            let new_value = (current - cost).max(0.0);
+            let new_bits = new_value.to_bits();
+
+            match self.erl_current_tokens.compare_exchange(
+                current_bits,
+                new_bits,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return current,
+                Err(_) => continue,
+            }
+        }
+    }
+
+    /// Atomically add tokens (capped at capacity) and return the value before addition.
+    ///
+    /// Uses compare-exchange loop to ensure atomicity across multiple processes.
+    pub fn fetch_add_erl_tokens(&self, amount: f64) -> f64 {
+        use std::sync::atomic::Ordering;
+
+        let capacity = self.get_erl_token_capacity();
+
+        loop {
+            let current_bits = self.erl_current_tokens.load(Ordering::Acquire);
+            let current = f64::from_bits(current_bits);
+            let new_value = (current + amount).min(capacity).max(0.0);
+            let new_bits = new_value.to_bits();
+
+            match self.erl_current_tokens.compare_exchange(
+                current_bits,
+                new_bits,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return current,
+                Err(_) => continue,
+            }
+        }
+    }
 }
 
 /// Device entry for V1 (legacy)

@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::backend::{DeviceBackend, TokenState};
-use crate::{DeviceQuota, ErlError};
+use crate::ErlError;
+use crate::backend::DeviceBackend;
 use error_stack::Result;
 
 /// Configuration for estimating kernel cost when updating the bucket.
@@ -53,38 +53,30 @@ impl<B: DeviceBackend> KernelLimiter<B> {
     }
 
     /// Deterministic variant useful for testing.
+    ///
+    /// Note: This method only attempts to consume tokens. Token refilling
+    /// is handled by the hypervisor side, which periodically adds tokens
+    /// based on the refill_rate adjusted by the PID controller.
     pub fn try_acquire_at(
         &self,
         device: usize,
         grid_count: u32,
         block_count: u32,
-        now: f64,
+        _now: f64,
     ) -> Result<bool, ErlError> {
-        let quota = self.backend.read_quota(device)?;
-        let mut state = self.backend.read_token_state(device)?;
-        let refill = refill_tokens(&quota, &state, now);
-        state.tokens = refill;
-        state.last_update = now;
-
         let cost = self.estimate_kernel_cost(grid_count, block_count);
 
-        let decision = if refill >= cost {
-            state.tokens = (refill - cost).max(0.0);
-            true
-        } else {
-            false
-        };
+        // Atomically consume tokens if available
+        let tokens_before = self.backend.fetch_sub_tokens(device, cost)?;
 
-        self.backend
-            .write_token_state(device, TokenState::new(state.tokens, now))?;
-        Ok(decision)
+        // Check if we had enough tokens before the subtraction
+        Ok(tokens_before >= cost)
     }
 
-    /// Inspect the bucket after applying refill.
+    /// Inspect the current token count (without refilling).
     pub fn current_tokens(&self, device: usize) -> Result<f64, ErlError> {
-        let quota = self.backend.read_quota(device)?;
         let state = self.backend.read_token_state(device)?;
-        Ok(refill_tokens(&quota, &state, Self::now_seconds()))
+        Ok(state.tokens)
     }
 
     fn now_seconds() -> f64 {
@@ -105,16 +97,10 @@ impl<B: DeviceBackend> KernelLimiter<B> {
     }
 }
 
-fn refill_tokens(quota: &DeviceQuota, state: &TokenState, now: f64) -> f64 {
-    let dt = (now - state.last_update).max(0.0);
-    let replenished = state.tokens.max(0.0) + quota.refill_rate.max(0.0) * dt;
-    replenished.min(quota.capacity.max(0.0))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::DeviceBackend;
+    use crate::backend::{DeviceBackend, DeviceQuota, TokenState};
     use std::sync::Mutex;
 
     #[derive(Debug)]
@@ -155,6 +141,21 @@ mod tests {
             self.quota.lock().unwrap().capacity = capacity;
             Ok(())
         }
+
+        fn fetch_sub_tokens(&self, _device: usize, cost: f64) -> Result<f64, ErlError> {
+            let mut state = self.state.lock().unwrap();
+            let before = state.tokens;
+            state.tokens = (state.tokens - cost).max(0.0);
+            Ok(before)
+        }
+
+        fn fetch_add_tokens(&self, _device: usize, amount: f64) -> Result<f64, ErlError> {
+            let mut state = self.state.lock().unwrap();
+            let capacity = self.quota.lock().unwrap().capacity;
+            let before = state.tokens;
+            state.tokens = (state.tokens + amount).min(capacity).max(0.0);
+            Ok(before)
+        }
     }
 
     #[test]
@@ -162,7 +163,7 @@ mod tests {
         let backend = MockBackend::new(10.0, 5.0, 5.0);
         let limiter = KernelLimiter::new(backend);
         let allowed = limiter.try_acquire_at(0, 16, 256, 1.0).unwrap();
-        assert!(allowed);
+        assert!(allowed, "should allow when tokens are sufficient");
     }
 
     #[test]
@@ -170,14 +171,22 @@ mod tests {
         let backend = MockBackend::new(5.0, 0.0, 0.2);
         let limiter = KernelLimiter::new(backend);
         let allowed = limiter.try_acquire_at(0, 32, 256, 1.0).unwrap();
-        assert!(!allowed);
+        assert!(!allowed, "should deny when tokens are insufficient");
     }
 
     #[test]
-    fn refills_over_time() {
+    fn tokens_remain_low_until_hypervisor_refills() {
+        // Without hypervisor refilling, tokens won't automatically increase
         let backend = MockBackend::new(10.0, 2.0, 0.0);
         let limiter = KernelLimiter::new(backend);
-        assert!(!limiter.try_acquire_at(0, 4, 64, 0.1).unwrap());
-        assert!(limiter.try_acquire_at(0, 4, 64, 0.6).unwrap());
+        assert!(
+            !limiter.try_acquire_at(0, 4, 64, 0.1).unwrap(),
+            "should deny when tokens are zero"
+        );
+        // Time passing doesn't matter - hypervisor must refill
+        assert!(
+            !limiter.try_acquire_at(0, 4, 64, 10.0).unwrap(),
+            "should still deny even after time passes"
+        );
     }
 }

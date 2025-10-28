@@ -114,6 +114,30 @@ impl<H: SharedMemoryAccess> DeviceBackend for ErlSharedMemoryAdapter<H> {
                 )))
             })
     }
+
+    fn fetch_sub_tokens(&self, device: usize, cost: f64) -> Result<f64, ErlError> {
+        self.handle
+            .get_handle()
+            .get_state()
+            .with_device_v2(device, |dev| dev.device_info.fetch_sub_erl_tokens(cost))
+            .ok_or_else(|| {
+                Report::new(ErlError::storage(format!(
+                    "Device {device} not found or not using V2"
+                )))
+            })
+    }
+
+    fn fetch_add_tokens(&self, device: usize, amount: f64) -> Result<f64, ErlError> {
+        self.handle
+            .get_handle()
+            .get_state()
+            .with_device_v2(device, |dev| dev.device_info.fetch_add_erl_tokens(amount))
+            .ok_or_else(|| {
+                Report::new(ErlError::storage(format!(
+                    "Device {device} not found or not using V2"
+                )))
+            })
+    }
 }
 
 #[cfg(test)]

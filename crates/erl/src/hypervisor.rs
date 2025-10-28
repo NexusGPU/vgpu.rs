@@ -102,16 +102,69 @@ impl<B: DeviceBackend> DeviceController<B> {
         &self.state
     }
 
-    pub fn update(
+    /// Internal update method that performs PID control and token refilling.
+    ///
+    /// This method:
+    /// 1. Runs PID controller to compute new refill_rate
+    /// 2. Adds tokens based on new_rate × delta_time (with saturation detection)
+    /// 3. Updates capacity and clamps tokens if needed
+    ///
+    /// # Convergence guarantees
+    ///
+    /// - When tokens are saturated (at capacity), we detect it and adjust PID behavior
+    /// - This prevents runaway rate increases when there's no load
+    /// - The PID integral term is bounded to prevent windup
+    fn update_internal(
         &mut self,
         utilization: f64,
         delta_time: f64,
     ) -> Result<DeviceControllerState, ErlError> {
         let measured = utilization.clamp(0.0, 1.0);
-        let new_rate = self
-            .pid
-            .update(self.cfg.target_utilization, measured, delta_time)?;
 
+        // Check token saturation BEFORE PID update
+        let quota = self.backend.read_quota(self.device)?;
+        let current_state = self.backend.read_token_state(self.device)?;
+        let token_saturation_ratio = if quota.capacity > 0.0 {
+            current_state.tokens / quota.capacity
+        } else {
+            0.0
+        };
+
+        // If tokens are highly saturated (>95%) AND utilization is very low (<5%),
+        // treat this as "no demand" scenario - don't let PID increase rate further
+        let effective_utilization = if token_saturation_ratio > 0.95 && measured < 0.05 {
+            // Clamp measured utilization to target to prevent PID from increasing rate
+            // This creates a "soft ceiling" that prevents runaway in no-load scenarios
+            self.cfg.target_utilization
+        } else {
+            measured
+        };
+
+        let new_rate = self.pid.update(
+            self.cfg.target_utilization,
+            effective_utilization,
+            delta_time,
+        )?;
+
+        // Refill tokens using the NEW rate (PID-adjusted amount)
+        let token_amount = new_rate * delta_time;
+        if token_amount > 0.0 {
+            let tokens_before = self.backend.fetch_add_tokens(self.device, token_amount)?;
+
+            // Log when we're saturated (for debugging convergence issues)
+            if tokens_before >= quota.capacity * 0.99 {
+                tracing::debug!(
+                    device = self.device,
+                    tokens_before,
+                    capacity = quota.capacity,
+                    new_rate,
+                    utilization = measured,
+                    "Token bucket saturated - may indicate low demand or over-provisioning"
+                );
+            }
+        }
+
+        // Update shared memory with new rate and capacity
         self.backend.write_refill_rate(self.device, new_rate)?;
 
         if self.cfg.burst_seconds > 0.0 {
@@ -125,6 +178,20 @@ impl<B: DeviceBackend> DeviceController<B> {
         Ok(self.state.clone())
     }
 
+    /// Update controller with utilization measurement and explicit delta time.
+    ///
+    /// For testing or scenarios where you already know the time delta.
+    pub fn update(
+        &mut self,
+        utilization: f64,
+        delta_time: f64,
+    ) -> Result<DeviceControllerState, ErlError> {
+        self.update_internal(utilization, delta_time)
+    }
+
+    /// Update controller with utilization measurement and timestamp.
+    ///
+    /// Automatically calculates delta_time from the last update.
     pub fn update_with_timestamp(
         &mut self,
         utilization: f64,
@@ -137,7 +204,8 @@ impl<B: DeviceBackend> DeviceController<B> {
             self.cfg.pid.min_delta_time
         };
         self.last_timestamp = Some(seconds);
-        self.update(utilization, delta)
+
+        self.update_internal(utilization, delta)
     }
 }
 
@@ -197,6 +265,21 @@ mod tests {
         fn write_capacity(&self, _device: usize, capacity: f64) -> Result<(), ErlError> {
             self.quota.lock().unwrap().capacity = capacity;
             Ok(())
+        }
+
+        fn fetch_sub_tokens(&self, _device: usize, cost: f64) -> Result<f64, ErlError> {
+            let mut tokens = self.tokens.lock().unwrap();
+            let before = tokens.tokens;
+            tokens.tokens = (tokens.tokens - cost).max(0.0);
+            Ok(before)
+        }
+
+        fn fetch_add_tokens(&self, _device: usize, amount: f64) -> Result<f64, ErlError> {
+            let mut tokens = self.tokens.lock().unwrap();
+            let capacity = self.quota.lock().unwrap().capacity;
+            let before = tokens.tokens;
+            tokens.tokens = (tokens.tokens + amount).min(capacity).max(0.0);
+            Ok(before)
         }
     }
 

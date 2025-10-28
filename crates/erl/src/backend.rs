@@ -40,4 +40,13 @@ pub trait DeviceBackend: Send + Sync {
     fn read_quota(&self, device: usize) -> Result<DeviceQuota, ErlError>;
     fn write_refill_rate(&self, device: usize, refill_rate: f64) -> Result<(), ErlError>;
     fn write_capacity(&self, device: usize, capacity: f64) -> Result<(), ErlError>;
+
+    /// Atomically subtract tokens if available. Returns the tokens before subtraction.
+    ///
+    /// This operation should be atomic to prevent race conditions when multiple
+    /// processes/threads try to consume tokens concurrently.
+    fn fetch_sub_tokens(&self, device: usize, cost: f64) -> Result<f64, ErlError>;
+
+    /// Atomically add tokens (for refilling by hypervisor).
+    fn fetch_add_tokens(&self, device: usize, amount: f64) -> Result<f64, ErlError>;
 }
