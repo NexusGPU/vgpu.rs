@@ -19,8 +19,8 @@ use crate::platform::host_pid_probe::{HostPidProbe, PodProcessInfo, Subscription
 use crate::platform::k8s::pod_info_cache::PodInfoCache;
 use crate::platform::limiter_comm::CommandDispatcher;
 use crate::platform::nvml::gpu_observer::GpuObserver;
-use crate::util::keyed_lock::KeyedAsyncLock;
 use tokio_util::sync::CancellationToken;
+use utils::keyed_lock::KeyedAsyncLock;
 
 use super::device_info::create_device_configs_from_worker_info;
 use super::pod_state_store::PodStateStore;

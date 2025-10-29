@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
 
+use crate::keyed_lock::KeyedAsyncLock;
 use crate::shared_memory::handle::SHM_PATH_SUFFIX;
 use crate::shared_memory::PodIdentifier;
 
@@ -20,6 +21,8 @@ use super::{handle::SharedMemoryHandle, DeviceConfig, SharedDeviceState};
 pub struct MemoryManager {
     /// Active shared memory segments: path -> Shmem
     active_memories: RwLock<HashMap<PathBuf, SharedMemoryHandle>>,
+    /// Per-path locks to serialize creation/opening
+    creation_locks: KeyedAsyncLock<PathBuf>,
 }
 
 impl Default for MemoryManager {
@@ -33,6 +36,7 @@ impl MemoryManager {
     pub fn new() -> Self {
         Self {
             active_memories: RwLock::new(HashMap::new()),
+            creation_locks: KeyedAsyncLock::<PathBuf>::new(),
         }
     }
 
@@ -52,7 +56,18 @@ impl MemoryManager {
             }
         }
 
-        // Create shared memory outside the lock (blocking operation)
+        // Serialize creation for the same path
+        let _guard = self.creation_locks.lock(&path_buf).await;
+
+        // Double-check after acquiring lock
+        {
+            let memories = self.active_memories.read().await;
+            if memories.contains_key(&path_buf) {
+                return Ok(());
+            }
+        }
+
+        // Create shared memory outside the active_memories lock (blocking operation)
         let configs_clone = configs.to_vec();
         let path_clone = path_buf.clone();
         let shmem = tokio::task::spawn_blocking(move || {
@@ -64,7 +79,7 @@ impl MemoryManager {
         // Insert into map with write lock
         let mut memories = self.active_memories.write().await;
 
-        // Double-check in case another task created it while we were creating
+        // Final check (shouldn't happen due to per-path lock, but safe)
         if memories.contains_key(&path_buf) {
             return Ok(());
         }
@@ -89,7 +104,18 @@ impl MemoryManager {
             }
         }
 
-        // Open shared memory outside the lock (blocking operation)
+        // Serialize opening for the same path
+        let _guard = self.creation_locks.lock(&path_buf).await;
+
+        // Double-check after acquiring lock
+        {
+            let memories = self.active_memories.read().await;
+            if let Some(shmem) = memories.get(&path_buf) {
+                return Ok(shmem.get_ptr());
+            }
+        }
+
+        // Open shared memory outside the active_memories lock (blocking operation)
         let path_clone = path_buf.clone();
         let (handle, ptr_addr) = tokio::task::spawn_blocking(move || {
             let handle = SharedMemoryHandle::open(&path_clone)?;
@@ -103,7 +129,7 @@ impl MemoryManager {
         // Insert into map with write lock
         let mut memories = self.active_memories.write().await;
 
-        // Double-check in case another task opened it while we were opening
+        // Final check (shouldn't happen due to per-path lock, but safe)
         if let Some(existing) = memories.get(&path_buf) {
             return Ok(existing.get_ptr());
         }
