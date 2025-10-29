@@ -25,6 +25,10 @@ pub struct DeviceControllerConfig {
     pub rate_max: f64,
     /// Initial refill rate (tokens/second)
     pub rate_initial: f64,
+    /// Minimum delta time required between PID updates
+    pub min_delta_time: f64,
+    /// Exponential smoothing factor applied to utilization samples before PID
+    pub utilization_smoothing: f64,
 }
 
 impl Default for DeviceControllerConfig {
@@ -40,6 +44,8 @@ impl Default for DeviceControllerConfig {
             rate_min: 0.0,
             rate_max: 10_000.0,
             rate_initial: 10.0,
+            min_delta_time: 0.05,
+            utilization_smoothing: 0.2,
         }
     }
 }
@@ -67,6 +73,7 @@ pub struct DeviceController<B: DeviceBackend> {
     state: DeviceControllerState,
     current_rate: f64,
     last_timestamp: Option<f64>,
+    smoothed_utilization: Option<f64>,
 }
 
 impl<B: DeviceBackend> DeviceController<B> {
@@ -90,6 +97,16 @@ impl<B: DeviceBackend> DeviceController<B> {
         if cfg.rate_max <= cfg.rate_min {
             return Err(error_stack::report!(ErlError::invalid_config(
                 "rate_max must be greater than rate_min"
+            )));
+        }
+        if cfg.min_delta_time <= 0.0 {
+            return Err(error_stack::report!(ErlError::invalid_config(
+                "min_delta_time must be positive"
+            )));
+        }
+        if !(0.0..=1.0).contains(&cfg.utilization_smoothing) {
+            return Err(error_stack::report!(ErlError::invalid_config(
+                "utilization_smoothing must be in [0, 1]"
             )));
         }
 
@@ -132,6 +149,7 @@ impl<B: DeviceBackend> DeviceController<B> {
                 token_drain_rate: 0.0,
             },
             last_timestamp: None,
+            smoothed_utilization: None,
         })
     }
 
@@ -146,6 +164,18 @@ impl<B: DeviceBackend> DeviceController<B> {
         delta_time: f64,
     ) -> Result<DeviceControllerState, ErlError> {
         let measured = utilization.clamp(0.0, 1.0);
+        let filtered = if let Some(previous) = self.smoothed_utilization {
+            if self.cfg.utilization_smoothing <= f64::EPSILON {
+                measured
+            } else {
+                let alpha = self.cfg.utilization_smoothing;
+                let clamped_alpha = alpha.clamp(0.0, 1.0);
+                previous + clamped_alpha * (measured - previous)
+            }
+        } else {
+            measured
+        };
+        self.smoothed_utilization = Some(filtered);
 
         // Check token saturation before PID update
         let quota = self.backend.read_quota(self.device)?;
@@ -178,12 +208,13 @@ impl<B: DeviceBackend> DeviceController<B> {
                 capacity = quota.capacity,
                 saturation = %format!("{:.1}%", token_saturation_ratio * 100.0),
                 measured_utilization = %format!("{:.1}%", measured * 100.0),
+                filtered_utilization = %format!("{:.1}%", filtered * 100.0),
                 token_drain_rate = %format!("{:.1}/s", token_drain_rate),
                 "Token bucket saturated with no workload - clamping to prevent runaway"
             );
             self.cfg.target_utilization
         } else {
-            measured
+            filtered
         };
 
         // Update PID controller
@@ -207,6 +238,7 @@ impl<B: DeviceBackend> DeviceController<B> {
         tracing::info!(
             device = self.device,
             measured_util = %format!("{:.1}%", measured * 100.0),
+            filtered_util = %format!("{:.1}%", filtered * 100.0),
             effective_util = %format!("{:.1}%", effective_utilization * 100.0),
             target_util = %format!("{:.1}%", self.cfg.target_utilization * 100.0),
             old_rate = %format!("{:.1}", self.state.last_refill_rate),
@@ -233,7 +265,7 @@ impl<B: DeviceBackend> DeviceController<B> {
         }
 
         // Update state
-        self.state.last_utilization = measured;
+        self.state.last_utilization = filtered;
         self.state.last_refill_rate = new_rate;
         self.state.last_token_level = tokens_after;
         self.state.token_drain_rate = token_drain_rate;
@@ -258,9 +290,13 @@ impl<B: DeviceBackend> DeviceController<B> {
     ) -> Result<DeviceControllerState, ErlError> {
         let seconds = timestamp_micros as f64 / 1_000_000.0;
         let delta = if let Some(prev) = self.last_timestamp {
-            (seconds - prev).max(1e-3)
+            let raw_delta = seconds - prev;
+            if raw_delta < self.cfg.min_delta_time {
+                return Ok(self.state.clone());
+            }
+            raw_delta
         } else {
-            1e-3
+            self.cfg.min_delta_time
         };
         self.last_timestamp = Some(seconds);
         self.update_internal(utilization, delta)
@@ -399,6 +435,8 @@ mod tests {
             rate_min: 0.5,
             rate_max: 50.0,
             rate_initial: 5.0,
+            min_delta_time: 0.05,
+            utilization_smoothing: 0.0,
         };
         let mut ctrl = DeviceController::new(backend, 0, cfg).unwrap();
         let before = ctrl.state().last_refill_rate;

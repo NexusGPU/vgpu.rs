@@ -508,6 +508,8 @@ where
                     rate_min: erl_config.min_refill_rate,
                     rate_max: scaled_max_refill_rate,
                     rate_initial: scaled_initial_refill_rate,
+                    min_delta_time: erl_config.min_delta_time,
+                    utilization_smoothing: erl_config.derivative_filter,
                 };
 
                 match DeviceController::new(backend, device_index, ctrl_cfg) {
