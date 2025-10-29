@@ -167,10 +167,14 @@ mod tests {
 
     #[test]
     fn admits_when_tokens_available() {
-        // Curve-based model keeps cost in [min_cost, max_cost]; defaults give < 1 token here.
-        // 5.0 tokens is more than enough
+        // 5.0 tokens is more than enough when max_cost is capped at 2 tokens.
         let backend = MockBackend::new(10.0, 5.0, 5.0);
-        let limiter = KernelLimiter::new(backend.clone());
+        let cfg = KernelLimiterConfig {
+            min_cost: 0.1,
+            max_cost: 2.0,
+            curve_scale: 10_000.0,
+        };
+        let limiter = KernelLimiter::with_config(backend.clone(), cfg);
         let allowed = limiter.try_acquire_at(0, 16, 256, 1.0).unwrap();
         assert!(allowed, "should allow when tokens are sufficient");
         assert!(
