@@ -669,6 +669,9 @@ where
                 interval_at(Instant::now() + cleanup_duration, cleanup_duration);
             cleanup_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+            // Skip the first immediate tick
+            cleanup_interval.tick().await;
+
             tracing::info!(
                 interval_secs = CLEANUP_INTERVAL_SECS,
                 "Starting periodic shared memory cleanup task"

@@ -208,8 +208,10 @@ where
     ) {
         let mut interval_timer = tokio::time::interval(interval);
 
-        info!("Starting resource monitor with interval: {:?}", interval);
+        // Skip the first immediate tick
+        interval_timer.tick().await;
 
+        info!("Starting resource monitor with interval: {:?}", interval);
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
