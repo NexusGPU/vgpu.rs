@@ -355,8 +355,13 @@ where
         erl_config: &crate::config::ErlConfig,
     ) -> Result<()> {
         let pod_path = pod_state.pod_path(pod_identifier);
-        let handle =
-            Arc::new(SharedMemoryHandle::open(&pod_path).context("Failed to open shared memory")?);
+        // Use spawn_blocking to avoid blocking the tokio runtime
+        let pod_path_clone = pod_path.clone();
+        let handle = tokio::task::spawn_blocking(move || SharedMemoryHandle::open(&pod_path_clone))
+            .await
+            .context("Failed to spawn blocking task")?
+            .context("Failed to open shared memory")?;
+        let handle = Arc::new(handle);
         let state = handle.get_state();
 
         let device_index = device_config.device_idx as usize;
@@ -763,20 +768,34 @@ where
                         // Get all pod identifiers from state store
                         let pod_identifiers = pod_state.list_pod_identifiers();
 
-                        // Update heartbeat for each pod
+                        // Update heartbeat for each pod concurrently using spawn_blocking
+                        let mut tasks = Vec::new();
                         for pod_identifier in pod_identifiers {
                             let pod_path = pod_state.pod_path(&pod_identifier);
-                            if let Ok(handle) = SharedMemoryHandle::open(&pod_path) {
-                                let state = handle.get_state();
-                                state.update_heartbeat(timestamp);
-                            } else {
-                                let e = format!("Failed to open shared memory for pod {pod_identifier}");
-                                tracing::warn!(
-                                    pod_identifier = %format!("{}/{}", pod_identifier.namespace, pod_identifier.name),
-                                    error = %e,
-                                    "Failed to update heartbeat for pod"
-                                );
-                            }
+
+                            let task = tokio::spawn(async move {
+                                let result = tokio::task::spawn_blocking(move || {
+                                    SharedMemoryHandle::open(&pod_path)
+                                })
+                                .await;
+
+                                match result {
+                                    Ok(Ok(handle)) => {
+                                        let state = handle.get_state();
+                                        state.update_heartbeat(timestamp);
+                                    }
+                                    Ok(Err(_)) | Err(_) => {
+                                        // Silently ignore - pod might be newly registered and shm not yet created
+                                        // This is expected during pod registration
+                                    }
+                                }
+                            });
+                            tasks.push(task);
+                        }
+
+                        // Wait for all heartbeat updates to complete
+                        for task in tasks {
+                            let _ = task.await;
                         }
                     }
                     _ = cancellation_token.cancelled() => {
