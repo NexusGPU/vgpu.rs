@@ -48,11 +48,6 @@ impl DeviceSnapshot {
     }
 }
 
-/// Normalization function for codec utilization.
-pub const fn codec_normalize(x: u32) -> u32 {
-    x * 85 / 100
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

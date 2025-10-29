@@ -9,7 +9,7 @@ use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 
 use super::traits::{DeviceSnapshotProvider, TimeSource};
-use super::utilization::{codec_normalize, DeviceSnapshot, ProcessUtilization};
+use super::utilization::{DeviceSnapshot, ProcessUtilization};
 
 /// Production NVML-based device snapshot provider
 pub struct NvmlDeviceSampler {
@@ -79,7 +79,7 @@ impl DeviceSnapshotProvider for NvmlDeviceSampler {
                 sample.pid,
                 ProcessUtilization {
                     sm_util: sample.sm_util,
-                    codec_util: codec_normalize(sample.enc_util + sample.dec_util),
+                    codec_util: sample.enc_util + sample.dec_util,
                 },
             );
         }
