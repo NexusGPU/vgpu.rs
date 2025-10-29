@@ -7,25 +7,21 @@ use error_stack::Result;
 /// Configuration for estimating kernel cost when updating the bucket.
 #[derive(Debug, Clone)]
 pub struct KernelLimiterConfig {
-    /// Base cost in tokens when workload equals `baseline_threads`.
-    pub base_cost: f64,
     /// Minimum number of tokens any kernel launch will consume.
     pub min_cost: f64,
-    /// Normalization factor for `grid_count * block_count`.
-    pub baseline_threads: f64,
-    /// Cost scaling factor (applied after normalization to reduce cost)
-    pub cost_scale: f64,
+    /// Maximum number of tokens a kernel launch can consume.
+    pub max_cost: f64,
+    /// Controls how quickly the sigmoid-style curve approaches `max_cost` as total threads grow.
+    pub curve_scale: f64,
 }
 
 impl Default for KernelLimiterConfig {
     fn default() -> Self {
         Self {
-            base_cost: 1.0,
             min_cost: 0.1,
-            baseline_threads: 1024.0,
-            // Scale down cost by 100x to make it more reasonable
-            // A 4M-thread kernel will cost ~40 tokens instead of 4096
-            cost_scale: 0.01,
+            max_cost: 30.0,
+            // Larger values make the curve flatter; 400k threads gets ~86% of max cost.
+            curve_scale: 400_000.0,
         }
     }
 }
@@ -93,13 +89,11 @@ impl<B: DeviceBackend> KernelLimiter<B> {
 
     fn estimate_kernel_cost(&self, grid_count: u32, block_count: u32) -> f64 {
         let total_threads = (grid_count.max(1) as f64) * (block_count.max(1) as f64);
-        let normalized = if self.cfg.baseline_threads <= f64::EPSILON {
-            total_threads
-        } else {
-            total_threads / self.cfg.baseline_threads
-        };
-        let raw_cost = self.cfg.base_cost * normalized * self.cfg.cost_scale;
-        raw_cost.max(self.cfg.min_cost)
+        let scale = self.cfg.curve_scale.max(f64::EPSILON);
+        let curve = 1.0 - (-(total_threads / scale)).exp();
+        let span = (self.cfg.max_cost - self.cfg.min_cost).max(0.0);
+        let cost = self.cfg.min_cost + curve * span;
+        cost.max(self.cfg.min_cost)
     }
 }
 
@@ -107,20 +101,24 @@ impl<B: DeviceBackend> KernelLimiter<B> {
 mod tests {
     use super::*;
     use crate::backend::{DeviceBackend, DeviceQuota, TokenState};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct MockBackend {
-        quota: Mutex<DeviceQuota>,
-        state: Mutex<TokenState>,
+        quota: Arc<Mutex<DeviceQuota>>,
+        state: Arc<Mutex<TokenState>>,
     }
 
     impl MockBackend {
         fn new(capacity: f64, refill_rate: f64, tokens: f64) -> Self {
             Self {
-                quota: Mutex::new(DeviceQuota::new(capacity, refill_rate)),
-                state: Mutex::new(TokenState::new(tokens, 0.0)),
+                quota: Arc::new(Mutex::new(DeviceQuota::new(capacity, refill_rate))),
+                state: Arc::new(Mutex::new(TokenState::new(tokens, 0.0))),
             }
+        }
+
+        fn tokens(&self) -> f64 {
+            self.state.lock().unwrap().tokens
         }
     }
 
@@ -169,19 +167,21 @@ mod tests {
 
     #[test]
     fn admits_when_tokens_available() {
-        // With cost_scale=0.01, a kernel with 16×256=4096 threads costs:
-        // (4096/1024) × 1.0 × 0.01 = 0.04 tokens
+        // Curve-based model keeps cost in [min_cost, max_cost]; defaults give < 1 token here.
         // 5.0 tokens is more than enough
         let backend = MockBackend::new(10.0, 5.0, 5.0);
-        let limiter = KernelLimiter::new(backend);
+        let limiter = KernelLimiter::new(backend.clone());
         let allowed = limiter.try_acquire_at(0, 16, 256, 1.0).unwrap();
         assert!(allowed, "should allow when tokens are sufficient");
+        assert!(
+            backend.tokens() > 0.0,
+            "should consume a bounded amount of tokens"
+        );
     }
 
     #[test]
     fn denies_when_tokens_insufficient() {
-        // With cost_scale=0.01, a kernel with 32×256=8192 threads costs:
-        // (8192/1024) × 1.0 × 0.01 = 0.08 tokens
+        // Curve-based model still consumes at least min_cost per kernel.
         // So we need very low tokens to trigger denial
         let backend = MockBackend::new(5.0, 0.0, 0.05);
         let limiter = KernelLimiter::new(backend);
@@ -202,6 +202,49 @@ mod tests {
         assert!(
             !limiter.try_acquire_at(0, 4, 64, 10.0).unwrap(),
             "should still deny even after time passes"
+        );
+    }
+
+    #[test]
+    fn curve_cost_respects_bounds() {
+        let cfg = KernelLimiterConfig {
+            min_cost: 0.5,
+            max_cost: 2.0,
+            curve_scale: 1_000.0,
+        };
+
+        let backend = MockBackend::new(50.0, 5.0, 50.0);
+        let limiter = KernelLimiter::with_config(backend.clone(), cfg.clone());
+        let allowed = limiter.try_acquire_at(0, 1, 1, 0.0).unwrap();
+        assert!(allowed, "should allow with ample tokens");
+
+        let consumed_small = 50.0 - backend.tokens();
+        assert!(
+            consumed_small >= cfg.min_cost - 1e-6,
+            "small kernels should respect min cost"
+        );
+        assert!(
+            consumed_small <= cfg.max_cost + 1e-6,
+            "small kernels should remain within bounds"
+        );
+
+        let backend_large = MockBackend::new(50.0, 5.0, 50.0);
+        let limiter_large = KernelLimiter::with_config(backend_large.clone(), cfg);
+        let allowed_large = limiter_large
+            .try_acquire_at(0, 1_000_000, 2_048, 0.0)
+            .unwrap();
+        assert!(
+            allowed_large,
+            "should allow large kernels when tokens sufficient"
+        );
+        let consumed_large = 50.0 - backend_large.tokens();
+        assert!(
+            consumed_large <= 2.0 + 1e-6,
+            "large kernels should not exceed max cost"
+        );
+        assert!(
+            consumed_large >= 0.5 - 1e-6,
+            "large kernels should still be >= min cost"
         );
     }
 }
