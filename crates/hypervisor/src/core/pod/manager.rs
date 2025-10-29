@@ -200,9 +200,9 @@ where
         Ok(process_info.host_pid)
     }
 
-    /// Start the resource monitoring task
+    /// Start the cleanup loop
     #[tracing::instrument(skip(self, cancellation_token), fields(interval_ms = interval.as_millis()))]
-    pub async fn start_resource_monitor(
+    pub async fn run_cleanup_loop(
         &self,
         interval: Duration,
         cancellation_token: CancellationToken,
@@ -212,26 +212,26 @@ where
         // Skip the first immediate tick
         interval_timer.tick().await;
 
-        info!("Starting resource monitor with interval: {:?}", interval);
+        info!("Starting cleanup loop with interval: {:?}", interval);
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
-                    info!("Resource monitor shutdown requested");
+                    info!("Cleanup loop shutdown requested");
                     break;
                 }
                 _ = interval_timer.tick() => {
-                    // Continue with monitoring logic
+                    // Continue with cleanup logic
                 }
             }
 
-            info!("Checking for dead processes and cleaning them up");
+            info!("Running periodic cleanup of unused shared memory segments");
             // Check for dead processes and clean them up
             if let Err(e) = self.check_and_cleanup_dead_processes().await {
                 tracing::error!("Failed to check and cleanup dead processes: {}", e);
             }
         }
 
-        info!("Resource monitor stopped");
+        info!("Cleanup loop stopped");
     }
 
     /// Ensure pod is registered in all components (lazy loading)
