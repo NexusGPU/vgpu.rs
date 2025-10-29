@@ -162,15 +162,24 @@ impl<B: DeviceBackend> DeviceController<B> {
         let actual_tokens = current_state.tokens;
         let token_drain_rate = (expected_tokens - actual_tokens) / delta_time;
 
-        // Apply saturation clamping to prevent runaway in no-load scenarios
-        let effective_utilization = if token_saturation_ratio > 0.95 && measured < 0.05 {
+        // Apply saturation clamping ONLY when there's genuinely no workload:
+        // 1. Token bucket is saturated (>95% full)
+        // 2. GPU utilization is very low (<5%)
+        // 3. Token drain rate is negligible (< 10% of min refill rate)
+        // This prevents clamping when tokens are exhausted due to high demand
+        let is_truly_idle = token_saturation_ratio > 0.95
+            && measured < 0.05
+            && token_drain_rate < self.cfg.rate_min * 0.1;
+
+        let effective_utilization = if is_truly_idle {
             tracing::debug!(
                 device = self.device,
                 tokens = current_state.tokens,
                 capacity = quota.capacity,
                 saturation = %format!("{:.1}%", token_saturation_ratio * 100.0),
                 measured_utilization = %format!("{:.1}%", measured * 100.0),
-                "Token bucket saturated with low utilization - clamping to prevent runaway"
+                token_drain_rate = %format!("{:.1}/s", token_drain_rate),
+                "Token bucket saturated with no workload - clamping to prevent runaway"
             );
             self.cfg.target_utilization
         } else {
@@ -195,7 +204,7 @@ impl<B: DeviceBackend> DeviceController<B> {
 
         let tokens_after = self.backend.read_token_state(self.device)?.tokens;
 
-        tracing::info!(
+        tracing::debug!(
             device = self.device,
             measured_util = %format!("{:.1}%", measured * 100.0),
             effective_util = %format!("{:.1}%", effective_utilization * 100.0),
