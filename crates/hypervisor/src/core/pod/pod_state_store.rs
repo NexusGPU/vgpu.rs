@@ -87,35 +87,38 @@ impl PodStateStore {
         info: WorkerInfo,
         device_configs: Vec<DeviceConfig>,
     ) -> Result<()> {
-        let mut pod_state = PodState::new(info, device_configs);
-        // If pod already exists, preserve existing processes and shared memory handle
-        if let Some(existing) = self.pods.get(pod_identifier) {
-            pod_state.processes = existing.processes.clone();
-            pod_state.shared_memory_handle = existing.shared_memory_handle.clone();
-            debug!(
-                namespace = %pod_identifier.namespace,
-                pod_name = %pod_identifier.name,
-                existing_processes = existing.processes.len(),
-                "Updated existing pod registration"
-            );
+        use dashmap::mapref::entry::Entry;
+
+        let device_count = device_configs.len();
+
+        // Use entry API to atomically check and update, avoiding nested locks
+        match self.pods.entry(pod_identifier.clone()) {
+            Entry::Occupied(mut entry) => {
+                let existing = entry.get();
+                let mut pod_state = PodState::new(info, device_configs);
+                pod_state.processes = existing.processes.clone();
+                pod_state.shared_memory_handle = existing.shared_memory_handle.clone();
+
+                debug!(
+                    namespace = %pod_identifier.namespace,
+                    pod_name = %pod_identifier.name,
+                    existing_processes = existing.processes.len(),
+                    "Updated existing pod registration"
+                );
+
+                entry.insert(pod_state);
+            }
+            Entry::Vacant(entry) => {
+                let pod_state = PodState::new(info, device_configs);
+                entry.insert(pod_state);
+            }
         }
 
-        let device_count = pod_state.device_configs.len();
         info!(
             namespace = %pod_identifier.namespace,
             pod_name = %pod_identifier.name,
             device_count = device_count,
             "Pod registered in state store"
-        );
-
-        self.pods.insert(pod_identifier.clone(), pod_state);
-
-        // TODO: need remove
-        info!(
-            namespace = %pod_identifier.namespace,
-            pod_name = %pod_identifier.name,
-            device_count = device_count,
-            "Pod registered in state store after insert"
         );
 
         Ok(())
