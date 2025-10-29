@@ -1014,7 +1014,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::shared_memory::handle::{SharedMemoryHandle, SHM_PATH_SUFFIX};
-    use crate::shared_memory::manager::ThreadSafeSharedMemoryManager;
+    use crate::shared_memory::manager::MemoryManager;
 
     use super::*;
 
@@ -1261,7 +1261,7 @@ mod tests {
 
     #[test]
     fn thread_safe_manager_basic_operations() {
-        let manager = ThreadSafeSharedMemoryManager::new();
+        let manager = MemoryManager::new();
         let configs = create_test_configs();
         let identifier = PodIdentifier::new("manager_basic", "test");
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
@@ -1298,7 +1298,7 @@ mod tests {
 
     #[test]
     fn thread_safe_manager_concurrent_creation() {
-        let manager = Arc::new(ThreadSafeSharedMemoryManager::new());
+        let manager = Arc::new(MemoryManager::new());
         let configs = create_test_configs();
         let identifier = PodIdentifier::new("manager_concurrent", "test");
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
@@ -1330,7 +1330,7 @@ mod tests {
 
     #[test]
     fn orphaned_file_cleanup() {
-        let manager = ThreadSafeSharedMemoryManager::new();
+        let manager = MemoryManager::new();
 
         // Create a fake orphaned file in /tmp
         let test_file = "/tmp/test_orphaned_shm_file";

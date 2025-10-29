@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::RwLock;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
 use glob;
 use shared_memory::ShmemConf;
-use spin::RwLock;
 use tracing::info;
 use tracing::warn;
 
@@ -16,20 +16,20 @@ use crate::shared_memory::PodIdentifier;
 
 use super::{handle::SharedMemoryHandle, DeviceConfig, SharedDeviceState};
 
-/// A thread-safe shared memory manager.
-pub struct ThreadSafeSharedMemoryManager {
+/// Shared memory manager.
+pub struct MemoryManager {
     /// Active shared memory segments: path -> Shmem
     active_memories: RwLock<HashMap<PathBuf, SharedMemoryHandle>>,
 }
 
-impl Default for ThreadSafeSharedMemoryManager {
+impl Default for MemoryManager {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThreadSafeSharedMemoryManager {
-    /// Creates a new thread-safe shared memory manager.
+impl MemoryManager {
+    /// Creates a new shared memory manager.
     pub fn new() -> Self {
         Self {
             active_memories: RwLock::new(HashMap::new()),
@@ -42,7 +42,10 @@ impl ThreadSafeSharedMemoryManager {
         path: impl AsRef<Path>,
         configs: &[DeviceConfig],
     ) -> Result<()> {
-        let mut memories = self.active_memories.write();
+        let mut memories = self
+            .active_memories
+            .write()
+            .expect("RwLock should not be poisoned");
         // Check if the segment already exists.
         if memories.contains_key(path.as_ref()) {
             return Ok(());
@@ -58,12 +61,18 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Gets a pointer to the shared memory by its identifier.
     pub fn get_shared_memory(&self, path: impl AsRef<Path>) -> Result<*mut SharedDeviceState> {
-        let memories = self.active_memories.read();
+        let memories = self
+            .active_memories
+            .read()
+            .expect("RwLock should not be poisoned");
         if let Some(shmem) = memories.get(path.as_ref()) {
             Ok(shmem.get_ptr())
         } else {
             drop(memories);
-            let mut memories = self.active_memories.write();
+            let mut memories = self
+                .active_memories
+                .write()
+                .expect("RwLock should not be poisoned");
             let handle = SharedMemoryHandle::open(path.as_ref())?;
             let ptr = handle.get_ptr();
             memories.insert(path.as_ref().to_path_buf(), handle);
@@ -92,7 +101,10 @@ impl ThreadSafeSharedMemoryManager {
     where
         F: FnOnce(&SharedMemoryHandle) -> Result<T>,
     {
-        let memories = self.active_memories.read();
+        let memories = self
+            .active_memories
+            .read()
+            .expect("RwLock should not be poisoned");
         let shmem = memories.get(path.as_ref()).context(format!(
             "Shared memory not found: {}",
             path.as_ref().display()
@@ -102,7 +114,10 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Cleans up a shared memory segment.
     pub fn cleanup(&self, path: impl AsRef<Path>) -> Result<()> {
-        let mut memories = self.active_memories.write();
+        let mut memories = self
+            .active_memories
+            .write()
+            .expect("RwLock should not be poisoned");
 
         if let Some(shmem) = memories.remove(path.as_ref()) {
             // Drop the Shmem object to release the shared memory.
@@ -196,7 +211,10 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Remove an orphaned shared memory file
     fn remove_orphaned_file(&self, file_path: &Path, base_path: &Path) -> Result<()> {
-        self.active_memories.write().remove(file_path);
+        self.active_memories
+            .write()
+            .expect("RwLock should not be poisoned")
+            .remove(file_path);
         std::fs::remove_file(file_path)
             .context(format!("Failed to remove file {}", file_path.display()))?;
 
@@ -229,7 +247,10 @@ impl ThreadSafeSharedMemoryManager {
     ) -> Result<Vec<PodIdentifier>> {
         let mut cleaned_up = Vec::new();
         let paths: Vec<PathBuf> = {
-            let memories = self.active_memories.read();
+            let memories = self
+                .active_memories
+                .read()
+                .expect("RwLock should not be poisoned");
             memories.keys().cloned().collect()
         };
 
@@ -270,13 +291,16 @@ impl ThreadSafeSharedMemoryManager {
 
     /// Checks if a shared memory segment exists.
     pub fn contains(&self, path: impl AsRef<Path>) -> bool {
-        let memories = self.active_memories.read();
+        let memories = self
+            .active_memories
+            .read()
+            .expect("RwLock should not be poisoned");
         memories.contains_key(path.as_ref())
     }
 }
 
 // Implement SharedMemoryAccess trait directly
-impl super::traits::SharedMemoryAccess for ThreadSafeSharedMemoryManager {
+impl super::traits::SharedMemoryAccess for MemoryManager {
     type Error = anyhow::Error;
 
     fn find_shared_memory_files(&self, glob: &str) -> Result<Vec<PathBuf>, Self::Error> {
@@ -349,7 +373,7 @@ mod tests {
 
     #[test]
     fn extract_identifier_from_path_basic() {
-        let manager = ThreadSafeSharedMemoryManager::new();
+        let manager = MemoryManager::new();
         let base_path = Path::new("/dev/shm");
 
         // Success case
@@ -369,7 +393,7 @@ mod tests {
 
     #[test]
     fn extract_identifier_consistent_with_pod_identifier() {
-        let manager = ThreadSafeSharedMemoryManager::new();
+        let manager = MemoryManager::new();
         let base_path = Path::new("/dev/shm");
 
         let original = PodIdentifier::new("test-namespace", "test-pod");

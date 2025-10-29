@@ -16,7 +16,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 use utils::shared_memory::handle::SHM_PATH_SUFFIX;
-use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
+use utils::shared_memory::manager::MemoryManager;
 use utils::shared_memory::{DeviceConfig, PodIdentifier};
 
 // Type aliases for complex return types
@@ -277,19 +277,12 @@ pub async fn mock_coordinator(
     test_shm_id: &str,
     _gpu_index: usize,
 ) -> (
-    Arc<
-        LimiterCoordinator<
-            ThreadSafeSharedMemoryManager,
-            PodStateStore,
-            NvmlDeviceSampler,
-            SystemClock,
-        >,
-    >,
+    Arc<LimiterCoordinator<MemoryManager, PodStateStore, NvmlDeviceSampler, SystemClock>>,
     Arc<PodStateStore>,
 ) {
     // Create mock dependencies
     let tmpdir = tempdir().expect("Failed to create temporary directory");
-    let shared_memory = Arc::new(ThreadSafeSharedMemoryManager::new());
+    let shared_memory = Arc::new(MemoryManager::new());
     let base_path = tmpdir.path().to_path_buf();
     let pod_state = Arc::new(PodStateStore::new(base_path.clone()));
     let snapshot = Arc::new(NvmlDeviceSampler::init().unwrap());
@@ -335,14 +328,8 @@ const TEST_MEMORY: u64 = 256 * 1024 * 1024; // 256MB
 
 /// Test coordinator manager that handles a single coordinator with multiple pods
 pub struct TestCoordinatorManager {
-    coordinator: Arc<
-        LimiterCoordinator<
-            ThreadSafeSharedMemoryManager,
-            PodStateStore,
-            NvmlDeviceSampler,
-            SystemClock,
-        >,
-    >,
+    coordinator:
+        Arc<LimiterCoordinator<MemoryManager, PodStateStore, NvmlDeviceSampler, SystemClock>>,
     pod_state: Arc<PodStateStore>,
     cancellation_token: CancellationToken,
     gpu_index: usize,
