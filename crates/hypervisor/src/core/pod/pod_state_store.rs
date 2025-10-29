@@ -164,9 +164,6 @@ impl PodStateStore {
     ///
     /// Returns Ok(()) after removal.
     pub fn unregister_process(&self, pod_identifier: &PodIdentifier, host_pid: u32) -> Result<()> {
-        // Remove PID mapping first
-        self.pid_to_pod.remove(&host_pid);
-
         let pod_empty = {
             let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
                 PodManagementError::PodIdentifierNotFound {
@@ -175,6 +172,8 @@ impl PodStateStore {
             })?;
 
             pod_ref.remove_process(host_pid);
+            // Remove PID mapping
+            self.pid_to_pod.remove(&host_pid);
             pod_ref.is_empty()
         };
 
