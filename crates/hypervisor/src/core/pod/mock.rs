@@ -268,13 +268,15 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
     async fn get_shared_memory(
         &self,
         pod_path: impl AsRef<Path> + Send,
-    ) -> Result<*const utils::shared_memory::SharedDeviceState, Self::Error> {
+    ) -> Result<utils::shared_memory::traits::SharedMemoryPtr, Self::Error> {
         self.log_operation(format!(
             "get_shared_memory({})",
             pod_path.as_ref().display()
         ));
         // Return a null pointer for testing - real tests would need proper shared memory
-        Ok(std::ptr::null())
+        Ok(utils::shared_memory::traits::SharedMemoryPtr::new(
+            std::ptr::null(),
+        ))
     }
 
     async fn add_pid(

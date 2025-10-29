@@ -9,6 +9,33 @@ use crate::shared_memory::PodIdentifier;
 
 use super::{DeviceConfig, SharedDeviceState};
 
+/// A Send-safe wrapper for shared memory pointers.
+///
+/// This is safe because the pointer points to shared memory that can be
+/// accessed across process boundaries.
+#[derive(Debug, Copy, Clone)]
+pub struct SharedMemoryPtr(*const SharedDeviceState);
+
+unsafe impl Send for SharedMemoryPtr {}
+unsafe impl Sync for SharedMemoryPtr {}
+
+impl SharedMemoryPtr {
+    /// Create a new shared memory pointer wrapper
+    pub fn new(ptr: *const SharedDeviceState) -> Self {
+        Self(ptr)
+    }
+
+    /// Get the raw pointer
+    pub fn as_ptr(self) -> *const SharedDeviceState {
+        self.0
+    }
+
+    /// Get the raw mutable pointer
+    pub fn as_mut_ptr(self) -> *mut SharedDeviceState {
+        self.0 as *mut SharedDeviceState
+    }
+}
+
 /// Trait for shared memory access operations
 #[async_trait::async_trait]
 pub trait SharedMemoryAccess: Send + Sync {
@@ -35,7 +62,7 @@ pub trait SharedMemoryAccess: Send + Sync {
     async fn get_shared_memory(
         &self,
         pod_path: impl AsRef<Path> + Send,
-    ) -> Result<*const SharedDeviceState, Self::Error>;
+    ) -> Result<SharedMemoryPtr, Self::Error>;
 
     /// Add a PID to shared memory for a pod
     async fn add_pid(

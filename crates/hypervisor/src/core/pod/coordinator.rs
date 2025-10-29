@@ -571,12 +571,12 @@ where
         let (need_create, restored_pids) = {
             let get_result = self.shared_memory.get_shared_memory(pod_path).await;
 
-            if let Ok(ptr) = get_result {
+            if let Ok(ptr_wrapper) = get_result {
                 debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
 
                 // Use the pointer immediately and extract data before any awaits
                 let restored_pids = unsafe {
-                    let state = &*ptr;
+                    let state = &*ptr_wrapper.as_mut_ptr();
                     let pids = state.get_all_pids();
 
                     // update limit info

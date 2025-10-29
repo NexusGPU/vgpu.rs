@@ -42,17 +42,34 @@ impl MemoryManager {
         path: impl AsRef<Path>,
         configs: &[DeviceConfig],
     ) -> Result<()> {
+        let path_buf = path.as_ref().to_path_buf();
+
+        // Fast path: check if already exists
+        {
+            let memories = self.active_memories.read().await;
+            if memories.contains_key(&path_buf) {
+                return Ok(());
+            }
+        }
+
+        // Create shared memory outside the lock (blocking operation)
+        let configs_clone = configs.to_vec();
+        let path_clone = path_buf.clone();
+        let shmem = tokio::task::spawn_blocking(move || {
+            SharedMemoryHandle::create(&path_clone, &configs_clone)
+        })
+        .await
+        .context("Failed to spawn blocking task for shared memory creation")??;
+
+        // Insert into map with write lock
         let mut memories = self.active_memories.write().await;
 
-        // Check if the segment already exists.
-        if memories.contains_key(path.as_ref()) {
+        // Double-check in case another task created it while we were creating
+        if memories.contains_key(&path_buf) {
             return Ok(());
         }
-        // Create a new shared memory segment.
-        let shmem = SharedMemoryHandle::create(&path, configs)?;
 
-        // Store the Shmem object and configuration.
-        memories.insert(path.as_ref().to_path_buf(), shmem);
+        memories.insert(path_buf, shmem);
 
         Ok(())
     }
@@ -62,18 +79,39 @@ impl MemoryManager {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<*mut SharedDeviceState> {
-        let memories = self.active_memories.read().await;
+        let path_buf = path.as_ref().to_path_buf();
 
-        if let Some(shmem) = memories.get(path.as_ref()) {
-            Ok(shmem.get_ptr())
-        } else {
-            drop(memories);
-            let mut memories = self.active_memories.write().await;
-            let handle = SharedMemoryHandle::open(path.as_ref())?;
-            let ptr = handle.get_ptr();
-            memories.insert(path.as_ref().to_path_buf(), handle);
-            Ok(ptr)
+        // Fast path: check if already exists
+        {
+            let memories = self.active_memories.read().await;
+            if let Some(shmem) = memories.get(&path_buf) {
+                return Ok(shmem.get_ptr());
+            }
         }
+
+        // Open shared memory outside the lock (blocking operation)
+        let path_clone = path_buf.clone();
+        let (handle, ptr_addr) = tokio::task::spawn_blocking(move || {
+            let handle = SharedMemoryHandle::open(&path_clone)?;
+            let ptr = handle.get_ptr();
+            // Convert pointer to usize to make it Send-safe
+            Ok::<_, anyhow::Error>((handle, ptr as usize))
+        })
+        .await
+        .context("Failed to spawn blocking task for shared memory open")??;
+
+        // Insert into map with write lock
+        let mut memories = self.active_memories.write().await;
+
+        // Double-check in case another task opened it while we were opening
+        if let Some(existing) = memories.get(&path_buf) {
+            return Ok(existing.get_ptr());
+        }
+
+        memories.insert(path_buf, handle);
+
+        // Convert back to pointer after all awaits
+        Ok(ptr_addr as *mut _)
     }
 
     pub async fn add_pid(&self, path: impl AsRef<Path>, pid: usize) -> Result<()> {
@@ -304,10 +342,10 @@ impl super::traits::SharedMemoryAccess for MemoryManager {
     async fn get_shared_memory(
         &self,
         pod_path: impl AsRef<Path> + Send,
-    ) -> Result<*const super::SharedDeviceState, Self::Error> {
+    ) -> Result<super::traits::SharedMemoryPtr, Self::Error> {
         self.get_shared_memory(pod_path.as_ref())
             .await
-            .map(|ptr| ptr as *const _)
+            .map(|ptr| super::traits::SharedMemoryPtr::new(ptr as *const _))
     }
 
     async fn add_pid(
