@@ -298,18 +298,16 @@ where
                 continue;
             }
 
-            let Some(device_config_ref) = pod_state.get_device_config_for_pod(&pod_id, device_idx)
+            let Some(device_config) = pod_state.get_device_config_for_pod(&pod_id, device_idx)
             else {
                 debug!(pod_identifier = %pod_id, device_idx = device_idx, "Device config not found for pod");
                 continue;
             };
-            let device_config = device_config_ref.clone();
-            drop(device_config_ref);
             if let Err(e) = Self::process_pod_utilization_update(
                 pod_state,
                 &pod_id,
                 &host_pids,
-                &device_config,
+                device_config.as_ref(),
                 &device_snapshot,
                 erl_controllers,
                 erl_config,

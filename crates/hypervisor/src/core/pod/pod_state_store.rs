@@ -17,32 +17,6 @@ use super::types::{PodManagementError, PodStatus, Result};
 // Re-export unified types for backward compatibility
 use super::types::PodState;
 
-/// A wrapper that holds a reference to a DeviceConfig through a DashMap guard
-/// This allows returning borrowed DeviceConfig without cloning
-pub struct DeviceConfigRef<'a> {
-    guard: dashmap::mapref::one::Ref<'a, PodIdentifier, PodState>,
-    device_idx: u32,
-}
-
-impl<'a> DeviceConfigRef<'a> {
-    /// Get the device config reference
-    pub fn get(&self) -> &DeviceConfig {
-        self.guard
-            .device_configs
-            .iter()
-            .find(|cfg| cfg.device_idx == self.device_idx)
-            .expect("DeviceConfig should exist since we found it during construction")
-    }
-}
-
-impl<'a> std::ops::Deref for DeviceConfigRef<'a> {
-    type Target = DeviceConfig;
-
-    fn deref(&self) -> &Self::Target {
-        self.get()
-    }
-}
-
 /// Centralized pod state store providing atomic operations
 ///
 /// This store maintains all pod-related state in a thread-safe manner,
@@ -90,12 +64,14 @@ impl PodStateStore {
         use dashmap::mapref::entry::Entry;
 
         let device_count = device_configs.len();
+        let device_configs: Vec<Arc<DeviceConfig>> =
+            device_configs.into_iter().map(Arc::new).collect();
 
         // Use entry API to atomically check and update, avoiding nested locks
         match self.pods.entry(pod_identifier.clone()) {
             Entry::Occupied(mut entry) => {
                 let existing = entry.get();
-                let mut pod_state = PodState::new(info, device_configs);
+                let mut pod_state = PodState::new(info, device_configs.clone());
                 pod_state.processes = existing.processes.clone();
                 pod_state.shared_memory_handle = existing.shared_memory_handle.clone();
 
@@ -244,19 +220,14 @@ impl PodStateStore {
         &self,
         pod_identifier: &PodIdentifier,
         device_idx: u32,
-    ) -> Option<DeviceConfigRef<'_>> {
+    ) -> Option<Arc<DeviceConfig>> {
         let guard = self.pods.get(pod_identifier)?;
 
-        // Check if device config exists before creating the wrapper
-        if guard
+        guard
             .device_configs
             .iter()
-            .any(|cfg| cfg.device_idx == device_idx)
-        {
-            Some(DeviceConfigRef { guard, device_idx })
-        } else {
-            None
-        }
+            .find(|cfg| cfg.device_idx == device_idx)
+            .map(Arc::clone)
     }
 
     /// Open shared memory for a pod and store the handle
@@ -405,7 +376,7 @@ impl super::traits::PodStateRepository for PodStateStore {
         &self,
         pod_identifier: &PodIdentifier,
         device_idx: u32,
-    ) -> Option<DeviceConfigRef<'_>> {
+    ) -> Option<Arc<DeviceConfig>> {
         self.get_device_config_for_pod(pod_identifier, device_idx)
     }
 
@@ -537,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn test_device_config_ref() {
+    fn test_device_config_lookup_returns_arc() {
         let store = PodStateStore::new("/tmp/test_shm".into());
         let pod_id = create_test_pod_identifier("pod-1");
         let info = create_test_worker_info("test-pod");
@@ -545,14 +516,21 @@ mod tests {
 
         store.register_pod(&pod_id, info, device_configs).unwrap();
 
-        // Test getting device config via reference (no cloning)
-        if let Some(config_ref) = store.get_device_config_for_pod(&pod_id, 0) {
-            assert_eq!(config_ref.device_idx, 0);
-            assert_eq!(config_ref.device_uuid, "GPU-12345");
-            assert_eq!(config_ref.up_limit, 80);
-        } else {
-            panic!("Should find device config");
-        }
+        let config = store
+            .get_device_config_for_pod(&pod_id, 0)
+            .expect("should find device config");
+        assert_eq!(config.device_idx, 0);
+        assert_eq!(config.device_uuid, "GPU-12345");
+        assert_eq!(config.up_limit, 80);
+
+        // Ensure the Arc-returning lookup does not hold locks by performing a mutation afterwards
+        store
+            .register_process(&pod_id, 4242)
+            .expect("should register process after lookup");
+        assert!(store
+            .get_host_pids_for_pod(&pod_id)
+            .unwrap()
+            .contains(&4242));
 
         // Test getting non-existent device config
         assert!(store.get_device_config_for_pod(&pod_id, 999).is_none());
@@ -560,9 +538,5 @@ mod tests {
         assert!(store
             .get_device_config_for_pod(&non_existent_id, 0)
             .is_none());
-
-        // Test callback approach
-        let result = store.get_device_config_for_pod(&pod_id, 0).unwrap();
-        assert_eq!(result.device_uuid, "GPU-12345");
     }
 }
