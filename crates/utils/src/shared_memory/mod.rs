@@ -1154,7 +1154,7 @@ mod tests {
         let identifier = PodIdentifier::new("handle_create_open", "test");
 
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
-        std::fs::remove_dir_all(&pod_path).unwrap();
+        let _ = std::fs::remove_dir_all(&pod_path);
         // Create shared memory
         let handle1 = SharedMemoryHandle::create(&pod_path, &configs)
             .expect("should create shared memory successfully");
@@ -1204,7 +1204,7 @@ mod tests {
         let configs = create_test_configs();
         let identifier = PodIdentifier::new("concurrent_access", "test");
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
-        std::fs::remove_dir_all(&pod_path).unwrap();
+        let _ = std::fs::remove_dir_all(&pod_path);
         let handle = Arc::new(
             SharedMemoryHandle::create(&pod_path, &configs)
                 .expect("should create shared memory successfully"),
@@ -1262,7 +1262,7 @@ mod tests {
         let configs = create_test_configs();
         let identifier = PodIdentifier::new("manager_basic", "test");
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
-        std::fs::remove_dir_all(&pod_path).unwrap();
+        let _ = std::fs::remove_dir_all(&pod_path);
         // Test creation
         manager
             .create_shared_memory(&pod_path, &configs)
@@ -1295,7 +1295,7 @@ mod tests {
         let configs = create_test_configs();
         let identifier = PodIdentifier::new("manager_concurrent", "test");
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
-        std::fs::remove_dir_all(&pod_path).unwrap();
+        let _ = std::fs::remove_dir_all(&pod_path);
         let mut handles = vec![];
 
         // Multiple tasks trying to create the same shared memory
