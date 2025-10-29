@@ -280,7 +280,7 @@ impl Limiter {
             match check() {
                 Ok(true) => {
                     if wait_times > 0 {
-                        tracing::info!(
+                        tracing::debug!(
                             device_idx = raw_device_index,
                             wait_times,
                             total_wait_ms = wait_times * SLEEP_MS,
@@ -357,7 +357,7 @@ impl Limiter {
             Ok(true) => {
                 let tokens_after = limiter.current_tokens(raw_device_index).unwrap_or(0.0);
                 let cost = current_tokens - tokens_after;
-                tracing::info!(
+                tracing::debug!(
                     device_idx = raw_device_index,
                     grids,
                     blocks,

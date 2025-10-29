@@ -145,7 +145,7 @@ impl<B: DeviceBackend> DeviceController<B> {
         let effective_utilization = if token_saturation_ratio > 0.95 && measured < 0.05 {
             // Clamp measured utilization to target to prevent PID from increasing rate
             // This creates a "soft ceiling" that prevents runaway in no-load scenarios
-            tracing::info!(
+            tracing::debug!(
                 device = self.device,
                 tokens = current_state.tokens,
                 capacity = quota.capacity,
@@ -176,7 +176,7 @@ impl<B: DeviceBackend> DeviceController<B> {
         let tokens_after = self.backend.read_token_state(self.device)?.tokens;
 
         // Detailed logging for debugging
-        tracing::info!(
+        tracing::debug!(
             device = self.device,
             measured_util = %format!("{:.1}%", measured * 100.0),
             effective_util = %format!("{:.1}%", effective_utilization * 100.0),
