@@ -124,11 +124,6 @@ pub async fn run_mount_shm(mount_shm_args: MountShmArgs) -> Result<()> {
     tracing::info!("mount point: {:?}", mount_shm_args.mount_point);
     tracing::info!("size: {} MB", mount_shm_args.size_mb);
 
-    tracing::info!(
-        "Cleaning up ALL shared memory files in: {:?}",
-        mount_shm_args.mount_point
-    );
-
     // create mount point directory
     if !mount_shm_args.mount_point.exists() {
         tracing::info!(
