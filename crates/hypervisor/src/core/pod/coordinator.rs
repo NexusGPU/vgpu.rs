@@ -548,7 +548,7 @@ where
                 "Failed to update ERL controller"
             );
         } else {
-            debug!(
+            info!(
                 pod_identifier = %pod_identifier,
                 device_index = device_index,
                 raw_utilization = pod_utilization.total_utilization,
