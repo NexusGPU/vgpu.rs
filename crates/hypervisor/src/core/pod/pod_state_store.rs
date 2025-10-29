@@ -110,6 +110,14 @@ impl PodStateStore {
 
         self.pods.insert(pod_identifier.clone(), pod_state);
 
+        // TODO: need remove
+        info!(
+            namespace = %pod_identifier.namespace,
+            pod_name = %pod_identifier.name,
+            device_count = device_count,
+            "Pod registered in state store after insert"
+        );
+
         Ok(())
     }
 

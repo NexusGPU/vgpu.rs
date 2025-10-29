@@ -572,12 +572,16 @@ where
     ) -> Result<Vec<usize>> {
         let pod_path = self.pod_state.pod_path(pod_identifier);
 
+        // TODO: need remove
+        info!(pod_identifier = %pod_identifier, "Ensuring pod registered with device configurations");
+
         // Try to get existing shared memory and immediately extract data
         let (need_create, restored_pids) = {
             let get_result = self.shared_memory.get_shared_memory(pod_path).await;
 
             if let Ok(ptr_wrapper) = get_result {
-                debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
+                // TODO: need change to debug
+                info!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
 
                 // Use the pointer immediately and extract data before any awaits
                 let restored_pids = unsafe {
@@ -621,7 +625,8 @@ where
 
         // Create shared memory if needed (get_result is dropped here)
         let restored_pids = if need_create {
-            debug!(pod_identifier = %pod_identifier, "Creating new shared memory for pod");
+            // TODO: need change to debug
+            info!(pod_identifier = %pod_identifier, "Creating new shared memory for pod");
             let pod_path = self.pod_state.pod_path(pod_identifier);
             self.shared_memory
                 .create_shared_memory(&pod_path, configs)

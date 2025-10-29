@@ -284,6 +284,7 @@ where
         // Register in state store
         self.pod_state_store
             .register_pod(&pod_identifier, pod_info.0, device_configs.clone())?;
+
         let restored_pids = self
             .limiter_coordinator
             .ensure_pod_registered(&pod_identifier, &device_configs)
