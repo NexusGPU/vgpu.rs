@@ -476,6 +476,13 @@ where
             );
         }
 
+        // Scale max_refill_rate based on up_limit to enforce quota
+        // up_limit represents the percentage of GPU this pod can use
+        // So max_refill_rate should be proportionally scaled
+        let quota_ratio = target_utilization;
+        let scaled_max_refill_rate = erl_config.max_refill_rate * quota_ratio;
+        let scaled_initial_refill_rate = erl_config.initial_refill_rate * quota_ratio;
+
         use std::collections::hash_map::Entry;
         let mut controllers = erl_controllers.write().await;
         let controller = match controllers.entry(key) {
@@ -485,8 +492,8 @@ where
                 let pid_cfg = PidConfig {
                     tuning: PidTuning::new(erl_config.pid_kp, erl_config.pid_ki, erl_config.pid_kd),
                     output_min: erl_config.min_refill_rate,
-                    output_max: erl_config.max_refill_rate,
-                    initial_output: erl_config.initial_refill_rate,
+                    output_max: scaled_max_refill_rate,
+                    initial_output: scaled_initial_refill_rate,
                     integral_limit: erl_config.integral_limit,
                     derivative_filter: erl_config.derivative_filter,
                     min_delta_time: erl_config.min_delta_time,
@@ -504,9 +511,11 @@ where
                         debug!(
                             pod_identifier = %pod_identifier,
                             device_index = device_index,
+                            up_limit = device_config.up_limit,
                             target_utilization = target_utilization,
+                            scaled_max_refill_rate = %format!("{:.1}", scaled_max_refill_rate),
                             initial_rate = ctrl.state().last_refill_rate,
-                            "Initialized PID controller for pod/device"
+                            "Initialized PID controller for pod/device with scaled refill rate"
                         );
                         vacant.insert(ctrl)
                     }
@@ -548,7 +557,7 @@ where
         }
     }
 
-    /// Ensures a pod is registered with device configurations (idempotent operation)
+    /// Ensures a pod is registered with device configurations
     #[tracing::instrument(skip(self, configs), fields(pod = %pod_identifier, device_count = configs.len()))]
     pub async fn ensure_pod_registered(
         &self,

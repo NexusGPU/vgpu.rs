@@ -90,7 +90,7 @@ impl ApplicationBuilder {
         let erl_config = crate::config::ErlConfig::from(&self.daemon_args);
 
         let config = CoordinatorConfig {
-            watch_interval: Duration::from_millis(70),
+            watch_interval: Duration::from_millis(100),
             device_count: gpu_system.device_count,
             shared_memory_glob_pattern: format!(
                 "{}/*/*",
