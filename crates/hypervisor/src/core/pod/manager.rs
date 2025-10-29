@@ -396,7 +396,9 @@ where
             })?;
 
         // 3. Open shared memory for the pod
-        self.pod_state_store.open_shared_memory(&pod_identifier)?;
+        self.pod_state_store
+            .open_shared_memory(&pod_identifier)
+            .await?;
 
         // 4. Add worker to hypervisor
         if !self.hypervisor.process_exists(host_pid).await {

@@ -250,15 +250,22 @@ impl PodStateStore {
 
     /// Open shared memory for a pod and store the handle
     /// This method creates and opens the SharedMemoryHandle from the pod identifier
-    pub fn open_shared_memory(&self, pod_identifier: &PodIdentifier) -> Result<()> {
+    pub async fn open_shared_memory(&self, pod_identifier: &PodIdentifier) -> Result<()> {
         let pod_path = self.pod_path(pod_identifier);
 
         // Create SharedMemoryHandle by opening the shared memory
-        let handle = Arc::new(SharedMemoryHandle::open(&pod_path).map_err(|e| {
-            PodManagementError::SharedMemoryError {
+        // Use spawn_blocking to avoid blocking the tokio runtime
+        let pod_path_clone = pod_path.clone();
+        let handle = tokio::task::spawn_blocking(move || SharedMemoryHandle::open(&pod_path_clone))
+            .await
+            .map_err(|e| PodManagementError::SharedMemoryError {
+                message: format!("Task join error: {e}"),
+            })?
+            .map_err(|e| PodManagementError::SharedMemoryError {
                 message: format!("Failed to open shared memory for {pod_path:?}: {e}"),
-            }
-        })?);
+            })?;
+
+        let handle = Arc::new(handle);
 
         let mut pod_ref = self.pods.get_mut(pod_identifier).ok_or_else(|| {
             PodManagementError::PodIdentifierNotFound {
