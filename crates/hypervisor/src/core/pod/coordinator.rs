@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use anyhow::Context;
 use anyhow::Result;
 
-use erl::{DeviceController, DeviceControllerConfig, PidConfig, PidTuning};
+use erl::{DeviceController, DeviceControllerConfig};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, interval_at, Instant};
 use tokio_util::sync::CancellationToken;
@@ -496,21 +496,18 @@ where
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(vacant) => {
                 let backend = ErlSharedMemoryAdapter::new(handle.clone());
-                let pid_cfg = PidConfig {
-                    tuning: PidTuning::new(erl_config.pid_kp, erl_config.pid_ki, erl_config.pid_kd),
-                    output_min: erl_config.min_refill_rate,
-                    output_max: scaled_max_refill_rate,
-                    initial_output: scaled_initial_refill_rate,
-                    integral_limit: erl_config.integral_limit,
-                    derivative_filter: erl_config.derivative_filter,
-                    min_delta_time: erl_config.min_delta_time,
-                };
 
                 let ctrl_cfg = DeviceControllerConfig {
                     target_utilization,
                     burst_seconds: erl_config.burst_seconds,
                     capacity_floor: erl_config.capacity_floor,
-                    pid: pid_cfg,
+                    kp: erl_config.pid_kp,
+                    ki: erl_config.pid_ki,
+                    kd: erl_config.pid_kd,
+                    integral_limit: erl_config.integral_limit,
+                    rate_min: erl_config.min_refill_rate,
+                    rate_max: scaled_max_refill_rate,
+                    rate_initial: scaled_initial_refill_rate,
                 };
 
                 match DeviceController::new(backend, device_index, ctrl_cfg) {

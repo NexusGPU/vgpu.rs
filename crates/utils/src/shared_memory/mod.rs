@@ -149,15 +149,14 @@ pub struct SharedDeviceInfoV2 {
     /// Current pod memory usage in bytes.
     pub pod_memory_used: AtomicU64,
 
-    // ERL (Elastic Rate Limiting) related fields - Simplified PI controller version
-    /// Token bucket refill rate (tokens per second, as f64 bits)
-    /// Adjusted by hypervisor's PID controller for this Pod
+    // ERL (Elastic Rate Limiting) - PID-controlled token bucket
+    /// Refill rate (tokens/second) adjusted by PID controller
     pub erl_token_refill_rate: AtomicU64,
-    /// Token bucket capacity for this Pod
+    /// Token bucket capacity
     pub erl_token_capacity: AtomicU64,
-    /// Current tokens in bucket (as f64 bits)
+    /// Current tokens available
     pub erl_current_tokens: AtomicU64,
-    /// Last token update timestamp (as f64 bits)
+    /// Last token update timestamp (microseconds)
     pub erl_last_token_update: AtomicU64,
 }
 

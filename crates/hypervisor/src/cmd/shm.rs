@@ -75,14 +75,13 @@ pub async fn run_show_shm(show_shm_args: ShowShmArgs) -> Result<()> {
         2 => {
             for (i, device) in state.iter_active_devices() {
                 tracing::info!(
-                    "Device {}: UUID={}, TotalCores={}, MemLimit={}, MemUsed={}, UpLimit={}%, ERL(avg_cost={:.3}, tokens={:.3}/{:.3}, refill={:.3}/s, last_update={:.0})",
+                    "Device {}: UUID={}, TotalCores={}, MemLimit={}, MemUsed={}, UpLimit={}%, ERL(tokens={:.1}/{:.1}, rate={:.1}/s, updated={:.0}µs)",
                     i,
                     device.get_uuid(),
                     device.device_info.get_total_cores(),
                     device.device_info.get_mem_limit(),
                     device.device_info.get_pod_memory_used(),
                     device.device_info.get_up_limit(),
-                    device.device_info.get_erl_token_refill_rate(),
                     device.device_info.get_erl_current_tokens(),
                     device.device_info.get_erl_token_capacity(),
                     device.device_info.get_erl_token_refill_rate(),

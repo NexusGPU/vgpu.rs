@@ -90,33 +90,32 @@ impl ShmDetailDialog {
                 );
                 content_lines.push(vec!["• UUID: ".into(), device.uuid.clone().dim()].into());
 
-                // Version-specific content
-                if device.erl_avg_cost.is_some() {
-                    // V2 (ERL) metrics
-                    let avg_cost = device.erl_avg_cost.unwrap_or_default();
+                // Show ERL metrics if available (V2 only)
+                if let Some(refill_rate) = device.erl_token_refill_rate {
                     let token_capacity = device.erl_token_capacity.unwrap_or_default();
-                    let refill_rate = device.erl_token_refill_rate.unwrap_or_default();
                     let current_tokens = device.erl_current_tokens.unwrap_or_default();
                     let last_update = device.erl_last_token_update.unwrap_or_default();
 
                     content_lines.push(
-                        vec!["• ERL Avg Cost: ".into(), format!("{avg_cost:.3}").into()].into(),
-                    );
-                    content_lines.push(
                         vec![
-                            "• ERL Tokens: ".into(),
-                            format!("{current_tokens:.3}").into(),
-                            " / ".dim(),
-                            format!("{token_capacity:.3}").into(),
-                            ", refill ".dim(),
-                            format!("{refill_rate:.3}/s").into(),
+                            "• ERL Refill Rate: ".into(),
+                            format!("{refill_rate:.1} tokens/s").into(),
                         ]
                         .into(),
                     );
                     content_lines.push(
                         vec![
-                            "• ERL Last Update (s): ".into(),
-                            format!("{last_update:.0}").into(),
+                            "• ERL Tokens: ".into(),
+                            format!("{current_tokens:.1}").into(),
+                            " / ".dim(),
+                            format!("{token_capacity:.1}").into(),
+                        ]
+                        .into(),
+                    );
+                    content_lines.push(
+                        vec![
+                            "• ERL Last Update: ".into(),
+                            format!("{last_update:.0}µs").into(),
                         ]
                         .into(),
                     );
