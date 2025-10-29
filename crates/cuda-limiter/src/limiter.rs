@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -70,7 +71,9 @@ pub(crate) struct DeviceDim {
 /// Main limiter struct that manages CUDA resource limits
 pub(crate) struct Limiter {
     /// Shared memory handle for each device (lazy initialized)
-    shared_memory_handle: OnceCell<SharedMemoryHandle>,
+    shared_memory_handle: OnceCell<Arc<SharedMemoryHandle>>,
+    /// Cached ERL kernel limiter backed by shared memory
+    erl_kernel_limiter: OnceCell<KernelLimiter<ErlSharedMemoryAdapter<Arc<SharedMemoryHandle>>>>,
     /// NVML instance
     nvml: Nvml,
     /// Device dimensions
@@ -106,6 +109,7 @@ impl Limiter {
 
         Ok(Self {
             shared_memory_handle: OnceCell::new(),
+            erl_kernel_limiter: OnceCell::new(),
             current_devices_dim: HashMap::new(),
             nvml,
             cu_device_mapping: DashMap::new(),
@@ -115,15 +119,31 @@ impl Limiter {
 
     /// Get or initialize the shared memory handle (lazy initialization)
     fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
+        Ok(self.get_or_init_shared_memory_arc()?.as_ref())
+    }
+
+    fn get_or_init_shared_memory_arc(&self) -> Result<&Arc<SharedMemoryHandle>, Error> {
         self.shared_memory_handle.get_or_try_init(|| {
             if let Some(shm_path) = crate::mock_shm_path() {
-                Ok(SharedMemoryHandle::mock(
+                Ok(Arc::new(SharedMemoryHandle::mock(
                     shm_path,
                     self.gpu_idx_uuids.clone(),
-                ))
+                )))
             } else {
-                SharedMemoryHandle::open(shm_path()).map_err(Error::SharedMemory)
+                SharedMemoryHandle::open(shm_path())
+                    .map(Arc::new)
+                    .map_err(Error::SharedMemory)
             }
+        })
+    }
+
+    fn get_or_init_kernel_limiter(
+        &self,
+    ) -> Result<&KernelLimiter<ErlSharedMemoryAdapter<Arc<SharedMemoryHandle>>>, Error> {
+        self.erl_kernel_limiter.get_or_try_init(|| {
+            let handle = Arc::clone(self.get_or_init_shared_memory_arc()?);
+            let erl_adapter = ErlSharedMemoryAdapter::new(handle);
+            Ok(KernelLimiter::new(erl_adapter))
         })
     }
 
@@ -345,10 +365,7 @@ impl Limiter {
         grids: u32,
         blocks: u32,
     ) -> Result<bool, Error> {
-        // Create a temporary ERL adapter for this operation
-        let handle = self.get_or_init_shared_memory()?;
-        let erl_adapter = ErlSharedMemoryAdapter::new(handle);
-        let limiter = KernelLimiter::new(erl_adapter);
+        let limiter = self.get_or_init_kernel_limiter()?;
 
         // Get current state before trying to acquire
         let current_tokens = limiter.current_tokens(raw_device_index).unwrap_or(0.0);
