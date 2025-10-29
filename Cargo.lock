@@ -4337,6 +4337,7 @@ name = "utils"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "erl",
  "error-stack",
  "frida-gum",
@@ -4345,6 +4346,7 @@ dependencies = [
  "shared_memory",
  "tempfile",
  "thiserror 2.0.17",
+ "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

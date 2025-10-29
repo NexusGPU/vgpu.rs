@@ -1259,22 +1259,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn thread_safe_manager_basic_operations() {
+    #[tokio::test]
+    async fn thread_safe_manager_basic_operations() {
         let manager = MemoryManager::new();
         let configs = create_test_configs();
         let identifier = PodIdentifier::new("manager_basic", "test");
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
 
         // Test creation
-        manager.create_shared_memory(&pod_path, &configs).unwrap();
-        assert!(manager.contains(&pod_path));
+        manager
+            .create_shared_memory(&pod_path, &configs)
+            .await
+            .unwrap();
+        assert!(manager.contains(&pod_path).await);
 
         // Verify shared memory file exists
         assert!(Path::new(&pod_path).exists());
 
         // Test getting shared memory
-        let ptr = manager.get_shared_memory(&pod_path).unwrap();
+        let ptr = manager.get_shared_memory(&pod_path).await.unwrap();
         assert!(!ptr.is_null());
 
         // Test accessing through pointer
@@ -1285,8 +1288,8 @@ mod tests {
         }
 
         // Test cleanup
-        manager.cleanup(&pod_path).unwrap();
-        assert!(!manager.contains(&pod_path));
+        manager.cleanup(&pod_path).await.unwrap();
+        assert!(!manager.contains(&pod_path).await);
 
         // Check that the path exists but is an empty directory
         let path = Path::new(&pod_path);
@@ -1296,8 +1299,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn thread_safe_manager_concurrent_creation() {
+    #[tokio::test]
+    async fn thread_safe_manager_concurrent_creation() {
         let manager = Arc::new(MemoryManager::new());
         let configs = create_test_configs();
         let identifier = PodIdentifier::new("manager_concurrent", "test");
@@ -1305,14 +1308,16 @@ mod tests {
 
         let mut handles = vec![];
 
-        // Multiple threads trying to create the same shared memory
+        // Multiple tasks trying to create the same shared memory
         for _ in 0..5 {
             let manager_clone = Arc::clone(&manager);
             let configs_clone = configs.clone();
             let pod_path_clone = pod_path.clone();
 
-            let handle = thread::spawn(move || {
-                let result = manager_clone.create_shared_memory(&pod_path_clone, &configs_clone);
+            let handle = tokio::spawn(async move {
+                let result = manager_clone
+                    .create_shared_memory(&pod_path_clone, &configs_clone)
+                    .await;
                 assert!(result.is_ok());
             });
 
@@ -1320,16 +1325,16 @@ mod tests {
         }
 
         for handle in handles {
-            handle.join().unwrap();
+            handle.await.unwrap();
         }
 
         // Should have exactly one shared memory
-        assert!(manager.contains(&pod_path));
-        manager.cleanup(&pod_path).unwrap();
+        assert!(manager.contains(&pod_path).await);
+        manager.cleanup(&pod_path).await.unwrap();
     }
 
-    #[test]
-    fn orphaned_file_cleanup() {
+    #[tokio::test]
+    async fn orphaned_file_cleanup() {
         let manager = MemoryManager::new();
 
         // Create a fake orphaned file in /tmp
@@ -1342,6 +1347,7 @@ mod tests {
         // Test cleanup with a pattern that won't match
         let cleaned = manager
             .cleanup_orphaned_files("nonexistent_pattern", |_| false, Path::new("/"))
+            .await
             .unwrap();
         assert_eq!(cleaned.len(), 0);
 

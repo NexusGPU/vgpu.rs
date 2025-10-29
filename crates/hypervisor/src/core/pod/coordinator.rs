@@ -136,9 +136,10 @@ where
         format!("{}/{}", self.shared_memory_glob_pattern, SHM_PATH_SUFFIX)
     }
 
-    pub fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<PathBuf>> {
+    pub async fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<PathBuf>> {
         self.shared_memory
             .find_shared_memory_files(glob_pattern)
+            .await
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
@@ -565,11 +566,38 @@ where
         configs: &[DeviceConfig],
     ) -> Result<Vec<usize>> {
         let pod_path = self.pod_state.pod_path(pod_identifier);
-        let restored_pids = match self.shared_memory.get_shared_memory(pod_path) {
-            Ok(ptr) => {
+
+        // Try to get existing shared memory and immediately extract data
+        let (need_create, restored_pids) = {
+            let get_result = self.shared_memory.get_shared_memory(pod_path).await;
+
+            if let Ok(ptr) = get_result {
                 debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
-                let state = unsafe { &*ptr };
-                let restored_pids = state.get_all_pids();
+
+                // Use the pointer immediately and extract data before any awaits
+                let restored_pids = unsafe {
+                    let state = &*ptr;
+                    let pids = state.get_all_pids();
+
+                    // update limit info
+                    for config in configs {
+                        state.with_device(
+                            config.device_idx as usize,
+                            |device| {
+                                device.device_info.set_total_cores(config.total_cuda_cores);
+                                device.device_info.set_up_limit(config.up_limit);
+                                device.device_info.set_mem_limit(config.mem_limit);
+                            },
+                            |device| {
+                                device.device_info.set_total_cores(config.total_cuda_cores);
+                                device.device_info.set_up_limit(config.up_limit);
+                                device.device_info.set_mem_limit(config.mem_limit);
+                            },
+                        );
+                    }
+
+                    pids
+                };
 
                 if !restored_pids.is_empty() {
                     debug!(
@@ -579,33 +607,24 @@ where
                         restored_pids.len()
                     );
                 }
-                // update limit info
-                for config in configs {
-                    state.with_device(
-                        config.device_idx as usize,
-                        |device| {
-                            device.device_info.set_total_cores(config.total_cuda_cores);
-                            device.device_info.set_up_limit(config.up_limit);
-                            device.device_info.set_mem_limit(config.mem_limit);
-                        },
-                        |device| {
-                            device.device_info.set_total_cores(config.total_cuda_cores);
-                            device.device_info.set_up_limit(config.up_limit);
-                            device.device_info.set_mem_limit(config.mem_limit);
-                        },
-                    );
-                }
 
-                restored_pids
+                (false, restored_pids)
+            } else {
+                (true, Vec::new())
             }
-            Err(e) => {
-                debug!(pod_identifier = %pod_identifier, error = %e, "Creating new shared memory for pod");
-                let pod_path = self.pod_state.pod_path(pod_identifier);
-                self.shared_memory
-                    .create_shared_memory(&pod_path, configs)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
-                Vec::new()
-            }
+        };
+
+        // Create shared memory if needed (get_result is dropped here)
+        let restored_pids = if need_create {
+            debug!(pod_identifier = %pod_identifier, "Creating new shared memory for pod");
+            let pod_path = self.pod_state.pod_path(pod_identifier);
+            self.shared_memory
+                .create_shared_memory(&pod_path, configs)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            Vec::new()
+        } else {
+            restored_pids
         };
 
         if !restored_pids.is_empty() {
@@ -621,11 +640,16 @@ where
     }
 
     /// Registers a process within a pod (Process-level operation)
-    pub fn register_process(&self, pod_identifier: &PodIdentifier, host_pid: u32) -> Result<()> {
+    pub async fn register_process(
+        &self,
+        pod_identifier: &PodIdentifier,
+        host_pid: u32,
+    ) -> Result<()> {
         // Add PID to shared memory
         let pod_path = self.pod_state.pod_path(pod_identifier);
         self.shared_memory
             .add_pid(pod_path, host_pid as usize)
+            .await
             .map_err(|e| anyhow::anyhow!("{e}"))
             .context("Failed to add PID to shared memory")?;
 
@@ -639,11 +663,16 @@ where
     }
 
     /// Unregisters a single process from the coordinator.
-    pub fn unregister_process(&self, pod_identifier: &PodIdentifier, host_pid: u32) -> Result<()> {
+    pub async fn unregister_process(
+        &self,
+        pod_identifier: &PodIdentifier,
+        host_pid: u32,
+    ) -> Result<()> {
         let pod_path = self.pod_state.pod_path(pod_identifier);
         // Remove PID from shared memory
         self.shared_memory
             .remove_pid(pod_path, host_pid as usize)
+            .await
             .map_err(|e| anyhow::anyhow!("{e}"))
             .context("Failed to remove PID from shared memory")?;
 
@@ -684,13 +713,13 @@ where
 
                         if let Err(e) = shared_memory.cleanup_orphaned_files(&shared_memory_glob_pattern, |identifier| {
                             pod_state.contains_pod(identifier)
-                        }, &base_path) {
+                        }, &base_path).await {
                             tracing::warn!("Failed to cleanup orphaned shared memory files: {}", e);
                         }
 
                         match shared_memory.cleanup_unused(|identifier| {
                             pod_state.contains_pod(identifier)
-                        }, &base_path) {
+                        }, &base_path).await {
                             Ok(cleaned_files) => {
                                 if !cleaned_files.is_empty() {
                                     tracing::info!(
@@ -968,7 +997,7 @@ mod tests {
 
         // Test process registration
         let pod_id = PodIdentifier::new("test", "pod");
-        let result = coordinator.register_process(&pod_id, 1234);
+        let result = coordinator.register_process(&pod_id, 1234).await;
         assert!(result.is_ok());
 
         // Verify operation was logged in mock
@@ -978,7 +1007,7 @@ mod tests {
             .any(|op| op.contains("add_pid(/tmp/test_shm/test/pod, 1234)")));
 
         // Test process unregistration
-        let result = coordinator.unregister_process(&pod_id, 1234);
+        let result = coordinator.unregister_process(&pod_id, 1234).await;
         assert!(result.is_ok());
 
         // Verify operation was logged in mock
@@ -1046,15 +1075,15 @@ mod tests {
         assert_eq!(last_seen_timestamp, 0); // Should remain unchanged
     }
 
-    #[test]
-    fn test_find_shared_memory_files() {
+    #[tokio::test]
+    async fn test_find_shared_memory_files() {
         let (coordinator, shared_memory, _, _, _) = TestLimiterCoordinator::new_test(
             Duration::from_millis(100),
             1,
             "test_*.shm".to_string(),
         );
 
-        let result = coordinator.find_shared_memory_files("test_*.shm");
+        let result = coordinator.find_shared_memory_files("test_*.shm").await;
         assert!(result.is_ok());
 
         // Verify the call was made to the mock

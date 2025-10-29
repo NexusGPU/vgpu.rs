@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::RwLock;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
 use glob;
 use shared_memory::ShmemConf;
+use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
 
@@ -37,15 +37,13 @@ impl MemoryManager {
     }
 
     /// Creates a shared memory segment.
-    pub fn create_shared_memory(
+    pub async fn create_shared_memory(
         &self,
         path: impl AsRef<Path>,
         configs: &[DeviceConfig],
     ) -> Result<()> {
-        let mut memories = self
-            .active_memories
-            .write()
-            .expect("RwLock should not be poisoned");
+        let mut memories = self.active_memories.write().await;
+
         // Check if the segment already exists.
         if memories.contains_key(path.as_ref()) {
             return Ok(());
@@ -60,19 +58,17 @@ impl MemoryManager {
     }
 
     /// Gets a pointer to the shared memory by its identifier.
-    pub fn get_shared_memory(&self, path: impl AsRef<Path>) -> Result<*mut SharedDeviceState> {
-        let memories = self
-            .active_memories
-            .read()
-            .expect("RwLock should not be poisoned");
+    pub async fn get_shared_memory(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<*mut SharedDeviceState> {
+        let memories = self.active_memories.read().await;
+
         if let Some(shmem) = memories.get(path.as_ref()) {
             Ok(shmem.get_ptr())
         } else {
             drop(memories);
-            let mut memories = self
-                .active_memories
-                .write()
-                .expect("RwLock should not be poisoned");
+            let mut memories = self.active_memories.write().await;
             let handle = SharedMemoryHandle::open(path.as_ref())?;
             let ptr = handle.get_ptr();
             memories.insert(path.as_ref().to_path_buf(), handle);
@@ -80,31 +76,30 @@ impl MemoryManager {
         }
     }
 
-    pub fn add_pid(&self, path: impl AsRef<Path>, pid: usize) -> Result<()> {
+    pub async fn add_pid(&self, path: impl AsRef<Path>, pid: usize) -> Result<()> {
         self.with_memory_handle(path, |shmem| {
             let state = shmem.get_state();
             state.add_pid(pid);
             Ok(())
         })
+        .await
     }
 
-    pub fn remove_pid(&self, path: impl AsRef<Path>, pid: usize) -> Result<()> {
+    pub async fn remove_pid(&self, path: impl AsRef<Path>, pid: usize) -> Result<()> {
         self.with_memory_handle(path, |shmem| {
             let state = shmem.get_state();
             state.remove_pid(pid);
             Ok(())
         })
+        .await
     }
 
     /// Helper method to safely access shared memory handles with error handling
-    fn with_memory_handle<T, F>(&self, path: impl AsRef<Path>, f: F) -> Result<T>
+    async fn with_memory_handle<T, F>(&self, path: impl AsRef<Path>, f: F) -> Result<T>
     where
         F: FnOnce(&SharedMemoryHandle) -> Result<T>,
     {
-        let memories = self
-            .active_memories
-            .read()
-            .expect("RwLock should not be poisoned");
+        let memories = self.active_memories.read().await;
         let shmem = memories.get(path.as_ref()).context(format!(
             "Shared memory not found: {}",
             path.as_ref().display()
@@ -113,11 +108,8 @@ impl MemoryManager {
     }
 
     /// Cleans up a shared memory segment.
-    pub fn cleanup(&self, path: impl AsRef<Path>) -> Result<()> {
-        let mut memories = self
-            .active_memories
-            .write()
-            .expect("RwLock should not be poisoned");
+    pub async fn cleanup(&self, path: impl AsRef<Path>) -> Result<()> {
+        let mut memories = self.active_memories.write().await;
 
         if let Some(shmem) = memories.remove(path.as_ref()) {
             // Drop the Shmem object to release the shared memory.
@@ -132,11 +124,11 @@ impl MemoryManager {
 
     /// Cleanup orphaned shared memory files that match our naming pattern.
     /// This should be called at startup to clean up files left by crashed processes.
-    pub fn cleanup_orphaned_files(
+    pub async fn cleanup_orphaned_files(
         &self,
         glob_pattern: &str,
-        is_pod_tracking: impl Fn(&PodIdentifier) -> bool,
-        base_path: impl AsRef<Path>,
+        is_pod_tracking: impl Fn(&PodIdentifier) -> bool + Send,
+        base_path: impl AsRef<Path> + Send,
     ) -> Result<Vec<PodIdentifier>> {
         let mut cleaned_pid_ids = Vec::new();
         let file_paths = self.find_shared_memory_files(glob_pattern)?;
@@ -156,7 +148,10 @@ impl MemoryManager {
             }
 
             if self.is_shared_memory_orphaned(file_path)? {
-                if let Err(e) = self.remove_orphaned_file(&shm_file_path, base_path.as_ref()) {
+                if let Err(e) = self
+                    .remove_orphaned_file(&shm_file_path, base_path.as_ref())
+                    .await
+                {
                     warn!(
                         "Failed to remove orphaned file {}: {}",
                         shm_file_path.display(),
@@ -210,11 +205,8 @@ impl MemoryManager {
     }
 
     /// Remove an orphaned shared memory file
-    fn remove_orphaned_file(&self, file_path: &Path, base_path: &Path) -> Result<()> {
-        self.active_memories
-            .write()
-            .expect("RwLock should not be poisoned")
-            .remove(file_path);
+    async fn remove_orphaned_file(&self, file_path: &Path, base_path: &Path) -> Result<()> {
+        self.active_memories.write().await.remove(file_path);
         std::fs::remove_file(file_path)
             .context(format!("Failed to remove file {}", file_path.display()))?;
 
@@ -232,25 +224,22 @@ impl MemoryManager {
 
     /// Checks if a shared memory segment should be cleaned up based on reference count.
     /// Returns true if the segment exists and has zero references.
-    pub fn should_cleanup(&self, path: impl AsRef<Path>) -> bool {
+    pub async fn should_cleanup(&self, path: impl AsRef<Path>) -> bool {
         self.with_memory_handle(path, |shmem| {
             Ok(shmem.get_state().get_all_pids().is_empty())
         })
+        .await
         .unwrap_or(false)
     }
-
     /// Attempt to cleanup shared memory segments with zero reference count.
-    pub fn cleanup_unused(
+    pub async fn cleanup_unused(
         &self,
-        is_pod_tracking: impl Fn(&PodIdentifier) -> bool,
-        base_path: impl AsRef<Path>,
+        is_pod_tracking: impl Fn(&PodIdentifier) -> bool + Send,
+        base_path: impl AsRef<Path> + Send,
     ) -> Result<Vec<PodIdentifier>> {
         let mut cleaned_up = Vec::new();
         let paths: Vec<PathBuf> = {
-            let memories = self
-                .active_memories
-                .read()
-                .expect("RwLock should not be poisoned");
+            let memories = self.active_memories.read().await;
             memories.keys().cloned().collect()
         };
 
@@ -260,8 +249,8 @@ impl MemoryManager {
             if is_pod_tracking(&identifier) {
                 continue;
             }
-            if self.should_cleanup(&path) {
-                match self.cleanup(&path) {
+            if self.should_cleanup(&path).await {
+                match self.cleanup(&path).await {
                     Ok(_) => {
                         cleaned_up.push(identifier.clone());
                         info!(path = %path.display(), "Cleaned up unused shared memory segment");
@@ -290,70 +279,77 @@ impl MemoryManager {
     }
 
     /// Checks if a shared memory segment exists.
-    pub fn contains(&self, path: impl AsRef<Path>) -> bool {
-        let memories = self
-            .active_memories
-            .read()
-            .expect("RwLock should not be poisoned");
+    pub async fn contains(&self, path: impl AsRef<Path>) -> bool {
+        let memories = self.active_memories.read().await;
         memories.contains_key(path.as_ref())
     }
 }
 
-// Implement SharedMemoryAccess trait directly
+#[async_trait::async_trait]
 impl super::traits::SharedMemoryAccess for MemoryManager {
     type Error = anyhow::Error;
 
-    fn find_shared_memory_files(&self, glob: &str) -> Result<Vec<PathBuf>, Self::Error> {
+    async fn find_shared_memory_files(&self, glob: &str) -> Result<Vec<PathBuf>, Self::Error> {
         self.find_shared_memory_files(glob)
     }
 
-    fn create_shared_memory(
+    async fn create_shared_memory(
         &self,
-        pod_path: impl AsRef<Path>,
+        pod_path: impl AsRef<Path> + Send,
         cfgs: &[super::DeviceConfig],
     ) -> Result<(), Self::Error> {
-        self.create_shared_memory(pod_path.as_ref(), cfgs)
+        self.create_shared_memory(pod_path.as_ref(), cfgs).await
     }
 
-    fn get_shared_memory(
+    async fn get_shared_memory(
         &self,
-        pod_path: impl AsRef<Path>,
+        pod_path: impl AsRef<Path> + Send,
     ) -> Result<*const super::SharedDeviceState, Self::Error> {
         self.get_shared_memory(pod_path.as_ref())
+            .await
             .map(|ptr| ptr as *const _)
     }
 
-    fn add_pid(&self, pod_path: impl AsRef<Path>, host_pid: usize) -> Result<(), Self::Error> {
-        self.add_pid(pod_path.as_ref(), host_pid)
+    async fn add_pid(
+        &self,
+        pod_path: impl AsRef<Path> + Send,
+        host_pid: usize,
+    ) -> Result<(), Self::Error> {
+        self.add_pid(pod_path.as_ref(), host_pid).await
     }
 
-    fn remove_pid(&self, pod_path: impl AsRef<Path>, host_pid: usize) -> Result<(), Self::Error> {
-        self.remove_pid(pod_path.as_ref(), host_pid)
+    async fn remove_pid(
+        &self,
+        pod_path: impl AsRef<Path> + Send,
+        host_pid: usize,
+    ) -> Result<(), Self::Error> {
+        self.remove_pid(pod_path.as_ref(), host_pid).await
     }
 
-    fn cleanup_orphaned_files<F, P>(
+    async fn cleanup_orphaned_files<F, P>(
         &self,
         glob: &str,
         is_pod_tracking: F,
         base_path: P,
     ) -> Result<Vec<PodIdentifier>, Self::Error>
     where
-        F: Fn(&PodIdentifier) -> bool,
-        P: AsRef<Path>,
+        F: Fn(&PodIdentifier) -> bool + Send,
+        P: AsRef<Path> + Send,
     {
         self.cleanup_orphaned_files(glob, is_pod_tracking, base_path)
+            .await
     }
 
-    fn cleanup_unused<F, P>(
+    async fn cleanup_unused<F, P>(
         &self,
         should_keep: F,
         base_path: P,
     ) -> Result<Vec<PodIdentifier>, Self::Error>
     where
-        F: Fn(&PodIdentifier) -> bool,
-        P: AsRef<Path>,
+        F: Fn(&PodIdentifier) -> bool + Send,
+        P: AsRef<Path> + Send,
     {
-        self.cleanup_unused(should_keep, base_path)
+        self.cleanup_unused(should_keep, base_path).await
     }
 
     fn extract_identifier_from_path(

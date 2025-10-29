@@ -102,6 +102,7 @@ where
         let shared_memory_files = self
             .limiter_coordinator
             .find_shared_memory_files(&shm_glob_pattern)
+            .await
             .map_err(|e| PodManagementError::SharedMemoryError {
                 message: e.to_string(),
             })?;
@@ -389,6 +390,7 @@ where
         // Register process with the limiter coordinator.
         self.limiter_coordinator
             .register_process(&pod_identifier, host_pid)
+            .await
             .map_err(|e| PodManagementError::RegistrationFailed {
                 message: e.to_string(),
             })?;
@@ -521,6 +523,7 @@ where
         if let Err(e) = self
             .limiter_coordinator
             .unregister_process(&pod_id, host_pid)
+            .await
         {
             tracing::error!(
                 "Failed to unregister process {} from limiter coordinator: {}",

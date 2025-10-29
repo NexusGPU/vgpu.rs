@@ -88,14 +88,18 @@ pub fn run_cuda_test_program(
     spawn_cuda_process(cmd)
 }
 
-pub async fn run_cuda_and_measure(
+pub async fn run_cuda_and_measure<F, Fut>(
     memory_bytes: u64,
     gpu_index: usize,
     gpu_uuid: &str,
     iterations: u64,
     is_limiter_enabled: bool,
-    post_start: impl Fn(u32),
-) -> Result<(u128, Output), Report<IntegrationTestError>> {
+    post_start: F,
+) -> Result<(u128, Output), Report<IntegrationTestError>>
+where
+    F: Fn(u32) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let start = std::time::Instant::now();
     let (pid, wait) = run_cuda_test_program(
         memory_bytes,
@@ -104,7 +108,7 @@ pub async fn run_cuda_and_measure(
         is_limiter_enabled,
         Some(iterations),
     )?;
-    post_start(pid);
+    post_start(pid).await;
     let output = tokio::task::spawn_blocking(wait).await.unwrap()?;
     let elapsed_ms = start.elapsed().as_millis();
     Ok((elapsed_ms, output))
@@ -472,13 +476,13 @@ impl TestCoordinatorManager {
     }
 
     /// Register a process with a specific pod
-    pub fn register_process(
+    pub async fn register_process(
         &self,
         pod: &TestPod,
         pid: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.pod_state.register_process(&pod.pod_id, pid)?;
-        self.coordinator.register_process(&pod.pod_id, pid)?;
+        self.coordinator.register_process(&pod.pod_id, pid).await?;
         Ok(())
     }
 
@@ -500,8 +504,8 @@ impl TestCoordinatorManager {
             iterations,
             memory_bytes,
             is_limiter_enabled,
-            |pid| {
-                if let Err(e) = self.register_process(pod, pid) {
+            |pid| async move {
+                if let Err(e) = self.register_process(pod, pid).await {
                     eprintln!(
                         "Failed to register process {} for pod {}: {}",
                         pid, pod.pod_id, e
@@ -513,14 +517,18 @@ impl TestCoordinatorManager {
     }
 
     /// Internal method that integrates run_test_with_detailed_output functionality
-    async fn run_test_with_detailed_output(
+    async fn run_test_with_detailed_output<F, Fut>(
         &self,
         description: &str,
         iterations: u64,
         memory_bytes: u64,
         is_limiter_enabled: bool,
-        post_start: impl Fn(u32),
-    ) -> Result<(u128, Output), Report<IntegrationTestError>> {
+        post_start: F,
+    ) -> Result<(u128, Output), Report<IntegrationTestError>>
+    where
+        F: Fn(u32) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
         let device_uuid = get_gpu_uuid(self.gpu_index)?;
         let (elapsed_ms, output) = run_cuda_and_measure(
             memory_bytes,
