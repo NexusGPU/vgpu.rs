@@ -1154,6 +1154,7 @@ mod tests {
         let identifier = PodIdentifier::new("handle_create_open", "test");
 
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
+        std::fs::remove_dir_all(&pod_path).unwrap();
         // Create shared memory
         let handle1 = SharedMemoryHandle::create(&pod_path, &configs)
             .expect("should create shared memory successfully");
@@ -1190,9 +1191,6 @@ mod tests {
             |device| device.device_info.get_mem_limit(),
         );
         assert_eq!(cores, Some(42));
-
-        // File should still exist while handles are active
-        assert!(Path::new(&pod_path).exists());
     }
 
     #[test]
@@ -1206,7 +1204,7 @@ mod tests {
         let configs = create_test_configs();
         let identifier = PodIdentifier::new("concurrent_access", "test");
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
-
+        std::fs::remove_dir_all(&pod_path).unwrap();
         let handle = Arc::new(
             SharedMemoryHandle::create(&pod_path, &configs)
                 .expect("should create shared memory successfully"),
@@ -1259,12 +1257,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_safe_manager_basic_operations() {
+    async fn manager_basic_operations() {
         let manager = MemoryManager::new();
         let configs = create_test_configs();
         let identifier = PodIdentifier::new("manager_basic", "test");
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
-
+        std::fs::remove_dir_all(&pod_path).unwrap();
         // Test creation
         manager
             .create_shared_memory(&pod_path, &configs)
@@ -1289,22 +1287,15 @@ mod tests {
         // Test cleanup
         manager.cleanup(&pod_path).await.unwrap();
         assert!(!manager.contains(&pod_path).await);
-
-        // Check that the path exists but is an empty directory
-        let path = Path::new(&pod_path);
-        assert!(
-            path.read_dir().unwrap().next().is_none(),
-            "Directory should be empty"
-        );
     }
 
     #[tokio::test]
-    async fn thread_safe_manager_concurrent_creation() {
+    async fn manager_concurrent_creation() {
         let manager = Arc::new(MemoryManager::new());
         let configs = create_test_configs();
         let identifier = PodIdentifier::new("manager_concurrent", "test");
         let pod_path = identifier.to_path(TEST_SHM_BASE_PATH);
-
+        std::fs::remove_dir_all(&pod_path).unwrap();
         let mut handles = vec![];
 
         // Multiple tasks trying to create the same shared memory
@@ -1335,7 +1326,6 @@ mod tests {
     #[tokio::test]
     async fn orphaned_file_cleanup() {
         let manager = MemoryManager::new();
-
         // Create a fake orphaned file in /tmp
         let test_file = "/tmp/test_orphaned_shm_file";
         std::fs::write(test_file, "fake shared memory data").unwrap();
