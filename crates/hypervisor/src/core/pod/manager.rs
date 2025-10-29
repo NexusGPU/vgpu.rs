@@ -19,6 +19,7 @@ use crate::platform::host_pid_probe::{HostPidProbe, PodProcessInfo, Subscription
 use crate::platform::k8s::pod_info_cache::PodInfoCache;
 use crate::platform::limiter_comm::CommandDispatcher;
 use crate::platform::nvml::gpu_observer::GpuObserver;
+use crate::util::keyed_lock::KeyedAsyncLock;
 use tokio_util::sync::CancellationToken;
 
 use super::device_info::create_device_configs_from_worker_info;
@@ -39,6 +40,8 @@ pub struct PodManager<M, P, D, T> {
     nvml: Arc<Nvml>,
     pod_info_cache: Arc<PodInfoCache>,
     gpu_observer: Arc<GpuObserver>,
+    /// Per-pod registration locks to prevent concurrent registration of same pod
+    registration_locks: KeyedAsyncLock<PodIdentifier>,
 }
 
 impl<M, P, D, T> PodManager<M, P, D, T> {
@@ -89,6 +92,7 @@ where
             nvml,
             pod_info_cache,
             gpu_observer,
+            registration_locks: KeyedAsyncLock::new(),
         }
     }
 
@@ -232,7 +236,15 @@ where
     pub async fn ensure_pod_registered(&self, namespace: &str, pod_name: &str) -> Result<()> {
         let pod_identifier = PodIdentifier::new(namespace, pod_name);
 
-        // Check if already registered
+        // Fast path: check if already registered (lock-free)
+        if self.pod_state_store.contains_pod(&pod_identifier) {
+            return Ok(());
+        }
+
+        // Acquire per-pod lock to serialize registration for the same pod
+        let _guard = self.registration_locks.lock(&pod_identifier).await;
+
+        // Double-check after acquiring lock
         if self.pod_state_store.contains_pod(&pod_identifier) {
             return Ok(());
         }
