@@ -247,7 +247,8 @@ impl MemoryManager {
             .open()
             .context("Failed to open shared memory")
         {
-            Ok(shmem) => {
+            Ok(mut shmem) => {
+                shmem.set_owner(false);
                 let ptr = shmem.as_ptr() as *const SharedDeviceState;
                 let is_orphaned = unsafe {
                     let state = &*ptr;
