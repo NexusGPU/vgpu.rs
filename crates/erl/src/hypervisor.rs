@@ -344,6 +344,9 @@ mod tests {
             loop {
                 let current_bits = self.tokens.load(Ordering::Relaxed);
                 let current = f64::from_bits(current_bits);
+                if current < cost {
+                    return Ok(current);
+                }
                 let new_tokens = (current - cost).max(0.0).min(capacity);
                 if self
                     .tokens

@@ -335,6 +335,9 @@ impl SharedDeviceInfoV2 {
         loop {
             let current_bits = self.erl_current_tokens.load(Ordering::Acquire);
             let current = f64::from_bits(current_bits);
+            if current < cost {
+                return current;
+            }
             let new_value = (current - cost).max(0.0);
             let new_bits = new_value.to_bits();
 
@@ -1146,6 +1149,21 @@ mod tests {
 
         device_info_v2.set_pod_memory_used(512 * 1024 * 1024);
         assert_eq!(device_info_v2.get_pod_memory_used(), 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn erl_token_bucket_preserves_tokens_when_insufficient() {
+        let device_info = SharedDeviceInfo::new(TEST_TOTAL_CORES, TEST_UP_LIMIT, TEST_MEM_LIMIT);
+
+        device_info.set_erl_current_tokens(1.5);
+        let before = device_info.fetch_sub_erl_tokens(2.0);
+        assert_eq!(before, 1.5);
+        assert_eq!(device_info.get_erl_current_tokens(), 1.5);
+
+        device_info.set_erl_current_tokens(5.0);
+        let before_success = device_info.fetch_sub_erl_tokens(2.0);
+        assert_eq!(before_success, 5.0);
+        assert_eq!(device_info.get_erl_current_tokens(), 3.0);
     }
 
     #[test]

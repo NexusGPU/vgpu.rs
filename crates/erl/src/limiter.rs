@@ -151,6 +151,9 @@ mod tests {
         fn fetch_sub_tokens(&self, _device: usize, cost: f64) -> Result<f64, ErlError> {
             let mut state = self.state.lock().unwrap();
             let before = state.tokens;
+            if before < cost {
+                return Ok(before);
+            }
             state.tokens = (state.tokens - cost).max(0.0);
             Ok(before)
         }
