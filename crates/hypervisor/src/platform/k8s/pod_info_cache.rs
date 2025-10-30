@@ -181,7 +181,7 @@ impl PodInfoCache {
                 return Err(Report::new(KubernetesError::ConnectionFailed {
                     message: format!("Failed to get pod {namespace}/{pod_name}: {e}"),
                 })
-                .attach_printable("Kubernetes API error"));
+                .attach("Kubernetes API error"));
             }
         };
 
