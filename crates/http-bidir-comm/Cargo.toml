@@ -13,11 +13,12 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 derive_more = { workspace = true, features = ["display", "error", "from"] }
-poem = { workspace = true }
+poem = { workspace = true, features = ["sse"] }
 async-stream = { workspace = true }
 eventsource = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
 similar-asserts = "1.5.0"
-test-log = { workspace = true } 
+test-log = { workspace = true }
+poem = { workspace = true, features = ["test"] }
