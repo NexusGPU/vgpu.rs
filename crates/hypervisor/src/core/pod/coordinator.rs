@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 use anyhow::Context;
 use anyhow::Result;
 
+use erl::DeviceController;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, interval_at, Instant};
 use tokio_util::sync::CancellationToken;
@@ -18,11 +19,28 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use utils::shared_memory::handle::SHM_PATH_SUFFIX;
-use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, PodIdentifier};
+use utils::shared_memory::{
+    erl_adapter::ErlSharedMemoryAdapter, handle::SharedMemoryHandle, DeviceConfig, PodIdentifier,
+};
 
 use super::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
 use super::utilization::DeviceSnapshot;
 use utils::shared_memory::traits::SharedMemoryAccess;
+
+/// Cleanup interval for unused shared memory segments in seconds
+const CLEANUP_INTERVAL_SECS: u64 = 300;
+
+/// Minimum target utilization threshold below which aggressive throttling warning is issued
+const MIN_TARGET_UTILIZATION: f64 = 0.05;
+
+/// Divisor for converting percentage to ratio (0-100 -> 0.0-1.0)
+const PERCENTAGE_DIVISOR: f64 = 100.0;
+
+/// Normalize a percentage value (0-100) to a ratio (0.0-1.0)
+#[inline]
+fn normalize_percentage(percent: u32) -> f64 {
+    (percent as f64 / PERCENTAGE_DIVISOR).clamp(0.0, 1.0)
+}
 
 /// Configuration for the LimiterCoordinator
 pub struct CoordinatorConfig {
@@ -34,6 +52,48 @@ pub struct CoordinatorConfig {
     pub shared_memory_glob_pattern: String,
     /// Base path for shared memory operations
     pub base_path: PathBuf,
+    /// ERL (Elastic Rate Limiter) configuration
+    pub erl_config: crate::config::ErlConfig,
+}
+
+type ErlControllerMap = HashMap<
+    (PodIdentifier, u32),
+    DeviceController<ErlSharedMemoryAdapter<Arc<SharedMemoryHandle>>>,
+>;
+
+/// Newtype wrapper for ERL controllers indexed by (PodIdentifier, device_idx)
+struct ErlControllers(ErlControllerMap);
+
+/// Context containing parameters needed for updating V2 shared device state.
+///
+/// Encapsulates the common parameters passed to `update_v2_state` to reduce
+/// function argument count and improve code maintainability.
+struct UpdateV2Context {
+    handle: Arc<SharedMemoryHandle>,
+    pod_identifier: PodIdentifier,
+    device_config: Arc<DeviceConfig>,
+    device_index: usize,
+    snapshot_timestamp: u64,
+}
+
+impl ErlControllers {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+}
+
+impl core::ops::Deref for ErlControllers {
+    type Target = ErlControllerMap;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for ErlControllers {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 /// Generic limiter coordinator with dependency injection
@@ -50,6 +110,8 @@ pub struct LimiterCoordinator<M, P, D, T> {
     device_watcher_tasks: RwLock<HashMap<u32, JoinHandle<()>>>,
     /// Heartbeat task handle
     heartbeat_task: RwLock<Option<JoinHandle<()>>>,
+    /// ERL utilization controllers per pod per device: (PodIdentifier, device_idx) -> controller
+    erl_controllers: Arc<RwLock<ErlControllers>>,
     /// Monitoring interval.
     watch_interval: Duration,
     /// Number of GPU devices.
@@ -58,6 +120,8 @@ pub struct LimiterCoordinator<M, P, D, T> {
     shared_memory_glob_pattern: String,
     /// Base path for shared memory operations
     base_path: PathBuf,
+    /// ERL configuration
+    erl_config: crate::config::ErlConfig,
 }
 
 impl<M, P, D, T> LimiterCoordinator<M, P, D, T>
@@ -82,10 +146,12 @@ where
             time,
             device_watcher_tasks: RwLock::new(HashMap::new()),
             heartbeat_task: RwLock::new(None),
+            erl_controllers: Arc::new(RwLock::new(ErlControllers::new())),
             watch_interval: config.watch_interval,
             device_count: config.device_count,
             shared_memory_glob_pattern: config.shared_memory_glob_pattern,
             base_path: config.base_path,
+            erl_config: config.erl_config,
         }
     }
 
@@ -94,9 +160,10 @@ where
         format!("{}/{}", self.shared_memory_glob_pattern, SHM_PATH_SUFFIX)
     }
 
-    pub fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<PathBuf>> {
+    pub async fn find_shared_memory_files(&self, glob_pattern: &str) -> Result<Vec<PathBuf>> {
         self.shared_memory
             .find_shared_memory_files(glob_pattern)
+            .await
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
@@ -107,6 +174,7 @@ where
     }
 
     /// Run the coordinator with cancellation support
+    #[tracing::instrument(skip(self, cancellation_token), fields(device_count = self.device_count))]
     pub async fn run(&self, cancellation_token: CancellationToken) {
         tracing::info!(
             "Starting LimiterCoordinator with {} GPU devices",
@@ -118,7 +186,7 @@ where
             .await;
 
         // Start periodic cleanup task
-        let cleanup_task = self.start_periodic_cleanup_task(cancellation_token.clone());
+        let cleanup_task = self.start_cleanup_task(cancellation_token.clone());
 
         // Start the heartbeat task
         self.start_heartbeat_task(cancellation_token.clone()).await;
@@ -155,13 +223,13 @@ where
 
     /// Starts a monitoring task for each GPU device with cancellation support
     async fn start_watcher_with_cancellation(&self, cancellation_token: CancellationToken) {
-        let pod_state = self.pod_state.clone();
-
         for device_idx in 0..self.device_count {
             let task = self.create_device_watcher_task(
                 device_idx,
                 self.watch_interval,
-                pod_state.clone(),
+                self.pod_state.clone(),
+                self.snapshot.clone(),
+                self.erl_controllers.clone(),
                 cancellation_token.clone(),
             );
 
@@ -181,9 +249,11 @@ where
         device_idx: u32,
         watch_interval: Duration,
         pod_state: Arc<P>,
+        snapshot: Arc<D>,
+        erl_controllers: Arc<RwLock<ErlControllers>>,
         cancellation_token: CancellationToken,
     ) -> JoinHandle<()> {
-        let snapshot = self.snapshot.clone();
+        let erl_config = self.erl_config.clone();
         tokio::spawn(async move {
             let mut interval_timer = interval(watch_interval);
             let mut last_seen_timestamp = 0u64;
@@ -202,11 +272,13 @@ where
                     }
                 }
 
-                if let Err(e) = Self::run_device_monitoring_cycle(
+                if let Err(e) = Self::run_device_monitoring_cycle_static(
                     device_idx,
-                    &pod_state,
-                    &snapshot,
+                    pod_state.as_ref(),
+                    snapshot.as_ref(),
+                    erl_controllers.as_ref(),
                     &mut last_seen_timestamp,
+                    &erl_config,
                 )
                 .await
                 {
@@ -218,12 +290,14 @@ where
         })
     }
 
-    /// Run one cycle of device monitoring
-    async fn run_device_monitoring_cycle(
+    /// Static version for spawn tasks
+    async fn run_device_monitoring_cycle_static(
         device_idx: u32,
-        pod_state: &Arc<P>,
-        snapshot: &Arc<D>,
+        pod_state: &P,
+        snapshot: &D,
+        erl_controllers: &RwLock<ErlControllers>,
         last_seen_timestamp: &mut u64,
+        erl_config: &crate::config::ErlConfig,
     ) -> Result<()> {
         let pods_for_device = pod_state.get_pods_using_device(device_idx);
 
@@ -253,13 +327,14 @@ where
                 debug!(pod_identifier = %pod_id, device_idx = device_idx, "Device config not found for pod");
                 continue;
             };
-
             if let Err(e) = Self::process_pod_utilization_update(
                 pod_state,
                 &pod_id,
                 &host_pids,
-                &device_config,
+                device_config,
                 &device_snapshot,
+                erl_controllers,
+                erl_config,
             )
             .await
             {
@@ -275,17 +350,41 @@ where
         Ok(())
     }
 
-    /// Process utilization update for a single pod
+    /// Instance method for testing - delegates to static
+    #[cfg(test)]
+    async fn run_device_monitoring_cycle(
+        &self,
+        device_idx: u32,
+        last_seen_timestamp: &mut u64,
+    ) -> Result<()> {
+        Self::run_device_monitoring_cycle_static(
+            device_idx,
+            self.pod_state.as_ref(),
+            self.snapshot.as_ref(),
+            self.erl_controllers.as_ref(),
+            last_seen_timestamp,
+            &self.erl_config,
+        )
+        .await
+    }
+
     async fn process_pod_utilization_update(
-        pod_state: &Arc<P>,
+        pod_state: &P,
         pod_identifier: &PodIdentifier,
         host_pids: &[u32],
-        device_config: &DeviceConfig,
+        device_config: Arc<DeviceConfig>,
         device_snapshot: &DeviceSnapshot,
+        erl_controllers: &RwLock<ErlControllers>,
+        erl_config: &crate::config::ErlConfig,
     ) -> Result<()> {
         let pod_path = pod_state.pod_path(pod_identifier);
-        // Open shared memory handle
-        let handle = SharedMemoryHandle::open(&pod_path).context("Failed to open shared memory")?;
+        // Use spawn_blocking to avoid blocking the tokio runtime
+        let pod_path_clone = pod_path.clone();
+        let handle = tokio::task::spawn_blocking(move || SharedMemoryHandle::open(&pod_path_clone))
+            .await
+            .context("Failed to spawn blocking task")?
+            .context("Failed to open shared memory")?;
+        let handle = Arc::new(handle);
         let state = handle.get_state();
 
         let device_index = device_config.device_idx as usize;
@@ -295,14 +394,64 @@ where
             );
         }
 
-        let current_share = state
-            .with_device(device_index, |device| device.device_info.get_available_cores())
-            .context(format!(
-                "Device {device_index} not found in shared memory for pod {pod_identifier}. This indicates a system state inconsistency.",
-            ))?;
-
         let pod_utilization = device_snapshot.get_pod_utilization(host_pids);
         let pod_memory = device_snapshot.get_pod_memory(host_pids);
+
+        // Update memory usage (common for both versions)
+        state.set_pod_memory_used(device_index, pod_memory);
+
+        // Dispatch to version-specific update
+        match state.version() {
+            1 => {
+                Self::update_v1_state(
+                    state,
+                    pod_identifier,
+                    device_config.as_ref(),
+                    device_index,
+                    &pod_utilization,
+                );
+            }
+            2 => {
+                let ctx = UpdateV2Context {
+                    handle: handle.clone(),
+                    pod_identifier: pod_identifier.clone(),
+                    device_config: device_config.clone(),
+                    device_index,
+                    snapshot_timestamp: device_snapshot.timestamp,
+                };
+                Self::update_v2_state(ctx, &pod_utilization, erl_controllers, erl_config)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to update V2 state: {e}"))?;
+            }
+            version => {
+                tracing::warn!(
+                    pod_identifier = %pod_identifier,
+                    version = version,
+                    "Unsupported shared memory version"
+                );
+            }
+        }
+
+        // Update heartbeat (common for both versions)
+        state.update_heartbeat(device_snapshot.timestamp / 1_000_000);
+        Ok(())
+    }
+
+    /// V1: Update available_cores based on utilization
+    fn update_v1_state(
+        state: &utils::shared_memory::SharedDeviceState,
+        pod_identifier: &PodIdentifier,
+        device_config: &DeviceConfig,
+        device_index: usize,
+        pod_utilization: &super::utilization::PodUtilization,
+    ) {
+        let current_share = state
+            .with_device(
+                device_index,
+                |device| device.device_info.get_available_cores(),
+                |_| 0,
+            )
+            .unwrap_or(0);
 
         let new_share = calculate_delta(
             device_config,
@@ -310,36 +459,140 @@ where
             current_share,
         );
 
-        // Update shared memory state
-        state.with_device(device_index, |device| {
-            device.device_info.set_pod_memory_used(pod_memory);
-        });
+        state.with_device(
+            device_index,
+            |device| device.device_info.set_available_cores(new_share),
+            |_| {},
+        );
 
-        if let Some(new_share) = Some(new_share) {
-            state.with_device(device_index, |device| {
-                device.device_info.set_available_cores(new_share);
-            });
+        debug!(
+            pod_identifier = %pod_identifier,
+            user_current = pod_utilization.total_utilization,
+            user_new = new_share,
+            "V1: Updated available_cores"
+        );
+    }
+
+    /// Updates V2 shared device state with ERL (Elastic Rate Limiter) controller.
+    ///
+    /// This method processes utilization feedback by:
+    /// 1. Normalizing the target utilization from device config
+    /// 2. Getting or creating an ERL controller for the pod/device pair
+    /// 3. Updating the controller with current utilization ratio
+    ///
+    /// Called during the device monitoring cycle when the shared memory version is 2.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Failed to create a new ERL controller (controller initialization failure)
+    /// - Failed to update the controller with utilization feedback
+    async fn update_v2_state(
+        ctx: UpdateV2Context,
+        pod_utilization: &super::utilization::PodUtilization,
+        erl_controllers: &RwLock<ErlControllers>,
+        erl_config: &crate::config::ErlConfig,
+    ) -> Result<()> {
+        let key = (ctx.pod_identifier.clone(), ctx.device_config.device_idx);
+        let target_utilization = normalize_percentage(ctx.device_config.up_limit);
+        if target_utilization < MIN_TARGET_UTILIZATION {
+            tracing::warn!(
+                pod_identifier = %ctx.pod_identifier,
+                device_index = ctx.device_index,
+                up_limit = ctx.device_config.up_limit,
+                target_utilization = target_utilization,
+                "Target utilization is very low; kernel launches may be throttled aggressively"
+            );
         }
 
-        // Convert NVML timestamp from microseconds to seconds for heartbeat
-        state.update_heartbeat(device_snapshot.timestamp / 1_000_000);
+        use std::collections::hash_map::Entry;
+        let mut controllers = erl_controllers.write().await;
+        let controller = match controllers.entry(key) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(vacant) => {
+                let backend = ErlSharedMemoryAdapter::new(ctx.handle.clone());
+                let ctrl_cfg = erl_config.to_device_controller_config(target_utilization);
 
-        debug!(pod_identifier = %pod_identifier, user_current = pod_utilization.total_utilization, user_new = new_share, "updated shared memory state for pod");
+                match DeviceController::new(backend, ctx.device_index, ctrl_cfg) {
+                    Ok(ctrl) => {
+                        debug!(
+                            pod_identifier = %ctx.pod_identifier,
+                            device_index = ctx.device_index,
+                            up_limit = ctx.device_config.up_limit,
+                            target_utilization = target_utilization,
+                            rate_max = %format!("{:.1}", erl_config.rate_max),
+                            rate_min = %format!("{:.1}", erl_config.rate_min),
+                            initial_rate = ctrl.state().current_rate,
+                            "Initialized ERL controller for pod/device"
+                        );
+                        vacant.insert(ctrl)
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!(
+                            "Failed to create ERL controller for pod {} device {}: {}",
+                            ctx.pod_identifier,
+                            ctx.device_index,
+                            e
+                        ));
+                    }
+                }
+            }
+        };
+
+        let utilization_ratio = normalize_percentage(pod_utilization.total_utilization);
+
+        controller
+            .update_with_timestamp(utilization_ratio, ctx.snapshot_timestamp)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to update ERL controller for pod {} device {}: {}",
+                    ctx.pod_identifier,
+                    ctx.device_index,
+                    e
+                )
+            })?;
+
         Ok(())
     }
 
-    /// Ensures a pod is registered with device configurations (idempotent operation)
+    /// Ensures a pod is registered with device configurations
+    #[tracing::instrument(skip(self, configs), fields(pod = %pod_identifier, device_count = configs.len()))]
     pub async fn ensure_pod_registered(
         &self,
         pod_identifier: &PodIdentifier,
         configs: &[DeviceConfig],
     ) -> Result<Vec<usize>> {
         let pod_path = self.pod_state.pod_path(pod_identifier);
-        let restored_pids = match self.shared_memory.get_shared_memory(pod_path) {
-            Ok(ptr) => {
-                debug!(pod_identifier = %pod_identifier, "Shared memory already exists for pod, ensuring registration consistency");
-                let state = unsafe { &*ptr };
-                let restored_pids = state.get_all_pids();
+
+        // Try to get existing shared memory and immediately extract data
+        let (need_create, restored_pids) = {
+            let get_result = self.shared_memory.get_shared_memory(pod_path).await;
+
+            if let Ok(ptr_wrapper) = get_result {
+                // Use the pointer immediately and extract data before any awaits
+                let restored_pids = unsafe {
+                    let state = &*ptr_wrapper.as_mut_ptr();
+                    let pids = state.get_all_pids();
+
+                    // update limit info
+                    for config in configs {
+                        state.with_device(
+                            config.device_idx as usize,
+                            |device| {
+                                device.device_info.set_total_cores(config.total_cuda_cores);
+                                device.device_info.set_up_limit(config.up_limit);
+                                device.device_info.set_mem_limit(config.mem_limit);
+                            },
+                            |device| {
+                                device.device_info.set_total_cores(config.total_cuda_cores);
+                                device.device_info.set_up_limit(config.up_limit);
+                                device.device_info.set_mem_limit(config.mem_limit);
+                            },
+                        );
+                    }
+
+                    pids
+                };
 
                 if !restored_pids.is_empty() {
                     debug!(
@@ -349,25 +602,24 @@ where
                         restored_pids.len()
                     );
                 }
-                // update limit info
-                for config in configs {
-                    state.with_device(config.device_idx as usize, |device| {
-                        device.device_info.set_total_cores(config.total_cuda_cores);
-                        device.device_info.set_up_limit(config.up_limit);
-                        device.device_info.set_mem_limit(config.mem_limit);
-                    });
-                }
 
-                restored_pids
+                (false, restored_pids)
+            } else {
+                (true, Vec::new())
             }
-            Err(e) => {
-                debug!(pod_identifier = %pod_identifier, error = %e, "Creating new shared memory for pod");
-                let pod_path = self.pod_state.pod_path(pod_identifier);
-                self.shared_memory
-                    .create_shared_memory(&pod_path, configs)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
-                Vec::new()
-            }
+        };
+
+        // Create shared memory if needed (get_result is dropped here)
+        let restored_pids = if need_create {
+            info!(pod_identifier = %pod_identifier, "Creating new shared memory for pod");
+            let pod_path = self.pod_state.pod_path(pod_identifier);
+            self.shared_memory
+                .create_shared_memory(&pod_path, configs)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            Vec::new()
+        } else {
+            restored_pids
         };
 
         if !restored_pids.is_empty() {
@@ -383,11 +635,16 @@ where
     }
 
     /// Registers a process within a pod (Process-level operation)
-    pub fn register_process(&self, pod_identifier: &PodIdentifier, host_pid: u32) -> Result<()> {
+    pub async fn register_process(
+        &self,
+        pod_identifier: &PodIdentifier,
+        host_pid: u32,
+    ) -> Result<()> {
         // Add PID to shared memory
         let pod_path = self.pod_state.pod_path(pod_identifier);
         self.shared_memory
             .add_pid(pod_path, host_pid as usize)
+            .await
             .map_err(|e| anyhow::anyhow!("{e}"))
             .context("Failed to add PID to shared memory")?;
 
@@ -410,6 +667,7 @@ where
         // Remove PID from shared memory
         self.shared_memory
             .remove_pid(pod_path, host_pid as usize)
+            .await
             .map_err(|e| anyhow::anyhow!("{e}"))
             .context("Failed to remove PID from shared memory")?;
 
@@ -423,21 +681,25 @@ where
     }
 
     /// Start periodic cleanup task for unused shared memory segments
-    fn start_periodic_cleanup_task(&self, cancellation_token: CancellationToken) -> JoinHandle<()> {
+    fn start_cleanup_task(&self, cancellation_token: CancellationToken) -> JoinHandle<()> {
         let shared_memory = self.shared_memory.clone();
 
         let shared_memory_glob_pattern = self.shared_memory_glob_pattern.clone();
         let pod_state = self.pod_state.clone();
         let base_path = self.base_path.clone();
         tokio::spawn(async move {
-            // Run cleanup every 5 minutes
-            let mut cleanup_interval = interval_at(
-                Instant::now() + Duration::from_secs(300),
-                Duration::from_secs(300),
-            );
+            let cleanup_duration = Duration::from_secs(CLEANUP_INTERVAL_SECS);
+            let mut cleanup_interval =
+                interval_at(Instant::now() + cleanup_duration, cleanup_duration);
             cleanup_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-            tracing::info!("Starting periodic shared memory cleanup task (every 5 minutes)");
+            // Skip the first immediate tick
+            cleanup_interval.tick().await;
+
+            tracing::info!(
+                interval_secs = CLEANUP_INTERVAL_SECS,
+                "Starting periodic shared memory cleanup task"
+            );
 
             loop {
                 tokio::select! {
@@ -446,13 +708,13 @@ where
 
                         if let Err(e) = shared_memory.cleanup_orphaned_files(&shared_memory_glob_pattern, |identifier| {
                             pod_state.contains_pod(identifier)
-                        }, &base_path) {
+                        }, &base_path).await {
                             tracing::warn!("Failed to cleanup orphaned shared memory files: {}", e);
                         }
 
                         match shared_memory.cleanup_unused(|identifier| {
                             pod_state.contains_pod(identifier)
-                        }, &base_path) {
+                        }, &base_path).await {
                             Ok(cleaned_files) => {
                                 if !cleaned_files.is_empty() {
                                     tracing::info!(
@@ -479,6 +741,7 @@ where
     }
 
     /// Starts the heartbeat task that updates heartbeat every 0.5 seconds
+    #[tracing::instrument(skip(self, cancellation_token))]
     pub async fn start_heartbeat_task(&self, cancellation_token: CancellationToken) {
         let pod_state = self.pod_state.clone();
         let time = self.time.clone();
@@ -495,19 +758,34 @@ where
                         // Get all pod identifiers from state store
                         let pod_identifiers = pod_state.list_pod_identifiers();
 
-                        // Update heartbeat for each pod
+                        // Update heartbeat for each pod concurrently using spawn_blocking
+                        let mut tasks = Vec::new();
                         for pod_identifier in pod_identifiers {
                             let pod_path = pod_state.pod_path(&pod_identifier);
-                            if let Ok(handle) = SharedMemoryHandle::open(&pod_path) {
-                                let state = handle.get_state();
-                                state.update_heartbeat(timestamp);
-                            } else {
-                                let e = format!("Failed to open shared memory for pod {pod_identifier}");
-                                tracing::warn!(
-                                    pod_identifier = %format!("{}/{}", pod_identifier.namespace, pod_identifier.name),
-                                    error = %e,
-                                    "Failed to update heartbeat for pod"
-                                );
+                            let current_timestamp = timestamp;
+
+                            let task = tokio::task::spawn_blocking(move || {
+                                match SharedMemoryHandle::open(&pod_path) {
+                                    Ok(handle) => {
+                                        let state = handle.get_state();
+                                        state.update_heartbeat(current_timestamp);
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            pod_identifier = %pod_identifier,
+                                            error = %e,
+                                            "Failed to update heartbeat for pod"
+                                        );
+                                    }
+                                }
+                            });
+                            tasks.push(task);
+                        }
+
+                        // Wait for all heartbeat updates to complete
+                        for task in tasks {
+                            if let Err(e) = task.await {
+                                tracing::error!(error = %e, "Heartbeat task panicked");
                             }
                         }
                     }
@@ -600,22 +878,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_device_monitoring_cycle_with_no_pods() {
-        let (_, _shared_memory, pod_state, snapshot, _) = TestLimiterCoordinator::new_test(
-            Duration::from_millis(100),
-            1,
-            "test_*.shm".to_string(),
-        );
+        let (coordinator, _shared_memory, _pod_state, _snapshot, _) =
+            TestLimiterCoordinator::new_test(
+                Duration::from_millis(100),
+                1,
+                "test_*.shm".to_string(),
+            );
 
         let mut last_seen_timestamp = 0u64;
 
         // Test monitoring cycle when no pods are using the device
-        let result = TestLimiterCoordinator::run_device_monitoring_cycle(
-            0,
-            &pod_state,
-            &snapshot,
-            &mut last_seen_timestamp,
-        )
-        .await;
+        let result = coordinator
+            .run_device_monitoring_cycle(0, &mut last_seen_timestamp)
+            .await;
 
         assert!(result.is_ok());
         assert_eq!(last_seen_timestamp, 0); // Should remain unchanged
@@ -623,31 +898,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_device_monitoring_cycle_with_pods() {
-        let (_, _shared_memory, pod_state, snapshot, _) = TestLimiterCoordinator::new_test(
-            Duration::from_millis(100),
-            1,
-            "test_*.shm".to_string(),
-        );
+        let (coordinator, _shared_memory, _pod_state, _snapshot, _) =
+            TestLimiterCoordinator::new_test(
+                Duration::from_millis(100),
+                1,
+                "test_*.shm".to_string(),
+            );
 
         // Register a test pod
         let device_configs = vec![create_test_device_config()];
-        pod_state
+        _pod_state
             .register_test_pod("test-pod", device_configs, vec![1234, 5678])
             .unwrap();
 
         // Set up snapshot data
-        snapshot.set_device_snapshot(0, 123456789, vec![1234, 5678], vec![512, 1024]);
+        _snapshot.set_device_snapshot(0, 123456789, vec![1234, 5678], vec![512, 1024]);
 
         let mut last_seen_timestamp = 0u64;
 
         // Test monitoring cycle with pods
-        let result = TestLimiterCoordinator::run_device_monitoring_cycle(
-            0,
-            &pod_state,
-            &snapshot,
-            &mut last_seen_timestamp,
-        )
-        .await;
+        let result = coordinator
+            .run_device_monitoring_cycle(0, &mut last_seen_timestamp)
+            .await;
 
         assert!(result.is_ok());
         assert_eq!(last_seen_timestamp, 123456789); // Should be updated
@@ -735,7 +1007,7 @@ mod tests {
 
         // Test process registration
         let pod_id = PodIdentifier::new("test", "pod");
-        let result = coordinator.register_process(&pod_id, 1234);
+        let result = coordinator.register_process(&pod_id, 1234).await;
         assert!(result.is_ok());
 
         // Verify operation was logged in mock
@@ -787,7 +1059,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_error_recovery_in_monitoring_cycle() {
-        let (_, _, pod_state, snapshot, _) = TestLimiterCoordinator::new_test(
+        let (coordinator, _, pod_state, snapshot, _) = TestLimiterCoordinator::new_test(
             Duration::from_millis(100),
             1,
             "test_*.shm".to_string(),
@@ -805,27 +1077,23 @@ mod tests {
         let mut last_seen_timestamp = 0u64;
 
         // Test monitoring cycle with error - should handle gracefully
-        let result = TestLimiterCoordinator::run_device_monitoring_cycle(
-            0,
-            &pod_state,
-            &snapshot,
-            &mut last_seen_timestamp,
-        )
-        .await;
+        let result = coordinator
+            .run_device_monitoring_cycle(0, &mut last_seen_timestamp)
+            .await;
 
         assert!(result.is_err()); // Should return error but not panic
         assert_eq!(last_seen_timestamp, 0); // Should remain unchanged
     }
 
-    #[test]
-    fn test_find_shared_memory_files() {
+    #[tokio::test]
+    async fn test_find_shared_memory_files() {
         let (coordinator, shared_memory, _, _, _) = TestLimiterCoordinator::new_test(
             Duration::from_millis(100),
             1,
             "test_*.shm".to_string(),
         );
 
-        let result = coordinator.find_shared_memory_files("test_*.shm");
+        let result = coordinator.find_shared_memory_files("test_*.shm").await;
         assert!(result.is_ok());
 
         // Verify the call was made to the mock

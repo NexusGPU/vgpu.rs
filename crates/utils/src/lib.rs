@@ -1,5 +1,6 @@
 mod build_info;
 pub mod hooks;
+pub mod keyed_lock;
 pub mod logging;
 pub mod macros;
 pub mod shared_memory;

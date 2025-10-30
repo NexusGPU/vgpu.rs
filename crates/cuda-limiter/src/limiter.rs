@@ -1,23 +1,29 @@
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use cudarc::driver::sys::CUdevice;
 use dashmap::DashMap;
+use erl::KernelLimiter;
 use nvml_wrapper::error::nvml_try;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use nvml_wrapper_sys::bindings::nvmlDevice_t;
 use once_cell::sync::OnceCell;
 use trap::TrapError;
-use utils::shared_memory::handle::SharedMemoryHandle;
+use utils::shared_memory::{erl_adapter::ErlSharedMemoryAdapter, handle::SharedMemoryHandle};
 
 use crate::culib;
 use crate::detour::nvml::FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2;
+
+/// Rate limiter configuration constants
+const RATE_LIMITER_SLEEP_MS: u64 = 10;
+const RATE_LIMITER_HEALTH_CHECK_INTERVAL: u64 = 10;
+const RATE_LIMITER_LOG_INTERVAL: u64 = 50;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
@@ -43,6 +49,12 @@ pub(crate) enum Error {
         last_heartbeat: u64,
     },
 
+    #[error("ERL admission failed for device {device_idx}: {message}")]
+    ErlAdmissionFailed { device_idx: usize, message: String },
+
+    #[error("Unsupported shared memory version {version} for device {device_idx}")]
+    UnsupportedVersion { version: u32, device_idx: usize },
+
     #[error("NVML error: {0}")]
     Nvml(#[from] nvml_wrapper::error::NvmlError),
 
@@ -64,7 +76,9 @@ pub(crate) struct DeviceDim {
 /// Main limiter struct that manages CUDA resource limits
 pub(crate) struct Limiter {
     /// Shared memory handle for each device (lazy initialized)
-    shared_memory_handle: OnceCell<SharedMemoryHandle>,
+    shared_memory_handle: OnceCell<Arc<SharedMemoryHandle>>,
+    /// Cached ERL kernel limiter backed by shared memory
+    erl_kernel_limiter: OnceCell<KernelLimiter<ErlSharedMemoryAdapter<Arc<SharedMemoryHandle>>>>,
     /// NVML instance
     nvml: Nvml,
     /// Device dimensions
@@ -100,6 +114,7 @@ impl Limiter {
 
         Ok(Self {
             shared_memory_handle: OnceCell::new(),
+            erl_kernel_limiter: OnceCell::new(),
             current_devices_dim: HashMap::new(),
             nvml,
             cu_device_mapping: DashMap::new(),
@@ -109,15 +124,31 @@ impl Limiter {
 
     /// Get or initialize the shared memory handle (lazy initialization)
     fn get_or_init_shared_memory(&self) -> Result<&SharedMemoryHandle, Error> {
+        Ok(self.get_or_init_shared_memory_arc()?.as_ref())
+    }
+
+    fn get_or_init_shared_memory_arc(&self) -> Result<&Arc<SharedMemoryHandle>, Error> {
         self.shared_memory_handle.get_or_try_init(|| {
             if let Some(shm_path) = crate::mock_shm_path() {
-                Ok(SharedMemoryHandle::mock(
+                Ok(Arc::new(SharedMemoryHandle::mock(
                     shm_path,
                     self.gpu_idx_uuids.clone(),
-                ))
+                )))
             } else {
-                SharedMemoryHandle::open(shm_path()).map_err(Error::SharedMemory)
+                SharedMemoryHandle::open(shm_path())
+                    .map(Arc::new)
+                    .map_err(Error::SharedMemory)
             }
+        })
+    }
+
+    fn get_or_init_kernel_limiter(
+        &self,
+    ) -> Result<&KernelLimiter<ErlSharedMemoryAdapter<Arc<SharedMemoryHandle>>>, Error> {
+        self.erl_kernel_limiter.get_or_try_init(|| {
+            let handle = Arc::clone(self.get_or_init_shared_memory_arc()?);
+            let erl_adapter = ErlSharedMemoryAdapter::new(handle);
+            Ok(KernelLimiter::new(erl_adapter))
         })
     }
 
@@ -128,14 +159,9 @@ impl Limiter {
     ) -> Result<(), Error> {
         if !self.cu_device_mapping.contains_key(&cu_device) {
             let device_uuid = f()?;
-            let nvml = Nvml::builder()
-                .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
-                    OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
-                ))
-                .init()
-                .unwrap();
-
-            let device = nvml.device_by_uuid(device_uuid.replace("gpu-", "GPU-").as_str())?;
+            let device = self
+                .nvml
+                .device_by_uuid(device_uuid.replace("gpu-", "GPU-").as_str())?;
             let raw_index = device.index()?;
             self.cu_device_mapping
                 .insert(cu_device, (raw_index as usize, device_uuid));
@@ -151,13 +177,9 @@ impl Limiter {
             Ok(dev_idx_uuid.0)
         } else {
             let uuid = culib::device_uuid(cu_device).map_err(Error::Cuda)?;
-            let nvml = Nvml::builder()
-                .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
-                    OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
-                ))
-                .init()
-                .unwrap();
-            let device = nvml.device_by_uuid(uuid.replace("gpu-", "GPU-").as_str())?;
+            let device = self
+                .nvml
+                .device_by_uuid(uuid.replace("gpu-", "GPU-").as_str())?;
             let index: u32 = device.index()?;
             self.cu_device_mapping
                 .insert(cu_device, (index as usize, uuid));
@@ -165,31 +187,173 @@ impl Limiter {
         }
     }
 
-    /// Rate limiter that waits for available CUDA cores with exponential backoff
+    /// Rate limiter entry point - dispatches to V1 or V2 based on shared memory version
     pub(crate) fn rate_limiter(
         &self,
         raw_device_index: usize,
         grids: u32,
-        _blocks: u32,
+        blocks: u32,
     ) -> Result<(), Error> {
-        let kernel_size = grids as i32;
-
-        // Get shared memory handle for this device (lazy init)
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
 
-        match state.with_device(raw_device_index, |device| device.device_info.get_up_limit()) {
-            Some(up_limit) => {
-                if up_limit >= 100 {
-                    return Ok(());
-                }
-            }
-            None => {
-                return Err(Error::DeviceNotConfigured(raw_device_index));
-            }
+        self.check_bypass_and_health(state, raw_device_index)?;
+
+        // Dispatch to appropriate version
+        match state.version() {
+            1 => self.rate_limiter_v1(state, raw_device_index, grids),
+            2 => self.rate_limiter_v2(raw_device_index, grids, blocks),
+            version => Err(Error::UnsupportedVersion {
+                version,
+                device_idx: raw_device_index,
+            }),
+        }
+    }
+
+    /// Check if device can bypass limiting and validate health
+    fn check_bypass_and_health(
+        &self,
+        state: &utils::shared_memory::SharedDeviceState,
+        raw_device_index: usize,
+    ) -> Result<(), Error> {
+        let up_limit = state
+            .with_device(
+                raw_device_index,
+                |device| device.device_info.get_up_limit(),
+                |device| device.device_info.get_up_limit(),
+            )
+            .ok_or(Error::DeviceNotConfigured(raw_device_index))?;
+
+        if up_limit >= 100 {
+            return Ok(());
         }
 
-        // Check if device exists, return error instead of panic
+        self.check_device_health(state, raw_device_index)
+    }
+
+    /// V1: Core-based rate limiting
+    fn rate_limiter_v1(
+        &self,
+        state: &utils::shared_memory::SharedDeviceState,
+        raw_device_index: usize,
+        grids: u32,
+    ) -> Result<(), Error> {
+        let kernel_size = grids as i32;
+
+        self.wait_and_retry(raw_device_index, || {
+            let available = state
+                .with_device_v1(raw_device_index, |device| {
+                    device.device_info.get_available_cores()
+                })
+                .ok_or_else(|| Error::DeviceNotConfigured(raw_device_index))?;
+
+            if available >= kernel_size {
+                state
+                    .with_device_v1(raw_device_index, |device| {
+                        device.device_info.fetch_sub_available_cores(kernel_size)
+                    })
+                    .ok_or_else(|| Error::DeviceNotConfigured(raw_device_index))?;
+
+                tracing::debug!(
+                    device_idx = raw_device_index,
+                    grids = grids,
+                    available_cores = available,
+                    "V1 core-based admission granted"
+                );
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+    }
+
+    /// V2: ERL rate limiting
+    fn rate_limiter_v2(
+        &self,
+        raw_device_index: usize,
+        grids: u32,
+        blocks: u32,
+    ) -> Result<(), Error> {
+        self.wait_and_retry(raw_device_index, || {
+            match self.try_erl_admission_control(raw_device_index, grids, blocks) {
+                Ok(true) => {
+                    tracing::debug!(
+                        device_idx = raw_device_index,
+                        grids = grids,
+                        blocks = blocks,
+                        "V2 ERL admission granted"
+                    );
+                    Ok(true)
+                }
+                Ok(false) => Ok(false),
+                Err(e) => {
+                    tracing::error!(
+                        device_idx = raw_device_index,
+                        grids = grids,
+                        blocks = blocks,
+                        error = %e,
+                        "ERL admission control failed"
+                    );
+                    Err(Error::ErlAdmissionFailed {
+                        device_idx: raw_device_index,
+                        message: e.to_string(),
+                    })
+                }
+            }
+        })
+    }
+
+    fn wait_and_retry<F>(&self, raw_device_index: usize, mut check: F) -> Result<(), Error>
+    where
+        F: FnMut() -> Result<bool, Error>,
+    {
+        let mut wait_times: u64 = 0;
+
+        loop {
+            match check() {
+                Ok(true) => {
+                    if wait_times > 0 {
+                        tracing::debug!(
+                            device_idx = raw_device_index,
+                            wait_times,
+                            total_wait_ms = wait_times * RATE_LIMITER_SLEEP_MS,
+                            "Request approved after waiting"
+                        );
+                    }
+                    return Ok(());
+                }
+                Ok(false) => {
+                    thread::sleep(Duration::from_millis(RATE_LIMITER_SLEEP_MS));
+                    wait_times += 1;
+
+                    // Periodic health check
+                    if wait_times % RATE_LIMITER_HEALTH_CHECK_INTERVAL == 0 {
+                        let handle = self.get_or_init_shared_memory()?;
+                        let state = handle.get_state();
+                        self.check_device_health(state, raw_device_index)?;
+                    }
+
+                    // Periodic logging when waiting too long
+                    if wait_times % RATE_LIMITER_LOG_INTERVAL == 0 {
+                        tracing::warn!(
+                            device_idx = raw_device_index,
+                            wait_times,
+                            total_wait_ms = wait_times * RATE_LIMITER_SLEEP_MS,
+                            "Still waiting for tokens (possible starvation)"
+                        );
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Check if device exists and is healthy
+    fn check_device_health(
+        &self,
+        state: &utils::shared_memory::SharedDeviceState,
+        raw_device_index: usize,
+    ) -> Result<(), Error> {
         if !state.has_device(raw_device_index) {
             return Err(Error::DeviceNotConfigured(raw_device_index));
         }
@@ -200,52 +364,64 @@ impl Limiter {
                 last_heartbeat,
             });
         }
-
-        let sleep_ms = 10;
-        let mut wait_times = 0;
-        loop {
-            let available = state
-                .with_device(raw_device_index, |device| {
-                    device.device_info.get_available_cores()
-                })
-                .ok_or_else(|| Error::DeviceNotConfigured(raw_device_index))?;
-
-            if available >= kernel_size {
-                // Successfully reserved cores
-                state
-                    .with_device(raw_device_index, |device| {
-                        device.device_info.fetch_sub_available_cores(kernel_size)
-                    })
-                    .ok_or_else(|| Error::DeviceNotConfigured(raw_device_index))?;
-                break;
-            }
-
-            thread::sleep(Duration::from_millis(sleep_ms));
-            wait_times += 1;
-
-            if wait_times > 10 {
-                wait_times = 0;
-                let is_healthy = state.is_healthy(Duration::from_secs(2));
-                tracing::debug!(
-                    device_idx = raw_device_index,
-                    is_healthy = is_healthy,
-                    "check device health"
-                );
-                if !is_healthy {
-                    let last_heartbeat = state.get_last_heartbeat();
-                    return Err(Error::DeviceNotHealthy {
-                        device_idx: raw_device_index,
-                        last_heartbeat,
-                    });
-                }
-            }
-        }
-
         Ok(())
     }
 
     pub(crate) fn get_device_count(&self) -> u32 {
         self.gpu_idx_uuids.len() as u32
+    }
+
+    /// ERL workload-aware admission control
+    fn try_erl_admission_control(
+        &self,
+        raw_device_index: usize,
+        grids: u32,
+        blocks: u32,
+    ) -> Result<bool, Error> {
+        let limiter = self.get_or_init_kernel_limiter()?;
+
+        // Get current state before trying to acquire
+        let current_tokens = limiter.current_tokens(raw_device_index).unwrap_or(0.0);
+
+        match limiter.try_acquire(raw_device_index, grids, blocks) {
+            Ok(true) => {
+                let tokens_after = limiter.current_tokens(raw_device_index).unwrap_or(0.0);
+                let cost = current_tokens - tokens_after;
+                tracing::debug!(
+                    device_idx = raw_device_index,
+                    grids,
+                    blocks,
+                    tokens_before = %format!("{:.1}", current_tokens),
+                    tokens_after = %format!("{:.1}", tokens_after),
+                    cost = %format!("{:.1}", cost),
+                    "ERL: Admission GRANTED"
+                );
+                Ok(true)
+            }
+            Ok(false) => {
+                tracing::info!(
+                    device_idx = raw_device_index,
+                    grids,
+                    blocks,
+                    tokens = %format!("{:.1}", current_tokens),
+                    "ERL: Admission DENIED (insufficient tokens)"
+                );
+                Ok(false)
+            }
+            Err(err) => {
+                tracing::error!(
+                    device_idx = raw_device_index,
+                    grids,
+                    blocks,
+                    error = %err,
+                    "ERL admission check failed"
+                );
+                Err(Error::ErlAdmissionFailed {
+                    device_idx: raw_device_index,
+                    message: err.to_string(),
+                })
+            }
+        }
     }
 
     /// Get pod memory usage from shared memory
@@ -269,12 +445,21 @@ impl Limiter {
             tracing::warn!(now = now, "{err}");
         }
 
-        if let Some((used, limit)) = state.with_device(raw_device_index, |device| {
-            (
-                device.device_info.get_pod_memory_used(),
-                device.device_info.get_mem_limit(),
-            )
-        }) {
+        if let Some((used, limit)) = state.with_device(
+            raw_device_index,
+            |device| {
+                (
+                    device.device_info.get_pod_memory_used(),
+                    device.device_info.get_mem_limit(),
+                )
+            },
+            |device| {
+                (
+                    device.device_info.get_pod_memory_used(),
+                    device.device_info.get_mem_limit(),
+                )
+            },
+        ) {
             Ok((used, limit))
         } else {
             Err(Error::DeviceNotConfigured(raw_device_index))
@@ -399,12 +584,6 @@ mod tests {
             let state = Arc::new(SharedDeviceInfo::new(total_cores, up_limit, mem_limit));
             Self { state }
         }
-
-        /// Set available CUDA cores for testing
-        pub fn set_available_cores(&self, cores: i32) {
-            self.state.set_available_cores(cores);
-        }
-
         /// Set memory limit for testing
         #[allow(dead_code)]
         pub fn set_mem_limit(&self, limit: u64) {
@@ -459,32 +638,5 @@ mod tests {
         let free = total.saturating_sub(used);
 
         assert_eq!(free, 0, "Free memory should saturate to 0");
-    }
-
-    #[test]
-    fn test_shared_memory_trait_consistency() {
-        let mock = MockSharedMemory::new(2048, 90, 2048 * 1024 * 1024);
-        mock.set_available_cores(1500);
-        mock.set_pod_memory_used(1024 * 1024 * 1024);
-
-        let state = mock.get_state();
-
-        assert_eq!(state.get_total_cores(), 2048, "Total cores should match");
-        assert_eq!(state.get_up_limit(), 90, "Up limit should match");
-        assert_eq!(
-            state.get_mem_limit(),
-            2048 * 1024 * 1024,
-            "Memory limit should match"
-        );
-        assert_eq!(
-            state.get_available_cores(),
-            1500,
-            "Available cores should match"
-        );
-        assert_eq!(
-            state.get_pod_memory_used(),
-            1024 * 1024 * 1024,
-            "Pod memory used should match"
-        );
     }
 }

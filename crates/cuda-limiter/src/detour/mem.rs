@@ -35,7 +35,6 @@ macro_rules! check_and_alloc {
         let device_result = with_device!(|limiter: &crate::limiter::Limiter, device_idx: usize| {
             (limiter.get_pod_memory_usage(device_idx), device_idx)
         });
-
         match device_result {
             Ok((result, device_idx)) => {
                 match result {

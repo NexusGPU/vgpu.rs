@@ -1,5 +1,139 @@
 use clap::Parser;
+use serde::{Deserialize, Deserializer};
 use std::path::PathBuf;
+
+/// Hypervisor scheduling configuration containing all scheduling-related parameters
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HypervisorScheduling {
+    #[serde(default)]
+    pub elastic_rate_limit_parameters: ElasticRateLimitParameters,
+}
+
+/// Elastic Rate Limit parameters for controlling GPU resource allocation
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElasticRateLimitParameters {
+    #[serde(
+        deserialize_with = "deserialize_optional_f64_from_string",
+        default = "default_max_refill_rate"
+    )]
+    pub max_refill_rate: f64,
+
+    #[serde(
+        deserialize_with = "deserialize_optional_f64_from_string",
+        default = "default_min_refill_rate"
+    )]
+    pub min_refill_rate: f64,
+
+    #[serde(
+        deserialize_with = "deserialize_optional_f64_from_string",
+        default = "default_filter_alpha"
+    )]
+    pub filter_alpha: f64,
+
+    #[serde(
+        deserialize_with = "deserialize_optional_f64_from_string",
+        default = "default_ki"
+    )]
+    pub ki: f64,
+
+    #[serde(
+        deserialize_with = "deserialize_optional_f64_from_string",
+        default = "default_kd"
+    )]
+    pub kd: f64,
+
+    #[serde(
+        deserialize_with = "deserialize_optional_f64_from_string",
+        default = "default_kp"
+    )]
+    pub kp: f64,
+
+    #[serde(
+        deserialize_with = "deserialize_optional_f64_from_string",
+        default = "default_burst_window"
+    )]
+    pub burst_window: f64,
+
+    #[serde(
+        deserialize_with = "deserialize_optional_f64_from_string",
+        default = "default_capacity_min"
+    )]
+    pub capacity_min: f64,
+
+    #[serde(
+        deserialize_with = "deserialize_optional_f64_from_string",
+        default = "default_capacity_max"
+    )]
+    pub capacity_max: f64,
+}
+
+impl Default for ElasticRateLimitParameters {
+    fn default() -> Self {
+        Self {
+            max_refill_rate: default_max_refill_rate(),
+            min_refill_rate: default_min_refill_rate(),
+            filter_alpha: default_filter_alpha(),
+            ki: default_ki(),
+            kd: default_kd(),
+            kp: default_kp(),
+            burst_window: default_burst_window(),
+            capacity_min: default_capacity_min(),
+            capacity_max: default_capacity_max(),
+        }
+    }
+}
+
+// Default value functions for ElasticRateLimitParameters
+fn default_max_refill_rate() -> f64 {
+    100_000.0
+}
+fn default_min_refill_rate() -> f64 {
+    10.0
+}
+fn default_filter_alpha() -> f64 {
+    0.3
+}
+fn default_ki() -> f64 {
+    0.1
+}
+fn default_kd() -> f64 {
+    0.05
+}
+fn default_kp() -> f64 {
+    0.5
+}
+fn default_burst_window() -> f64 {
+    2.0
+}
+fn default_capacity_min() -> f64 {
+    100.0
+}
+fn default_capacity_max() -> f64 {
+    200_000.0
+}
+
+/// Custom deserializer for f64 that accepts both string and number formats
+/// Handles Go's JSON string representation of numeric values
+fn deserialize_optional_f64_from_string<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrFloat {
+        String(String),
+        Float(f64),
+    }
+
+    match StringOrFloat::deserialize(deserializer)? {
+        StringOrFloat::String(s) => s.parse::<f64>().map_err(|e| {
+            serde::de::Error::custom(format!("Failed to parse float from string '{s}': {e}"))
+        }),
+        StringOrFloat::Float(f) => Ok(f),
+    }
+}
 
 #[derive(Parser, Clone)]
 pub struct DaemonArgs {
@@ -126,4 +260,160 @@ pub struct DaemonArgs {
         value_hint = clap::ValueHint::DirPath,
     )]
     pub shared_memory_base_path: PathBuf,
+
+    #[arg(
+        long,
+        help = "Controller update interval in milliseconds",
+        default_value = "100",
+        env = "ERL_UPDATE_INTERVAL_MS"
+    )]
+    pub erl_update_interval_ms: u64,
+
+    #[arg(
+        long,
+        help = "Hypervisor scheduling configuration as JSON string (contains elasticRateLimitParameters, etc.)",
+        env = "TF_HYPERVISOR_SCHEDULING_CONFIG",
+        value_parser = parse_scheduling_config
+    )]
+    pub scheduling_config: Option<HypervisorScheduling>,
+}
+
+/// Parse JSON string into HypervisorScheduling configuration
+fn parse_scheduling_config(s: &str) -> Result<HypervisorScheduling, String> {
+    serde_json::from_str(s).map_err(|e| format!("Failed to parse scheduling config JSON: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_elastic_rate_limit_params_from_go_json() {
+        let json = r#"{
+            "elasticRateLimitParameters": {
+                "maxRefillRate": "100000.0",
+                "minRefillRate": "10.0",
+                "filterAlpha": "0.3",
+                "ki": "0.1",
+                "kd": "0.05",
+                "kp": "0.5",
+                "burstWindow": "2.0",
+                "capacityMin": "100.0",
+                "capacityMax": "200000.0"
+            }
+        }"#;
+
+        let config: HypervisorScheduling = serde_json::from_str(json)
+            .expect("should deserialize HypervisorScheduling from Go JSON with string numbers");
+
+        let params = &config.elastic_rate_limit_parameters;
+        assert_eq!(
+            params.max_refill_rate, 100_000.0,
+            "max_refill_rate should match"
+        );
+        assert_eq!(params.min_refill_rate, 10.0, "min_refill_rate should match");
+        assert_eq!(params.filter_alpha, 0.3, "filter_alpha should match");
+        assert_eq!(params.ki, 0.1, "ki should match");
+        assert_eq!(params.kd, 0.05, "kd should match");
+        assert_eq!(params.kp, 0.5, "kp should match");
+        assert_eq!(params.burst_window, 2.0, "burst_window should match");
+        assert_eq!(params.capacity_min, 100.0, "capacity_min should match");
+        assert_eq!(params.capacity_max, 200_000.0, "capacity_max should match");
+    }
+
+    #[test]
+    fn deserialize_elastic_rate_limit_params_from_numeric_json() {
+        let json = r#"{
+            "elasticRateLimitParameters": {
+                "maxRefillRate": 100000.0,
+                "minRefillRate": 10.0,
+                "filterAlpha": 0.3,
+                "ki": 0.1,
+                "kd": 0.05,
+                "kp": 0.5,
+                "burstWindow": 2.0,
+                "capacityMin": 100.0,
+                "capacityMax": 200000.0
+            }
+        }"#;
+
+        let config: HypervisorScheduling = serde_json::from_str(json)
+            .expect("should deserialize HypervisorScheduling from numeric JSON");
+
+        let params = &config.elastic_rate_limit_parameters;
+        assert_eq!(
+            params.max_refill_rate, 100_000.0,
+            "max_refill_rate should match"
+        );
+        assert_eq!(params.min_refill_rate, 10.0, "min_refill_rate should match");
+        assert_eq!(params.filter_alpha, 0.3, "filter_alpha should match");
+    }
+
+    #[test]
+    fn deserialize_with_defaults_when_fields_missing() {
+        let json = r#"{
+            "elasticRateLimitParameters": {
+                "maxRefillRate": "50000.0"
+            }
+        }"#;
+
+        let config: HypervisorScheduling = serde_json::from_str(json)
+            .expect("should deserialize with default values for missing fields");
+
+        let params = &config.elastic_rate_limit_parameters;
+        assert_eq!(
+            params.max_refill_rate, 50_000.0,
+            "max_refill_rate should use provided value"
+        );
+        assert_eq!(
+            params.min_refill_rate, 10.0,
+            "min_refill_rate should use default"
+        );
+        assert_eq!(params.filter_alpha, 0.3, "filter_alpha should use default");
+        assert_eq!(params.ki, 0.1, "ki should use default");
+    }
+
+    #[test]
+    fn deserialize_empty_config_uses_all_defaults() {
+        let json = r#"{}"#;
+
+        let config: HypervisorScheduling =
+            serde_json::from_str(json).expect("should deserialize empty config with all defaults");
+
+        let params = &config.elastic_rate_limit_parameters;
+        assert_eq!(
+            params.max_refill_rate, 100_000.0,
+            "should use default max_refill_rate"
+        );
+        assert_eq!(
+            params.min_refill_rate, 10.0,
+            "should use default min_refill_rate"
+        );
+        assert_eq!(params.filter_alpha, 0.3, "should use default filter_alpha");
+        assert_eq!(params.ki, 0.1, "should use default ki");
+        assert_eq!(params.kd, 0.05, "should use default kd");
+        assert_eq!(params.kp, 0.5, "should use default kp");
+        assert_eq!(params.burst_window, 2.0, "should use default burst_window");
+        assert_eq!(
+            params.capacity_min, 100.0,
+            "should use default capacity_min"
+        );
+        assert_eq!(
+            params.capacity_max, 200_000.0,
+            "should use default capacity_max"
+        );
+    }
+
+    #[test]
+    fn parse_scheduling_config_from_string() {
+        let json_str = r#"{"elasticRateLimitParameters":{"maxRefillRate":"100000.0"}}"#;
+
+        let config =
+            parse_scheduling_config(json_str).expect("should parse scheduling config from string");
+
+        assert_eq!(
+            config.elastic_rate_limit_parameters.max_refill_rate,
+            100_000.0
+        );
+    }
 }

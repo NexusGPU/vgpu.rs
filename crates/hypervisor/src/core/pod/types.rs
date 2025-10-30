@@ -66,7 +66,7 @@ pub struct PodState {
     /// Basic pod information from Kubernetes
     pub info: WorkerInfo,
     /// Device configurations for GPU resources
-    pub device_configs: Vec<DeviceConfig>,
+    pub device_configs: Vec<Arc<DeviceConfig>>,
     /// All processes in this pod, keyed by host PID
     pub processes: HashSet<u32>,
     /// Shared memory handle for GPU coordination
@@ -77,7 +77,7 @@ pub struct PodState {
 
 impl PodState {
     /// Create a new pod state
-    pub fn new(info: WorkerInfo, device_configs: Vec<DeviceConfig>) -> Self {
+    pub fn new(info: WorkerInfo, device_configs: Vec<Arc<DeviceConfig>>) -> Self {
         Self {
             info,
             device_configs,
@@ -162,6 +162,7 @@ where
 mod tests {
     use api_types::QosLevel;
     use std::collections::BTreeMap;
+    use std::sync::Arc;
 
     use utils::shared_memory::DeviceConfig;
 
@@ -200,7 +201,7 @@ mod tests {
     #[test]
     fn test_unified_pod_state_creation() {
         let info = create_test_worker_info("test-pod");
-        let device_configs = vec![create_test_device_config()];
+        let device_configs = vec![Arc::new(create_test_device_config())];
 
         let pod_state = PodState::new(info.clone(), device_configs.clone());
 
@@ -213,7 +214,7 @@ mod tests {
     #[test]
     fn test_device_filtering() {
         let info = create_test_worker_info("test-pod");
-        let device_configs = vec![create_test_device_config()];
+        let device_configs = vec![Arc::new(create_test_device_config())];
         let pod_state = PodState::new(info, device_configs);
 
         assert!(pod_state.uses_device(0));
