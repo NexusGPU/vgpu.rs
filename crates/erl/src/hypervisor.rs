@@ -241,7 +241,16 @@ impl<B: DeviceBackend> DeviceController<B> {
         // Apply control signal as a proportional adjustment to current rate
         // PID output is in [-1, 1] range and represents the rate multiplier
         // Negative error (over-utilization) produces negative output, reducing rate
-        let delta = control_output.output * self.current_rate;
+
+        // IMPORTANT: If current_rate is 0, we need a base rate to escape the zero trap
+        // Otherwise delta will always be 0 and we can never recover
+        let base_rate = if self.current_rate < 1.0 {
+            10.0 // Minimum base rate to allow recovery from zero
+        } else {
+            self.current_rate
+        };
+
+        let delta = control_output.output * base_rate;
         let new_rate = (self.current_rate + delta).clamp(0.0, self.cfg.rate_max);
         self.current_rate = new_rate;
 
