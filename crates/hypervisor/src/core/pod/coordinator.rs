@@ -481,12 +481,8 @@ where
             );
         }
 
-        // Scale max_refill_rate based on up_limit to enforce quota
-        // up_limit represents the percentage of GPU this pod can use
-        // So max_refill_rate should be proportionally scaled
-        let quota_ratio = target_utilization;
-        let scaled_max_refill_rate = erl_config.max_refill_rate * quota_ratio;
-        let scaled_initial_refill_rate = erl_config.initial_refill_rate * quota_ratio;
+        let scaled_max_refill_rate = erl_config.max_refill_rate;
+        let scaled_initial_refill_rate = erl_config.initial_refill_rate.min(scaled_max_refill_rate);
 
         use std::collections::hash_map::Entry;
         let mut controllers = erl_controllers.write().await;

@@ -35,8 +35,8 @@ impl Default for DeviceControllerConfig {
     fn default() -> Self {
         Self {
             target_utilization: 0.5,
-            burst_seconds: 0.2,
-            capacity_floor: 100.0,
+            burst_seconds: 1.0,
+            capacity_floor: 500.0,
             kp: 1.0,
             ki: 0.2,
             kd: 0.05,

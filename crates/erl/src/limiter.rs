@@ -233,7 +233,7 @@ mod tests {
         );
 
         let backend_large = MockBackend::new(50.0, 5.0, 50.0);
-        let limiter_large = KernelLimiter::with_config(backend_large.clone(), cfg);
+        let limiter_large = KernelLimiter::with_config(backend_large.clone(), cfg.clone());
         let allowed_large = limiter_large
             .try_acquire_at(0, 1_000_000, 2_048, 0.0)
             .unwrap();
@@ -243,11 +243,11 @@ mod tests {
         );
         let consumed_large = 50.0 - backend_large.tokens();
         assert!(
-            consumed_large <= 2.0 + 1e-6,
+            consumed_large <= cfg.max_cost + 1e-6,
             "large kernels should not exceed max cost"
         );
         assert!(
-            consumed_large >= 0.5 - 1e-6,
+            consumed_large >= cfg.min_cost - 1e-6,
             "large kernels should still be >= min cost"
         );
     }
