@@ -131,7 +131,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "PID proportional gain (Kp)",
-        default_value = "0.3",
+        default_value = "1.0",
         env = "ERL_PID_KP"
     )]
     pub erl_pid_kp: f64,
@@ -139,7 +139,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "PID integral gain (Ki)",
-        default_value = "0.05",
+        default_value = "0.2",
         env = "ERL_PID_KI"
     )]
     pub erl_pid_ki: f64,
@@ -147,7 +147,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "PID derivative gain (Kd)",
-        default_value = "0.02",
+        default_value = "0.05",
         env = "ERL_PID_KD"
     )]
     pub erl_pid_kd: f64,
@@ -203,7 +203,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "Integral term clamp limit",
-        default_value = "0.3",
+        default_value = "0.5",
         env = "ERL_INTEGRAL_LIMIT"
     )]
     pub erl_integral_limit: f64,
