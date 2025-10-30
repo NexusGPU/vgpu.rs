@@ -85,13 +85,15 @@ impl SharedMemoryHandle {
 
     /// Opens an existing shared memory segment.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let shmem = ShmemConf::new()
+        let mut shmem = ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
             .use_tmpfs_with_dir(path.as_ref())
             .os_id(SHM_PATH_SUFFIX)
             .open()
             .context("Failed to open shared memory")?;
 
+        // avoid cleanup by drop
+        shmem.set_owner(false);
         let ptr = shmem.as_ptr() as *mut SharedDeviceState;
 
         Ok(Self {
@@ -104,7 +106,7 @@ impl SharedMemoryHandle {
     pub fn create(path: impl AsRef<Path>, configs: &[DeviceConfig]) -> Result<Self> {
         std::fs::create_dir_all(path.as_ref())?;
         let old_umask = unsafe { libc::umask(0) };
-        let shmem = match ShmemConf::new()
+        let mut shmem = match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
             .use_tmpfs_with_dir(path.as_ref())
             .os_id(SHM_PATH_SUFFIX)
@@ -130,7 +132,8 @@ impl SharedMemoryHandle {
             }
             Err(e) => return Err(anyhow::anyhow!("Failed to create shared memory: {e}")),
         };
-
+        // avoid cleanup by drop
+        shmem.set_owner(false);
         unsafe {
             libc::umask(old_umask);
         }
@@ -171,81 +174,3 @@ impl SharedMemoryHandle {
 // Implement Send and Sync because SharedDeviceState uses atomic operations.
 unsafe impl Send for SharedMemoryHandle {}
 unsafe impl Sync for SharedMemoryHandle {}
-
-impl Drop for SharedMemoryHandle {
-    fn drop(&mut self) {
-        if self.shmem.borrow().is_owner() {
-            let need_cleanup = self.get_state().get_all_pids().is_empty();
-
-            if !need_cleanup {
-                // Don't clean up - other processes are still using it
-                self.shmem.borrow_mut().set_owner(false);
-            } else {
-                let path = self.shmem.borrow().get_tmpfs_file_path();
-                info!(
-                    path = ?path,
-                    "No other processes using shared memory, allowing cleanup"
-                );
-                // Clean up - no other processes are using it
-                self.shmem.borrow_mut().set_owner(true);
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::shared_memory::PodIdentifier;
-
-    use super::*;
-    use std::{path::PathBuf, process};
-
-    #[test]
-    fn test_shared_memory_preserved_with_pids() {
-        let pod_id = PodIdentifier::new("test", "preserved");
-        let configs = vec![];
-        let pod_path = pod_id.to_path("/tmp/test_shm");
-
-        let _ = std::fs::remove_dir_all(&pod_path);
-        // Test case: Create shared memory, add PID, then test cleanup behavior
-        let handle = SharedMemoryHandle::create(&pod_path, &configs).unwrap();
-
-        // Initially no PIDs
-        assert!(handle.get_state().get_all_pids().is_empty());
-        assert!(handle.shmem.borrow().is_owner());
-
-        // Add a PID to simulate another process using the memory
-        handle.get_state().add_pid(12345);
-        assert!(!handle.get_state().get_all_pids().is_empty());
-        assert_eq!(handle.get_state().get_all_pids().len(), 1);
-
-        drop(handle);
-
-        let handle2 = SharedMemoryHandle::open(&pod_path);
-
-        assert!(handle2.is_ok());
-
-        {
-            std::fs::remove_dir_all(pod_path).unwrap();
-        }
-    }
-
-    #[test]
-    fn test_shared_memory_cleanup() {
-        let test_path = PathBuf::from(format!("/tmp/test_cleanup_{}", process::id()));
-        let configs = vec![];
-
-        // Test case: Create shared memory, add PID, then test cleanup behavior
-        let handle = SharedMemoryHandle::create(&test_path, &configs).unwrap();
-
-        // Initially no PIDs
-        assert!(handle.get_state().get_all_pids().is_empty());
-        assert!(handle.shmem.borrow().is_owner());
-
-        drop(handle);
-
-        let handle2 = SharedMemoryHandle::open(test_path);
-
-        assert!(handle2.is_err());
-    }
-}

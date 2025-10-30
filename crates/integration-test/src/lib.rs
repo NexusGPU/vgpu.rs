@@ -16,7 +16,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 use utils::shared_memory::handle::SHM_PATH_SUFFIX;
-use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
+use utils::shared_memory::manager::MemoryManager;
 use utils::shared_memory::{DeviceConfig, PodIdentifier};
 
 // Type aliases for complex return types
@@ -88,14 +88,18 @@ pub fn run_cuda_test_program(
     spawn_cuda_process(cmd)
 }
 
-pub async fn run_cuda_and_measure(
+pub async fn run_cuda_and_measure<F, Fut>(
     memory_bytes: u64,
     gpu_index: usize,
     gpu_uuid: &str,
     iterations: u64,
     is_limiter_enabled: bool,
-    post_start: impl Fn(u32),
-) -> Result<(u128, Output), Report<IntegrationTestError>> {
+    post_start: F,
+) -> Result<(u128, Output), Report<IntegrationTestError>>
+where
+    F: Fn(u32) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let start = std::time::Instant::now();
     let (pid, wait) = run_cuda_test_program(
         memory_bytes,
@@ -104,7 +108,7 @@ pub async fn run_cuda_and_measure(
         is_limiter_enabled,
         Some(iterations),
     )?;
-    post_start(pid);
+    post_start(pid).await;
     let output = tokio::task::spawn_blocking(wait).await.unwrap()?;
     let elapsed_ms = start.elapsed().as_millis();
     Ok((elapsed_ms, output))
@@ -277,30 +281,38 @@ pub async fn mock_coordinator(
     test_shm_id: &str,
     _gpu_index: usize,
 ) -> (
-    Arc<
-        LimiterCoordinator<
-            ThreadSafeSharedMemoryManager,
-            PodStateStore,
-            NvmlDeviceSampler,
-            SystemClock,
-        >,
-    >,
+    Arc<LimiterCoordinator<MemoryManager, PodStateStore, NvmlDeviceSampler, SystemClock>>,
     Arc<PodStateStore>,
 ) {
     // Create mock dependencies
     let tmpdir = tempdir().expect("Failed to create temporary directory");
-    let shared_memory = Arc::new(ThreadSafeSharedMemoryManager::new());
+    let shared_memory = Arc::new(MemoryManager::new());
     let base_path = tmpdir.path().to_path_buf();
     let pod_state = Arc::new(PodStateStore::new(base_path.clone()));
     let snapshot = Arc::new(NvmlDeviceSampler::init().unwrap());
     let time = Arc::new(SystemClock::new());
 
     // Create coordinator with mock dependencies
+    // Create default ERL config for testing
+    let erl_config = hypervisor::config::ErlConfig {
+        update_interval_ms: 100,
+        rate_min: 10.0,
+        rate_max: 5_000.0,
+        kp: 0.5,
+        ki: 0.1,
+        kd: 0.05,
+        filter_alpha: 0.3,
+        burst_window: 2.0,
+        capacity_min: 100.0,
+        capacity_max: 10_000.0,
+    };
+
     let config = CoordinatorConfig {
         watch_interval: Duration::from_millis(50), // Fast monitoring for tests
         device_count: 1,                           // Single GPU
         shared_memory_glob_pattern: format!("{test_shm_id}*"),
         base_path,
+        erl_config,
     };
 
     let coordinator = Arc::new(LimiterCoordinator::new(
@@ -319,14 +331,8 @@ const TEST_MEMORY: u64 = 256 * 1024 * 1024; // 256MB
 
 /// Test coordinator manager that handles a single coordinator with multiple pods
 pub struct TestCoordinatorManager {
-    coordinator: Arc<
-        LimiterCoordinator<
-            ThreadSafeSharedMemoryManager,
-            PodStateStore,
-            NvmlDeviceSampler,
-            SystemClock,
-        >,
-    >,
+    coordinator:
+        Arc<LimiterCoordinator<MemoryManager, PodStateStore, NvmlDeviceSampler, SystemClock>>,
     pod_state: Arc<PodStateStore>,
     cancellation_token: CancellationToken,
     gpu_index: usize,
@@ -469,13 +475,13 @@ impl TestCoordinatorManager {
     }
 
     /// Register a process with a specific pod
-    pub fn register_process(
+    pub async fn register_process(
         &self,
         pod: &TestPod,
         pid: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.pod_state.register_process(&pod.pod_id, pid)?;
-        self.coordinator.register_process(&pod.pod_id, pid)?;
+        self.coordinator.register_process(&pod.pod_id, pid).await?;
         Ok(())
     }
 
@@ -497,8 +503,8 @@ impl TestCoordinatorManager {
             iterations,
             memory_bytes,
             is_limiter_enabled,
-            |pid| {
-                if let Err(e) = self.register_process(pod, pid) {
+            |pid| async move {
+                if let Err(e) = self.register_process(pod, pid).await {
                     eprintln!(
                         "Failed to register process {} for pod {}: {}",
                         pid, pod.pod_id, e
@@ -510,14 +516,18 @@ impl TestCoordinatorManager {
     }
 
     /// Internal method that integrates run_test_with_detailed_output functionality
-    async fn run_test_with_detailed_output(
+    async fn run_test_with_detailed_output<F, Fut>(
         &self,
         description: &str,
         iterations: u64,
         memory_bytes: u64,
         is_limiter_enabled: bool,
-        post_start: impl Fn(u32),
-    ) -> Result<(u128, Output), Report<IntegrationTestError>> {
+        post_start: F,
+    ) -> Result<(u128, Output), Report<IntegrationTestError>>
+    where
+        F: Fn(u32) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
         let device_uuid = get_gpu_uuid(self.gpu_index)?;
         let (elapsed_ms, output) = run_cuda_and_measure(
             memory_bytes,

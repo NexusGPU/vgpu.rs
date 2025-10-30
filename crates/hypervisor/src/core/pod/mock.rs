@@ -219,10 +219,11 @@ impl Default for MockSharedMemoryAccess {
     }
 }
 
+#[async_trait::async_trait]
 impl SharedMemoryAccess for MockSharedMemoryAccess {
     type Error = anyhow::Error;
 
-    fn find_shared_memory_files(&self, glob: &str) -> Result<Vec<PathBuf>, Self::Error> {
+    async fn find_shared_memory_files(&self, glob: &str) -> Result<Vec<PathBuf>, Self::Error> {
         self.log_operation(format!("find_shared_memory_files({glob})"));
         Ok(vec![]) // Return empty list for testing
     }
@@ -252,9 +253,9 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
             .ok_or_else(|| anyhow::anyhow!("Failed to parse PodIdentifier from path: {identifier}"))
     }
 
-    fn create_shared_memory(
+    async fn create_shared_memory(
         &self,
-        pod_path: impl AsRef<Path>,
+        pod_path: impl AsRef<Path> + Send,
         _cfgs: &[DeviceConfig],
     ) -> Result<(), Self::Error> {
         self.log_operation(format!(
@@ -264,19 +265,25 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
         Ok(())
     }
 
-    fn get_shared_memory(
+    async fn get_shared_memory(
         &self,
-        pod_path: impl AsRef<Path>,
-    ) -> Result<*const utils::shared_memory::SharedDeviceState, Self::Error> {
+        pod_path: impl AsRef<Path> + Send,
+    ) -> Result<utils::shared_memory::traits::SharedMemoryPtr, Self::Error> {
         self.log_operation(format!(
             "get_shared_memory({})",
             pod_path.as_ref().display()
         ));
         // Return a null pointer for testing - real tests would need proper shared memory
-        Ok(std::ptr::null())
+        Ok(utils::shared_memory::traits::SharedMemoryPtr::new(
+            std::ptr::null(),
+        ))
     }
 
-    fn add_pid(&self, pod_path: impl AsRef<Path>, host_pid: usize) -> Result<(), Self::Error> {
+    async fn add_pid(
+        &self,
+        pod_path: impl AsRef<Path> + Send,
+        host_pid: usize,
+    ) -> Result<(), Self::Error> {
         self.log_operation(format!(
             "add_pid({}, {host_pid})",
             pod_path.as_ref().display()
@@ -284,7 +291,11 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
         Ok(())
     }
 
-    fn remove_pid(&self, pod_path: impl AsRef<Path>, host_pid: usize) -> Result<(), Self::Error> {
+    async fn remove_pid(
+        &self,
+        pod_path: impl AsRef<Path> + Send,
+        host_pid: usize,
+    ) -> Result<(), Self::Error> {
         self.log_operation(format!(
             "remove_pid({}, {host_pid})",
             pod_path.as_ref().display()
@@ -292,15 +303,15 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
         Ok(())
     }
 
-    fn cleanup_orphaned_files<F, P>(
+    async fn cleanup_orphaned_files<F, P>(
         &self,
         glob: &str,
-        _should_remove: F,
+        _is_pod_tracking: F,
         base_path: P,
     ) -> Result<Vec<PodIdentifier>, Self::Error>
     where
-        F: Fn(&PodIdentifier) -> bool,
-        P: AsRef<Path>,
+        F: Fn(&PodIdentifier) -> bool + Send,
+        P: AsRef<Path> + Send,
     {
         self.log_operation(format!(
             "cleanup_orphaned_files({glob}, {:?})",
@@ -309,14 +320,14 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
         Ok(vec![]) // Return empty list for testing
     }
 
-    fn cleanup_unused<F, P>(
+    async fn cleanup_unused<F, P>(
         &self,
         _should_keep: F,
         base_path: P,
     ) -> Result<Vec<PodIdentifier>, Self::Error>
     where
-        F: Fn(&PodIdentifier) -> bool,
-        P: AsRef<Path>,
+        F: Fn(&PodIdentifier) -> bool + Send,
+        P: AsRef<Path> + Send,
     {
         self.log_operation(format!("cleanup_unused({:?})", base_path.as_ref()));
         Ok(vec![]) // Return empty list for testing
@@ -350,11 +361,26 @@ impl TestLimiterCoordinator {
         let snapshot = Arc::new(MockDeviceSnapshotProvider::new());
         let time = Arc::new(MockTime::default());
 
+        // Create default ERL config for testing
+        let erl_config = crate::config::ErlConfig {
+            update_interval_ms: 100,
+            rate_min: 10.0,
+            rate_max: 5_000.0,
+            kp: 0.5,
+            ki: 0.1,
+            kd: 0.05,
+            filter_alpha: 0.3,
+            burst_window: 2.0,
+            capacity_min: 100.0,
+            capacity_max: 10_000.0,
+        };
+
         let config = super::coordinator::CoordinatorConfig {
             watch_interval,
             device_count,
             shared_memory_glob_pattern,
             base_path,
+            erl_config,
         };
 
         let coordinator = Self::new(

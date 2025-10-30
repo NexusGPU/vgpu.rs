@@ -6,14 +6,15 @@ use std::process;
 const TENSOR_FUSION_DIR: &str = "/tensor-fusion";
 const SOURCE_DIR: &str = "/home/app";
 const NVIDIA_SMI_SOURCE: &str = "nvidia-smi-linux";
-const PRELOAD_CONFIG_PATH: &str = "/tensor-fusion/ld.so.preload";
 const PRELOAD_ADD_PATH_LIBS: &str = "/tensor-fusion/libadd_path.so\n";
 const PRELOAD_CUDA_STUB_LIBS: &str = "/tensor-fusion/libcuda.so\n/tensor-fusion/libnvidia-ml.so\n";
 const PRELOAD_NGPU_LIBS: &str = "/tensor-fusion/libcuda_limiter.so\n";
 const NVIDIA_ML_LIB: &str = "/tensor-fusion/libnvidia-ml.so";
 const NVIDIA_ML_SYMLINK: &str = "/tensor-fusion/libnvidia-ml.so.1";
 const NVIDIA_SMI_TARGET: &str = "/tensor-fusion/nvidia-smi";
-const TENSOR_FUSION_CONF_PATH: &str = "/tensor-fusion/zz_tensor-fusion.conf";
+
+const PRELOAD_CONFIG_PATH: &str = "/tensor-fusion-conf/ld.so.preload";
+const TENSOR_FUSION_CONF_PATH: &str = "/tensor-fusion-conf/zz_tensor-fusion.conf";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -98,6 +99,21 @@ fn copy_dynamic_lib_files() -> Result<()> {
             fs::copy(&path, &target_path).map_err(|e| {
                 format!("Failed to copy {} to {}: {e}", path.display(), target_path,)
             })?;
+
+            // Create symbolic link for every .so file (filename -> filename.1)
+            let symlink_path = format!("{target_path}.1");
+            // Remove existing symlink if it exists
+            if fs::metadata(&symlink_path).is_ok() {
+                fs::remove_file(&symlink_path).map_err(|e| {
+                    format!("Failed to remove existing symlink {symlink_path}: {e}")
+                })?;
+            }
+            symlink(&target_path, &symlink_path).map_err(|e| {
+                format!("Failed to create symlink from {target_path} to {symlink_path}: {e}")
+            })?;
+            log_debug(&format!(
+                "Created symlink from {target_path} to {symlink_path}"
+            ));
 
             copied_count += 1;
         }

@@ -11,9 +11,13 @@ frida-gum = { workspace = true, features = ["auto-download", "std"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 shared_memory = { workspace = true }
-spin = { version = "0.10", features = ["rwlock"], default-features = false }
 libc = "0.2.177"
 glob = { workspace = true }
+erl = { path = "../erl" }
+error-stack = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+async-trait = { workspace = true }
+dashmap = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

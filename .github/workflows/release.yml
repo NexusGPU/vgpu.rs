@@ -83,7 +83,7 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
 
       - name: Upload downloaded tensor-fusion components
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tensor-fusion-components
           path: |
@@ -93,7 +93,7 @@ jobs:
             libteleport.so
 
   build_libraries:
-    needs: 
+    needs:
       - release
     if: needs.release.outputs.published == 'true'
     strategy:
@@ -153,13 +153,13 @@ jobs:
         run: VERSION=${{ needs.release.outputs.version }} cross build -p bootstrap --release --target ${{ matrix.target }}
 
       - name: Upload cuda-limiter artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: libcuda_limiter-${{ matrix.platform }}
           path: target/${{ matrix.target }}/release/libcuda_limiter.so
 
       - name: Upload bootstrap artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bootstrap-${{ matrix.platform }}
           path: target/${{ matrix.target }}/release/bootstrap
@@ -168,13 +168,13 @@ jobs:
         run: VERSION=${{ needs.release.outputs.version }} cross build -p add-path --release --target ${{ matrix.target }}
 
       - name: Upload add-path artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: libadd_path-${{ matrix.platform }}
           path: target/${{ matrix.target }}/release/libadd_path.so
 
   publish_libraries:
-    needs: 
+    needs:
       - release
       - build_libraries
       - download_tensor_fusion_components
@@ -187,7 +187,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           path: artifacts
           pattern: "!*.dockerbuild"
@@ -201,7 +201,7 @@ jobs:
           tar -czf tensor-fusion-components.tar.gz -C artifacts/tensor-fusion-components .
           tar -czf bootstrap-x64.tar.gz -C artifacts/bootstrap-linux-x64 bootstrap
           tar -czf bootstrap-arm64.tar.gz -C artifacts/bootstrap-linux-arm64 bootstrap
-      
+
       - name: Add assets to manual release
         if: github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
@@ -250,7 +250,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-      
+
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -299,7 +299,7 @@ jobs:
           else
             VERSION=${{ needs.release.outputs.version }} cargo build -p hypervisor --release --target ${{ matrix.target }}
           fi
-      
+
       - id: meta
         uses: docker/metadata-action@v5
         with:

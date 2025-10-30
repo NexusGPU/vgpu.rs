@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
+use utils::shared_memory::manager::MemoryManager;
 
 use crate::core::hypervisor::HypervisorType;
 use crate::core::pod::sampler::{NvmlDeviceSampler, SystemClock};
@@ -17,19 +17,11 @@ use crate::platform::nvml::gpu_observer::GpuObserver;
 pub struct ApplicationServices {
     pub hypervisor: Arc<HypervisorType>,
     pub gpu_observer: Arc<GpuObserver>,
-    pub pod_manager: Arc<
-        PodManager<ThreadSafeSharedMemoryManager, PodStateStore, NvmlDeviceSampler, SystemClock>,
-    >,
+    pub pod_manager: Arc<PodManager<MemoryManager, PodStateStore, NvmlDeviceSampler, SystemClock>>,
     pub host_pid_probe: Arc<HostPidProbe>,
     pub command_dispatcher: Arc<CommandDispatcher>,
-    pub limiter_coordinator: Arc<
-        LimiterCoordinator<
-            ThreadSafeSharedMemoryManager,
-            PodStateStore,
-            NvmlDeviceSampler,
-            SystemClock,
-        >,
-    >,
+    pub limiter_coordinator:
+        Arc<LimiterCoordinator<MemoryManager, PodStateStore, NvmlDeviceSampler, SystemClock>>,
     pub gpu_device_state_watcher: Arc<GpuDeviceStateWatcher>,
     pub pod_info_cache: Arc<PodInfoCache>,
 }

@@ -10,7 +10,8 @@ members = [
   "crates/trap",
   "crates/http-bidir-comm",
   "crates/bootstrap",
-  "crates/integration-test"
+  "crates/integration-test",
+  "crates/erl"
 ]
 
 [workspace.dependencies]
@@ -20,18 +21,19 @@ trap = { path = "crates/trap" }
 utils = { path = "crates/utils" }
 tf-macro = { path = "crates/macro" }
 http-bidir-comm = { path = "crates/http-bidir-comm" }
+erl = { path = "crates/erl" }
 tracing = "0.1"
 thiserror = "2.0"
 derive_more = "2.0"
 base64 = "0.22"
 tracing-subscriber = "0.3"
 ctor = "0.6"
-ipc-channel = "0.19.0"
+ipc-channel = "0.20.2"
 vergen-git2 = "1.0.1"
 anyhow = "1.0.100"
 nvml-wrapper = "0.11.0"
 nvml-wrapper-sys = "0.9.0"
-cudarc = "0.16.6"
+cudarc = "0.17.3"
 serde = "1.0"
 serde_json = "1.0"
 tracing-appender = "0.2.3"
@@ -63,7 +65,7 @@ url = "2.5"
 libloading = "0.8"
 shared_memory = { git="https://github.com/NexusGPU/shared_memory.git", rev="d679661" }
 tower = "0.5"
-schemars = "0.8"
+schemars = "1.0"
 glob = "0.3"
 async-trait = "0.1"
 dashmap = "6.1"
