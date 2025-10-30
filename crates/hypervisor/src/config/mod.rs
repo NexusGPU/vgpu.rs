@@ -10,8 +10,6 @@ pub struct ErlConfig {
     pub update_interval_ms: u64,
     /// System-wide maximum refill rate safety limit (tokens/sec).
     pub rate_limit: f64,
-    /// Controller responsiveness multiplier (0.5 = slow, 1.0 = normal, 2.0 = fast).
-    pub responsiveness: f64,
 }
 
 impl From<&daemon::DaemonArgs> for ErlConfig {
@@ -19,7 +17,6 @@ impl From<&daemon::DaemonArgs> for ErlConfig {
         Self {
             update_interval_ms: args.erl_update_interval_ms,
             rate_limit: args.erl_rate_limit,
-            responsiveness: args.erl_responsiveness.max(0.1),
         }
     }
 }

@@ -365,7 +365,6 @@ impl TestLimiterCoordinator {
         let erl_config = crate::config::ErlConfig {
             update_interval_ms: 100,
             rate_limit: 5_000.0,
-            responsiveness: 1.0,
         };
 
         let config = super::coordinator::CoordinatorConfig {

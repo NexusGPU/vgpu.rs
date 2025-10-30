@@ -488,11 +488,8 @@ where
             Entry::Vacant(vacant) => {
                 let backend = ErlSharedMemoryAdapter::new(handle.clone());
 
-                let ctrl_cfg = DeviceControllerConfig::new(
-                    target_utilization,
-                    erl_config.rate_limit,
-                    erl_config.responsiveness,
-                );
+                let ctrl_cfg =
+                    DeviceControllerConfig::new(target_utilization, erl_config.rate_limit);
 
                 match DeviceController::new(backend, device_index, ctrl_cfg) {
                     Ok(ctrl) => {
@@ -502,9 +499,8 @@ where
                             up_limit = device_config.up_limit,
                             target_utilization = target_utilization,
                             rate_limit = %format!("{:.1}", erl_config.rate_limit),
-                            responsiveness = erl_config.responsiveness,
-                            initial_rate = ctrl.state().last_refill_rate,
-                            "Initialized ERL controller for pod/device with auto-adaptive configuration"
+                            initial_rate = ctrl.state().current_rate,
+                            "Initialized ERL controller for pod/device"
                         );
                         vacant.insert(ctrl)
                     }
@@ -533,14 +529,17 @@ where
                 "Failed to update ERL controller"
             );
         } else {
+            let state = controller.state();
             info!(
                 pod_identifier = %pod_identifier,
                 device_index = device_index,
                 raw_utilization = pod_utilization.total_utilization,
-                normalized_utilization = utilization_ratio,
+                smoothed_utilization = %format!("{:.1}%", state.smoothed_utilization * 100.0),
+                target_utilization = %format!("{:.1}%", state.target_utilization * 100.0),
                 memory = pod_memory,
-                new_rate = controller.state().last_refill_rate,
-                target_utilization = controller.state().target_utilization,
+                refill_rate = %format!("{:.1}/s", state.current_rate),
+                capacity = %format!("{:.1}", state.current_capacity),
+                drain_rate = %format!("{:.1}/s", state.token_drain_rate),
                 "V2: Updated ERL controller with PID feedback"
             );
         }

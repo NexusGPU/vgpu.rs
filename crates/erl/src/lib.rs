@@ -17,6 +17,3 @@ pub use backend::{DeviceBackend, DeviceQuota, TokenState};
 pub use error::ErlError;
 pub use hypervisor::{DeviceController, DeviceControllerConfig, DeviceControllerState};
 pub use limiter::{KernelLimiter, KernelLimiterConfig};
-
-// Re-export pid crate for users who need to configure PID parameters
-pub use pid;

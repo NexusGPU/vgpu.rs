@@ -127,7 +127,6 @@ pub struct DaemonArgs {
     )]
     pub shared_memory_base_path: PathBuf,
 
-    // ==================== ERL (Elastic Rate Limiter) Parameters ====================
     #[arg(
         long,
         help = "Controller update interval in milliseconds",
@@ -143,12 +142,4 @@ pub struct DaemonArgs {
         env = "ERL_RATE_LIMIT"
     )]
     pub erl_rate_limit: f64,
-
-    #[arg(
-        long,
-        help = "Controller responsiveness: slow=0.5, normal=1.0, fast=2.0",
-        default_value = "1.0",
-        env = "ERL_RESPONSIVENESS"
-    )]
-    pub erl_responsiveness: f64,
 }

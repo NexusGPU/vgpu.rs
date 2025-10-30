@@ -297,7 +297,6 @@ pub async fn mock_coordinator(
     let erl_config = hypervisor::config::ErlConfig {
         update_interval_ms: 100,
         rate_limit: 5_000.0,
-        responsiveness: 1.0,
     };
 
     let config = CoordinatorConfig {
