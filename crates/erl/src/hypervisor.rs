@@ -35,12 +35,12 @@ impl Default for DeviceControllerConfig {
     fn default() -> Self {
         Self {
             target_utilization: 0.5,
-            burst_seconds: 0.25,
-            capacity_floor: 1.0,
-            kp: 5.0,
-            ki: 1.5,
-            kd: 0.5,
-            integral_limit: 100.0,
+            burst_seconds: 0.05,
+            capacity_floor: 50.0,
+            kp: 0.5,
+            ki: 0.1,
+            kd: 0.05,
+            integral_limit: 0.5,
             rate_min: 0.0,
             rate_max: 10_000.0,
             rate_initial: 10.0,
@@ -111,10 +111,11 @@ impl<B: DeviceBackend> DeviceController<B> {
         }
 
         // Initialize PID controller
-        let mut pid = pid::Pid::new(cfg.target_utilization, cfg.rate_max);
-        pid.p(cfg.kp, cfg.rate_max);
-        pid.i(cfg.ki, cfg.integral_limit);
-        pid.d(cfg.kd, cfg.rate_max);
+        // Set output limit to 1.0 so the output can be used as a rate multiplier
+        let mut pid = pid::Pid::new(cfg.target_utilization, 1.0);
+        pid.p(cfg.kp, 1.0);
+        pid.i(cfg.ki, 1.0);
+        pid.d(cfg.kd, 1.0);
 
         // Get current quota and clamp initial rate
         let quota = backend.read_quota(device)?;
@@ -220,8 +221,10 @@ impl<B: DeviceBackend> DeviceController<B> {
         // Update PID controller
         let control_output = self.pid.next_control_output(effective_utilization);
 
-        // Apply control signal incrementally
-        let delta = control_output.output;
+        // Apply control signal as a proportional adjustment to current rate
+        // PID output is in [-1, 1] range and represents the rate multiplier
+        // Negative error (over-utilization) produces negative output, reducing rate
+        let delta = control_output.output * self.current_rate;
         let new_rate = (self.current_rate + delta).clamp(self.cfg.rate_min, self.cfg.rate_max);
         self.current_rate = new_rate;
 
