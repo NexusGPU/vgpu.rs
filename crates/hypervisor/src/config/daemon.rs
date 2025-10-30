@@ -130,89 +130,25 @@ pub struct DaemonArgs {
     // ==================== ERL (Elastic Rate Limiter) Parameters ====================
     #[arg(
         long,
-        help = "PID proportional gain (Kp)",
+        help = "Controller update interval in milliseconds",
+        default_value = "100",
+        env = "ERL_UPDATE_INTERVAL_MS"
+    )]
+    pub erl_update_interval_ms: u64,
+
+    #[arg(
+        long,
+        help = "System-wide maximum refill rate safety limit (tokens/sec)",
+        default_value = "1000000.0",
+        env = "ERL_RATE_LIMIT"
+    )]
+    pub erl_rate_limit: f64,
+
+    #[arg(
+        long,
+        help = "Controller responsiveness: slow=0.5, normal=1.0, fast=2.0",
         default_value = "1.0",
-        env = "ERL_PID_KP"
+        env = "ERL_RESPONSIVENESS"
     )]
-    pub erl_pid_kp: f64,
-
-    #[arg(
-        long,
-        help = "PID integral gain (Ki)",
-        default_value = "0.2",
-        env = "ERL_PID_KI"
-    )]
-    pub erl_pid_ki: f64,
-
-    #[arg(
-        long,
-        help = "PID derivative gain (Kd)",
-        default_value = "0.05",
-        env = "ERL_PID_KD"
-    )]
-    pub erl_pid_kd: f64,
-
-    #[arg(
-        long,
-        help = "Minimum token refill rate (tokens/sec)",
-        default_value = "1.0",
-        env = "ERL_MIN_REFILL_RATE"
-    )]
-    pub erl_min_refill_rate: f64,
-
-    #[arg(
-        long,
-        help = "Maximum token refill rate (tokens/sec)",
-        default_value = "3000.0",
-        env = "ERL_MAX_REFILL_RATE"
-    )]
-    pub erl_max_refill_rate: f64,
-
-    #[arg(
-        long,
-        help = "Initial token refill rate for new controllers (tokens/sec)",
-        default_value = "100.0",
-        env = "ERL_INITIAL_REFILL_RATE"
-    )]
-    pub erl_initial_refill_rate: f64,
-
-    #[arg(
-        long,
-        help = "Token bucket burst allowance in seconds",
-        default_value = "1.0",
-        env = "ERL_BURST_SECONDS"
-    )]
-    pub erl_burst_seconds: f64,
-
-    #[arg(
-        long,
-        help = "Minimum token bucket capacity",
-        default_value = "500.0",
-        env = "ERL_CAPACITY_FLOOR"
-    )]
-    pub erl_capacity_floor: f64,
-
-    #[arg(
-        long,
-        help = "Derivative term smoothing factor (0.0 disables)",
-        default_value = "0.2",
-        env = "ERL_DERIVATIVE_FILTER"
-    )]
-    pub erl_derivative_filter: f64,
-
-    #[arg(
-        long,
-        help = "Integral term clamp limit",
-        default_value = "0.5",
-        env = "ERL_INTEGRAL_LIMIT"
-    )]
-    pub erl_integral_limit: f64,
-
-    #[arg(
-        long,
-        help = "Minimum delta time between PID updates in seconds",
-        default_value = "0.05",
-        env = "ERL_MIN_DELTA_TIME"
-    )]
-    pub erl_min_delta_time: f64,
+    pub erl_responsiveness: f64,
 }

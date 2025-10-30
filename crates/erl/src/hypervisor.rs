@@ -7,46 +7,66 @@ use error_stack::Result;
 pub struct DeviceControllerConfig {
     /// Target GPU utilization (0.0 to 1.0, e.g., 0.7 = 70%)
     pub target_utilization: f64,
-    /// Burst capacity in seconds (capacity = refill_rate * burst_seconds)
-    pub burst_seconds: f64,
-    /// Minimum capacity floor in tokens
-    pub capacity_floor: f64,
-    /// PID proportional gain
-    pub kp: f64,
-    /// PID integral gain
-    pub ki: f64,
-    /// PID derivative gain
-    pub kd: f64,
-    /// Maximum limit for integral term
-    pub integral_limit: f64,
-    /// Minimum refill rate (tokens/second)
-    pub rate_min: f64,
     /// Maximum refill rate (tokens/second)
     pub rate_max: f64,
-    /// Initial refill rate (tokens/second)
-    pub rate_initial: f64,
-    /// Minimum delta time required between PID updates
-    pub min_delta_time: f64,
-    /// Exponential smoothing factor applied to utilization samples before PID
-    pub utilization_smoothing: f64,
+    /// Controller responsiveness multiplier (affects PID gains)
+    pub responsiveness: f64,
 }
 
 impl Default for DeviceControllerConfig {
     fn default() -> Self {
         Self {
             target_utilization: 0.5,
-            burst_seconds: 1.0,
-            capacity_floor: 500.0,
-            kp: 1.0,
-            ki: 0.2,
-            kd: 0.05,
-            integral_limit: 0.5,
-            rate_min: 0.0,
-            rate_max: 10_000.0,
-            rate_initial: 10.0,
-            min_delta_time: 0.05,
-            utilization_smoothing: 0.2,
+            rate_max: 1_000_000.0,
+            responsiveness: 1.0,
         }
+    }
+}
+
+impl DeviceControllerConfig {
+    /// Create a new config with specified target utilization and rate limit.
+    pub fn new(target_utilization: f64, rate_max: f64, responsiveness: f64) -> Self {
+        Self {
+            target_utilization,
+            rate_max,
+            responsiveness: responsiveness.max(0.1),
+        }
+    }
+
+    /// Calculate PID gains based on responsiveness.
+    fn pid_gains(&self) -> (f64, f64, f64) {
+        let r = self.responsiveness;
+        // Kp: proportional gain - how aggressively to respond to error
+        // Ki: integral gain - how quickly to eliminate steady-state error
+        // Kd: derivative gain - how much to dampen oscillations
+        let kp = 2.0 * r;
+        let ki = 0.5 * r;
+        let kd = 0.1 * r;
+        (kp, ki, kd)
+    }
+
+    /// Calculate burst capacity window in seconds based on responsiveness.
+    fn burst_window(&self) -> f64 {
+        // Slower response = larger buffer to smooth out variations
+        // Faster response = smaller buffer for quicker reaction
+        2.0 / self.responsiveness.max(0.1)
+    }
+
+    /// Calculate minimum capacity floor.
+    fn capacity_floor(&self) -> f64 {
+        // Ensure we always have enough tokens for at least 100 kernel launches
+        1000.0
+    }
+
+    /// Minimum delta time between updates.
+    fn min_delta_time(&self) -> f64 {
+        0.05
+    }
+
+    /// Utilization smoothing factor.
+    fn utilization_smoothing(&self) -> f64 {
+        // Less smoothing for faster response, more for slower
+        0.3 / self.responsiveness.clamp(0.1, 2.0)
     }
 }
 
@@ -87,55 +107,43 @@ impl<B: DeviceBackend> DeviceController<B> {
                 "target_utilization must be in [0, 1]"
             )));
         }
-        if cfg.burst_seconds < 0.0 {
+        if cfg.rate_max <= 0.0 {
             return Err(error_stack::report!(ErlError::invalid_config(
-                "burst_seconds must be non-negative"
+                "rate_max must be positive"
             )));
         }
-        if cfg.capacity_floor < 0.0 {
+        if cfg.responsiveness <= 0.0 {
             return Err(error_stack::report!(ErlError::invalid_config(
-                "capacity_floor must be non-negative"
+                "responsiveness must be positive"
             )));
         }
-        if cfg.rate_max <= cfg.rate_min {
-            return Err(error_stack::report!(ErlError::invalid_config(
-                "rate_max must be greater than rate_min"
-            )));
-        }
-        if cfg.min_delta_time <= 0.0 {
-            return Err(error_stack::report!(ErlError::invalid_config(
-                "min_delta_time must be positive"
-            )));
-        }
-        if !(0.0..=1.0).contains(&cfg.utilization_smoothing) {
-            return Err(error_stack::report!(ErlError::invalid_config(
-                "utilization_smoothing must be in [0, 1]"
-            )));
-        }
+
+        // Calculate PID gains from responsiveness
+        let (kp, ki, kd) = cfg.pid_gains();
 
         // Initialize PID controller
         // Set output limit to 1.0 so the output can be used as a rate multiplier
         let mut pid = pid::Pid::new(cfg.target_utilization, 1.0);
-        pid.p(cfg.kp, 1.0);
-        pid.i(cfg.ki, 1.0);
-        pid.d(cfg.kd, 1.0);
+        pid.p(kp, 1.0);
+        pid.i(ki, 1.0);
+        pid.d(kd, 1.0);
 
-        // Get current quota and clamp initial rate
-        let quota = backend.read_quota(device)?;
-        let start_rate = quota.refill_rate.clamp(cfg.rate_min, cfg.rate_max);
+        // Start with a conservative initial rate
+        let start_rate = 100.0_f64.min(cfg.rate_max);
 
-        // Calculate initial capacity
-        let initial_capacity = if cfg.burst_seconds > 0.0 {
-            (start_rate * cfg.burst_seconds).max(cfg.capacity_floor)
-        } else {
-            quota.capacity
-        };
+        // Calculate initial capacity with burst window
+        let burst_window = cfg.burst_window();
+        let capacity_floor = cfg.capacity_floor();
+        let initial_capacity = (start_rate * burst_window).max(capacity_floor);
 
         // Set initial capacity in backend
-        if cfg.burst_seconds > 0.0 {
-            backend.write_capacity(device, initial_capacity)?;
-            clamp_tokens_if_needed(&backend, device, initial_capacity)?;
-        }
+        backend.write_capacity(device, initial_capacity)?;
+        backend.write_refill_rate(device, start_rate)?;
+
+        // Initialize token state
+        let mut token_state = backend.read_token_state(device)?;
+        token_state.tokens = initial_capacity;
+        backend.write_token_state(device, token_state)?;
 
         let target_utilization = cfg.target_utilization;
 
@@ -170,13 +178,13 @@ impl<B: DeviceBackend> DeviceController<B> {
         delta_time: f64,
     ) -> Result<DeviceControllerState, ErlError> {
         let measured = utilization.clamp(0.0, 1.0);
+        let smoothing_factor = self.cfg.utilization_smoothing();
         let filtered = if let Some(previous) = self.smoothed_utilization {
-            if self.cfg.utilization_smoothing <= f64::EPSILON {
+            if smoothing_factor <= f64::EPSILON {
                 measured
             } else {
-                let alpha = self.cfg.utilization_smoothing;
-                let clamped_alpha = alpha.clamp(0.0, 1.0);
-                previous + clamped_alpha * (measured - previous)
+                let alpha = smoothing_factor.clamp(0.0, 1.0);
+                previous + alpha * (measured - previous)
             }
         } else {
             measured
@@ -234,7 +242,7 @@ impl<B: DeviceBackend> DeviceController<B> {
         // PID output is in [-1, 1] range and represents the rate multiplier
         // Negative error (over-utilization) produces negative output, reducing rate
         let delta = control_output.output * self.current_rate;
-        let new_rate = (self.current_rate + delta).clamp(self.cfg.rate_min, self.cfg.rate_max);
+        let new_rate = (self.current_rate + delta).clamp(0.0, self.cfg.rate_max);
         self.current_rate = new_rate;
 
         // Refill tokens
@@ -270,43 +278,45 @@ impl<B: DeviceBackend> DeviceController<B> {
         // Update backend with new rate and capacity
         self.backend.write_refill_rate(self.device, new_rate)?;
 
-        // Adaptive capacity adjustment: detect token starvation and increase capacity
-        if self.cfg.burst_seconds > 0.0 {
-            // Check if tokens are critically low (< 10% of capacity)
-            let token_ratio = if quota.capacity > 0.0 {
-                current_state.tokens / quota.capacity
-            } else {
-                0.0
-            };
+        // Adaptive capacity adjustment: automatically scale capacity with refill rate
+        let token_ratio = if quota.capacity > 0.0 {
+            current_state.tokens / quota.capacity
+        } else {
+            0.0
+        };
 
-            if token_ratio < 0.1 && drain_ratio > 0.3 {
-                // Tokens running low with active workload
-                self.low_token_events += 1;
+        // Detect token starvation and increase capacity multiplier
+        if token_ratio < 0.1 && drain_ratio > 0.3 {
+            // Tokens running low with active workload
+            self.low_token_events += 1;
 
-                // After repeated low-token events, increase capacity multiplier
-                if self.low_token_events > 5 {
-                    self.adaptive_capacity_multiplier *= 1.2;
-                    self.adaptive_capacity_multiplier = self.adaptive_capacity_multiplier.min(3.0);
-                    self.low_token_events = 0;
-
-                    tracing::info!(
-                        device = self.device,
-                        new_multiplier = %format!("{:.2}", self.adaptive_capacity_multiplier),
-                        "Increasing adaptive capacity multiplier to handle bursts"
-                    );
-                }
-            } else if token_ratio > 0.7 && self.adaptive_capacity_multiplier > 1.0 {
-                // Tokens healthy, can reduce multiplier gradually
+            // After repeated low-token events, increase capacity multiplier
+            if self.low_token_events > 3 {
+                self.adaptive_capacity_multiplier *= 1.5;
+                self.adaptive_capacity_multiplier = self.adaptive_capacity_multiplier.min(10.0);
                 self.low_token_events = 0;
-                self.adaptive_capacity_multiplier *= 0.99;
-                self.adaptive_capacity_multiplier = self.adaptive_capacity_multiplier.max(1.0);
-            }
 
-            let base_capacity = (new_rate * self.cfg.burst_seconds).max(self.cfg.capacity_floor);
-            let new_capacity = base_capacity * self.adaptive_capacity_multiplier;
-            self.backend.write_capacity(self.device, new_capacity)?;
-            clamp_tokens_if_needed(&self.backend, self.device, new_capacity)?;
+                tracing::info!(
+                    device = self.device,
+                    new_multiplier = %format!("{:.2}", self.adaptive_capacity_multiplier),
+                    "Increasing adaptive capacity multiplier to handle bursts"
+                );
+            }
+        } else if token_ratio > 0.7 && self.adaptive_capacity_multiplier > 1.0 {
+            // Tokens healthy, can reduce multiplier gradually
+            self.low_token_events = 0;
+            self.adaptive_capacity_multiplier *= 0.98;
+            self.adaptive_capacity_multiplier = self.adaptive_capacity_multiplier.max(1.0);
         }
+
+        // Calculate capacity: refill_rate * burst_window, with floor and adaptive multiplier
+        let burst_window = self.cfg.burst_window();
+        let capacity_floor = self.cfg.capacity_floor();
+        let base_capacity = (new_rate * burst_window).max(capacity_floor);
+        let new_capacity = base_capacity * self.adaptive_capacity_multiplier;
+
+        self.backend.write_capacity(self.device, new_capacity)?;
+        clamp_tokens_if_needed(&self.backend, self.device, new_capacity)?;
 
         // Update state
         self.state.last_utilization = filtered;
@@ -332,15 +342,16 @@ impl<B: DeviceBackend> DeviceController<B> {
         utilization: f64,
         timestamp_micros: u64,
     ) -> Result<DeviceControllerState, ErlError> {
+        let min_delta = self.cfg.min_delta_time();
         let seconds = timestamp_micros as f64 / 1_000_000.0;
         let delta = if let Some(prev) = self.last_timestamp {
             let raw_delta = seconds - prev;
-            if raw_delta < self.cfg.min_delta_time {
+            if raw_delta < min_delta {
                 return Ok(self.state.clone());
             }
             raw_delta
         } else {
-            self.cfg.min_delta_time
+            min_delta
         };
         self.last_timestamp = Some(seconds);
         self.update_internal(utilization, delta)
@@ -468,20 +479,7 @@ mod tests {
     #[test]
     fn controller_increases_rate_when_under_target() {
         let backend = MockBackend::new(10.0, 5.0);
-        let cfg = DeviceControllerConfig {
-            target_utilization: 0.7,
-            burst_seconds: 0.2,
-            capacity_floor: 1.0,
-            kp: 2.0,
-            ki: 0.5,
-            kd: 0.0,
-            integral_limit: 100.0,
-            rate_min: 0.5,
-            rate_max: 50.0,
-            rate_initial: 5.0,
-            min_delta_time: 0.05,
-            utilization_smoothing: 0.0,
-        };
+        let cfg = DeviceControllerConfig::new(0.7, 500.0, 1.0);
         let mut ctrl = DeviceController::new(backend, 0, cfg).unwrap();
         let before = ctrl.state().last_refill_rate;
 

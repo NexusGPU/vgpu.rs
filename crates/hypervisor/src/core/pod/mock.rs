@@ -363,17 +363,9 @@ impl TestLimiterCoordinator {
 
         // Create default ERL config for testing
         let erl_config = crate::config::ErlConfig {
-            pid_kp: 1.5,
-            pid_ki: 0.4,
-            pid_kd: 0.1,
-            min_refill_rate: 1.0,
-            max_refill_rate: 5_000.0,
-            initial_refill_rate: 100.0,
-            burst_seconds: 0.25,
-            capacity_floor: 10.0,
-            derivative_filter: 0.2,
-            integral_limit: 500.0,
-            min_delta_time: 0.05,
+            update_interval_ms: 100,
+            rate_limit: 5_000.0,
+            responsiveness: 1.0,
         };
 
         let config = super::coordinator::CoordinatorConfig {

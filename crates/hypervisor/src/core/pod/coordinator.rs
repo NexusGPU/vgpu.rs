@@ -481,9 +481,6 @@ where
             );
         }
 
-        let scaled_max_refill_rate = erl_config.max_refill_rate;
-        let scaled_initial_refill_rate = erl_config.initial_refill_rate.min(scaled_max_refill_rate);
-
         use std::collections::hash_map::Entry;
         let mut controllers = erl_controllers.write().await;
         let controller = match controllers.entry(key) {
@@ -491,20 +488,11 @@ where
             Entry::Vacant(vacant) => {
                 let backend = ErlSharedMemoryAdapter::new(handle.clone());
 
-                let ctrl_cfg = DeviceControllerConfig {
+                let ctrl_cfg = DeviceControllerConfig::new(
                     target_utilization,
-                    burst_seconds: erl_config.burst_seconds,
-                    capacity_floor: erl_config.capacity_floor,
-                    kp: erl_config.pid_kp,
-                    ki: erl_config.pid_ki,
-                    kd: erl_config.pid_kd,
-                    integral_limit: erl_config.integral_limit,
-                    rate_min: erl_config.min_refill_rate,
-                    rate_max: scaled_max_refill_rate,
-                    rate_initial: scaled_initial_refill_rate,
-                    min_delta_time: erl_config.min_delta_time,
-                    utilization_smoothing: erl_config.derivative_filter,
-                };
+                    erl_config.rate_limit,
+                    erl_config.responsiveness,
+                );
 
                 match DeviceController::new(backend, device_index, ctrl_cfg) {
                     Ok(ctrl) => {
@@ -513,9 +501,10 @@ where
                             device_index = device_index,
                             up_limit = device_config.up_limit,
                             target_utilization = target_utilization,
-                            scaled_max_refill_rate = %format!("{:.1}", scaled_max_refill_rate),
+                            rate_limit = %format!("{:.1}", erl_config.rate_limit),
+                            responsiveness = erl_config.responsiveness,
                             initial_rate = ctrl.state().last_refill_rate,
-                            "Initialized PID controller for pod/device with scaled refill rate"
+                            "Initialized ERL controller for pod/device with auto-adaptive configuration"
                         );
                         vacant.insert(ctrl)
                     }
