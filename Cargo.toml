@@ -10,7 +10,8 @@ members = [
   "crates/trap",
   "crates/http-bidir-comm",
   "crates/bootstrap",
-  "crates/integration-test"
+  "crates/integration-test",
+  "crates/erl"
 ]
 
 [workspace.dependencies]
@@ -20,6 +21,7 @@ trap = { path = "crates/trap" }
 utils = { path = "crates/utils" }
 tf-macro = { path = "crates/macro" }
 http-bidir-comm = { path = "crates/http-bidir-comm" }
+erl = { path = "crates/erl" }
 tracing = "0.1"
 thiserror = "2.0"
 derive_more = "2.0"

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use utils::shared_memory::manager::ThreadSafeSharedMemoryManager;
+use utils::shared_memory::manager::MemoryManager;
 
 use crate::config::DaemonArgs;
 use crate::core::hypervisor::HypervisorType;
@@ -83,19 +83,21 @@ impl ApplicationBuilder {
         let command_dispatcher = Arc::new(CommandDispatcher::new());
 
         // Create limiter coordinator
-        let shared_memory_manager = Arc::new(ThreadSafeSharedMemoryManager::new());
+        let shared_memory_manager = Arc::new(MemoryManager::new());
         let snapshot = Arc::new(NvmlDeviceSampler::init()?);
         let time = Arc::new(SystemClock::new());
 
+        let erl_config = crate::config::ErlConfig::from(&self.daemon_args);
+
         let config = CoordinatorConfig {
-            watch_interval: Duration::from_millis(70),
+            watch_interval: Duration::from_millis(100),
             device_count: gpu_system.device_count,
             shared_memory_glob_pattern: format!(
                 "{}/*/*",
                 self.daemon_args.shared_memory_base_path.to_string_lossy(),
             ),
-
             base_path: shm_base_path,
+            erl_config,
         };
 
         let limiter_coordinator = Arc::new(LimiterCoordinator::new(
@@ -140,16 +142,7 @@ impl ApplicationBuilder {
         &self,
         components: &CoreComponents,
         gpu_system: &GpuSystem,
-    ) -> Result<
-        Arc<
-            PodManager<
-                ThreadSafeSharedMemoryManager,
-                PodStateStore,
-                NvmlDeviceSampler,
-                SystemClock,
-            >,
-        >,
-    > {
+    ) -> Result<Arc<PodManager<MemoryManager, PodStateStore, NvmlDeviceSampler, SystemClock>>> {
         // Create worker manager with direct component dependencies
         let pod_manager = Arc::new(PodManager::new(
             components.host_pid_probe.clone(),
@@ -172,14 +165,8 @@ struct CoreComponents {
     gpu_observer: Arc<GpuObserver>,
     host_pid_probe: Arc<HostPidProbe>,
     command_dispatcher: Arc<CommandDispatcher>,
-    limiter_coordinator: Arc<
-        LimiterCoordinator<
-            ThreadSafeSharedMemoryManager,
-            PodStateStore,
-            NvmlDeviceSampler,
-            SystemClock,
-        >,
-    >,
+    limiter_coordinator:
+        Arc<LimiterCoordinator<MemoryManager, PodStateStore, NvmlDeviceSampler, SystemClock>>,
     gpu_device_state_watcher: Arc<GpuDeviceStateWatcher>,
     pod_info_cache: Arc<PodInfoCache>,
     pod_state_store: Arc<PodStateStore>,

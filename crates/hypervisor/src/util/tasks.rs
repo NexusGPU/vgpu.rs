@@ -75,9 +75,9 @@ impl Tasks {
         let limiter_coordinator_task = self.spawn_limiter_coordinator_task(app);
         self.tasks.push(limiter_coordinator_task);
 
-        // start pod manager resource monitoring task
-        let pod_manager_monitor_task = self.spawn_pod_manager_monitor_task(app);
-        self.tasks.push(pod_manager_monitor_task);
+        // start pod manager cleanup loop task
+        let pod_manager_cleanup_loop_task = self.spawn_pod_manager_cleanup_loop_task(app);
+        self.tasks.push(pod_manager_cleanup_loop_task);
 
         Ok(())
     }
@@ -261,7 +261,7 @@ impl Tasks {
         })
     }
 
-    fn spawn_pod_manager_monitor_task(&self, app: &Application) -> JoinHandle<()> {
+    fn spawn_pod_manager_cleanup_loop_task(&self, app: &Application) -> JoinHandle<()> {
         let pod_manager = app.services().pod_manager.clone();
         let token = self.cancellation_token.clone();
 
@@ -271,10 +271,10 @@ impl Tasks {
                 panic!("Failed to restore pods from shared memory: {e}");
             }
 
-            tracing::info!("Starting worker manager resource monitoring task");
-            // Start monitoring with 60 second interval and cancellation token
+            tracing::info!("Starting worker manager cleanup loop task");
+            // Start cleanup loop with 120 second interval and cancellation token
             pod_manager
-                .start_resource_monitor(Duration::from_secs(60), token)
+                .run_cleanup_loop(Duration::from_secs(120), token)
                 .await;
         })
     }

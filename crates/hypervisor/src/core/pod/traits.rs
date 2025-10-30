@@ -1,9 +1,10 @@
 //! Traits for pod state management and device operations
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use super::{pod_state_store::DeviceConfigRef, utilization::DeviceSnapshot};
-use utils::shared_memory::PodIdentifier;
+use super::utilization::DeviceSnapshot;
+use utils::shared_memory::{DeviceConfig, PodIdentifier};
 
 /// Trait for accessing pod state information
 pub trait PodStateRepository: Send + Sync {
@@ -18,7 +19,7 @@ pub trait PodStateRepository: Send + Sync {
         &self,
         pod_identifier: &PodIdentifier,
         device_idx: u32,
-    ) -> Option<DeviceConfigRef<'_>>;
+    ) -> Option<Arc<DeviceConfig>>;
 
     /// Check if a pod exists in the store
     fn contains_pod(&self, pod_identifier: &PodIdentifier) -> bool;

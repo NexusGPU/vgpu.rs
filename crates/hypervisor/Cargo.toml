@@ -19,6 +19,7 @@ serde_yaml = { workspace = true }
 once_cell = { workspace = true }
 utils = { workspace = true }
 influxdb-line-protocol = { workspace = true }
+erl = { workspace = true }
 derive_more = { workspace = true, features = ["display"] }
 thiserror = { workspace = true }
 base64 = { workspace = true }

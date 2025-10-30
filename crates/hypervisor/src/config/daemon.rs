@@ -126,4 +126,20 @@ pub struct DaemonArgs {
         value_hint = clap::ValueHint::DirPath,
     )]
     pub shared_memory_base_path: PathBuf,
+
+    #[arg(
+        long,
+        help = "Controller update interval in milliseconds",
+        default_value = "100",
+        env = "ERL_UPDATE_INTERVAL_MS"
+    )]
+    pub erl_update_interval_ms: u64,
+
+    #[arg(
+        long,
+        help = "System-wide maximum refill rate safety limit (tokens/sec)",
+        default_value = "1000000.0",
+        env = "ERL_RATE_LIMIT"
+    )]
+    pub erl_rate_limit: f64,
 }

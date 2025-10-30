@@ -20,10 +20,14 @@ use crate::platform::k8s::pod_info_cache::PodInfoCache;
 use crate::platform::limiter_comm::CommandDispatcher;
 use crate::platform::nvml::gpu_observer::GpuObserver;
 use tokio_util::sync::CancellationToken;
+use utils::keyed_lock::KeyedAsyncLock;
 
 use super::device_info::create_device_configs_from_worker_info;
 use super::pod_state_store::PodStateStore;
 use super::types::{PodManagementError, Result};
+
+/// Timeout for PID discovery subscription in seconds
+const PID_DISCOVERY_TIMEOUT_SECS: u64 = 5;
 
 /// Simplified pod manager with unified state management
 pub struct PodManager<M, P, D, T> {
@@ -36,6 +40,8 @@ pub struct PodManager<M, P, D, T> {
     nvml: Arc<Nvml>,
     pod_info_cache: Arc<PodInfoCache>,
     gpu_observer: Arc<GpuObserver>,
+    /// Per-pod registration locks to prevent concurrent registration of same pod
+    registration_locks: KeyedAsyncLock<PodIdentifier>,
 }
 
 impl<M, P, D, T> PodManager<M, P, D, T> {
@@ -86,6 +92,7 @@ where
             nvml,
             pod_info_cache,
             gpu_observer,
+            registration_locks: KeyedAsyncLock::new(),
         }
     }
 
@@ -95,6 +102,7 @@ where
         let shared_memory_files = self
             .limiter_coordinator
             .find_shared_memory_files(&shm_glob_pattern)
+            .await
             .map_err(|e| PodManagementError::SharedMemoryError {
                 message: e.to_string(),
             })?;
@@ -164,6 +172,7 @@ where
     }
 
     /// Initialize a CUDA process: discover PID and register to all components
+    #[tracing::instrument(skip(self), fields(pod = pod_name, namespace = namespace, container = container_name, container_pid = container_pid))]
     pub async fn initialize_process(
         &self,
         pod_name: &str,
@@ -191,42 +200,54 @@ where
         Ok(process_info.host_pid)
     }
 
-    /// Start the resource monitoring task
-    pub async fn start_resource_monitor(
+    /// Start the cleanup loop
+    #[tracing::instrument(skip(self, cancellation_token), fields(interval_ms = interval.as_millis()))]
+    pub async fn run_cleanup_loop(
         &self,
         interval: Duration,
         cancellation_token: CancellationToken,
     ) {
         let mut interval_timer = tokio::time::interval(interval);
 
-        info!("Starting resource monitor with interval: {:?}", interval);
+        // Skip the first immediate tick
+        interval_timer.tick().await;
 
+        info!("Starting cleanup loop with interval: {:?}", interval);
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
-                    info!("Resource monitor shutdown requested");
+                    info!("Cleanup loop shutdown requested");
                     break;
                 }
                 _ = interval_timer.tick() => {
-                    // Continue with monitoring logic
+                    // Continue with cleanup logic
                 }
             }
 
-            info!("Checking for dead processes and cleaning them up");
+            info!("Running periodic cleanup of unused shared memory segments");
             // Check for dead processes and clean them up
             if let Err(e) = self.check_and_cleanup_dead_processes().await {
                 tracing::error!("Failed to check and cleanup dead processes: {}", e);
             }
         }
 
-        info!("Resource monitor stopped");
+        info!("Cleanup loop stopped");
     }
 
     /// Ensure pod is registered in all components (lazy loading)
+    #[tracing::instrument(skip(self), fields(namespace = namespace, pod = pod_name))]
     pub async fn ensure_pod_registered(&self, namespace: &str, pod_name: &str) -> Result<()> {
         let pod_identifier = PodIdentifier::new(namespace, pod_name);
 
-        // Check if already registered
+        // Fast path: check if already registered (lock-free)
+        if self.pod_state_store.contains_pod(&pod_identifier) {
+            return Ok(());
+        }
+
+        // Acquire per-pod lock to serialize registration for the same pod
+        let _guard = self.registration_locks.lock(&pod_identifier).await;
+
+        // Double-check after acquiring lock
         if self.pod_state_store.contains_pod(&pod_identifier) {
             return Ok(());
         }
@@ -263,6 +284,7 @@ where
         // Register in state store
         self.pod_state_store
             .register_pod(&pod_identifier, pod_info.0, device_configs.clone())?;
+
         let restored_pids = self
             .limiter_coordinator
             .ensure_pod_registered(&pod_identifier, &device_configs)
@@ -303,7 +325,10 @@ where
 
         let receiver = self
             .host_pid_probe
-            .subscribe(subscription_request, Duration::from_secs(5))
+            .subscribe(
+                subscription_request,
+                Duration::from_secs(PID_DISCOVERY_TIMEOUT_SECS),
+            )
             .await;
 
         let process_info = receiver.await.map_err(|_| PodManagementError::StateError {
@@ -319,6 +344,7 @@ where
     }
 
     /// Register process to all components
+    #[tracing::instrument(skip(self), fields(pod = pod_name, namespace = namespace, container = container_name, host_pid = host_pid))]
     async fn register_process_to_all_components(
         &self,
         pod_name: &str,
@@ -365,12 +391,15 @@ where
         // Register process with the limiter coordinator.
         self.limiter_coordinator
             .register_process(&pod_identifier, host_pid)
+            .await
             .map_err(|e| PodManagementError::RegistrationFailed {
                 message: e.to_string(),
             })?;
 
         // 3. Open shared memory for the pod
-        self.pod_state_store.open_shared_memory(&pod_identifier)?;
+        self.pod_state_store
+            .open_shared_memory(&pod_identifier)
+            .await?;
 
         // 4. Add worker to hypervisor
         if !self.hypervisor.process_exists(host_pid).await {
@@ -387,6 +416,7 @@ where
     }
 
     /// check_and_cleanup_dead_processes for use in monitoring task
+    #[tracing::instrument(skip(self))]
     async fn check_and_cleanup_dead_processes(&self) -> Result<Vec<u32>> {
         let mut dead_pids = Vec::new();
 
@@ -468,6 +498,7 @@ where
     }
 
     /// Handle process exit cleanup
+    #[tracing::instrument(skip(self), fields(host_pid = host_pid))]
     async fn handle_process_exited(&self, host_pid: u32) -> Result<()> {
         info!("Processing process exit: host_pid={}", host_pid);
 
