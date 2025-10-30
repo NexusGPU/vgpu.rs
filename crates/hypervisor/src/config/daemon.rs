@@ -131,7 +131,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "PID proportional gain (Kp)",
-        default_value = "1.5",
+        default_value = "0.3",
         env = "ERL_PID_KP"
     )]
     pub erl_pid_kp: f64,
@@ -139,7 +139,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "PID integral gain (Ki)",
-        default_value = "0.4",
+        default_value = "0.05",
         env = "ERL_PID_KI"
     )]
     pub erl_pid_ki: f64,
@@ -147,7 +147,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "PID derivative gain (Kd)",
-        default_value = "0.1",
+        default_value = "0.02",
         env = "ERL_PID_KD"
     )]
     pub erl_pid_kd: f64,
@@ -179,7 +179,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "Token bucket burst allowance in seconds",
-        default_value = "0.25",
+        default_value = "0.05",
         env = "ERL_BURST_SECONDS"
     )]
     pub erl_burst_seconds: f64,
@@ -187,7 +187,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "Minimum token bucket capacity",
-        default_value = "10.0",
+        default_value = "50.0",
         env = "ERL_CAPACITY_FLOOR"
     )]
     pub erl_capacity_floor: f64,
@@ -203,7 +203,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "Integral term clamp limit",
-        default_value = "500.0",
+        default_value = "0.3",
         env = "ERL_INTEGRAL_LIMIT"
     )]
     pub erl_integral_limit: f64,
