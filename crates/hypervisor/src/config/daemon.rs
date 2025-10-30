@@ -272,7 +272,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "Hypervisor scheduling configuration as JSON string (contains elasticRateLimitParameters, etc.)",
-        env = "HYPERVISOR_SCHEDULING_CONFIG",
+        env = "TF_HYPERVISOR_SCHEDULING_CONFIG",
         value_parser = parse_scheduling_config
     )]
     pub scheduling_config: Option<HypervisorScheduling>,
