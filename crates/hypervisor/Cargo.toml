@@ -24,8 +24,8 @@ derive_more = { workspace = true, features = ["display"] }
 thiserror = { workspace = true }
 base64 = { workspace = true }
 # Kubernetes dependencies
-kube = { workspace = true, features = ["runtime", "derive"] }
-k8s-openapi = { workspace = true, features = ["v1_28"] }
+kube = { workspace = true, features = ["runtime", "derive", "rustls-tls", "client", "config"] }
+k8s-openapi = { workspace = true, features = ["latest"] }
 tokio = { workspace = true, features = ["full"] }
 error-stack = { workspace = true }
 futures.workspace = true
