@@ -163,7 +163,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "Maximum token refill rate (tokens/sec)",
-        default_value = "5000.0",
+        default_value = "50000.0",
         env = "ERL_MAX_REFILL_RATE"
     )]
     pub erl_max_refill_rate: f64,
@@ -171,7 +171,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "Initial token refill rate for new controllers (tokens/sec)",
-        default_value = "100.0",
+        default_value = "5000.0",
         env = "ERL_INITIAL_REFILL_RATE"
     )]
     pub erl_initial_refill_rate: f64,
