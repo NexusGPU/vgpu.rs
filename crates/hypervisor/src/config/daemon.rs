@@ -179,7 +179,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "Token bucket burst allowance in seconds",
-        default_value = "0.05",
+        default_value = "0.2",
         env = "ERL_BURST_SECONDS"
     )]
     pub erl_burst_seconds: f64,
@@ -187,7 +187,7 @@ pub struct DaemonArgs {
     #[arg(
         long,
         help = "Minimum token bucket capacity",
-        default_value = "50.0",
+        default_value = "100.0",
         env = "ERL_CAPACITY_FLOOR"
     )]
     pub erl_capacity_floor: f64,

@@ -35,8 +35,8 @@ impl Default for DeviceControllerConfig {
     fn default() -> Self {
         Self {
             target_utilization: 0.5,
-            burst_seconds: 0.05,
-            capacity_floor: 50.0,
+            burst_seconds: 0.2,
+            capacity_floor: 100.0,
             kp: 0.3,
             ki: 0.05,
             kd: 0.02,
@@ -74,6 +74,9 @@ pub struct DeviceController<B: DeviceBackend> {
     current_rate: f64,
     last_timestamp: Option<f64>,
     smoothed_utilization: Option<f64>,
+    // Adaptive capacity adjustment
+    low_token_events: u32,
+    adaptive_capacity_multiplier: f64,
 }
 
 impl<B: DeviceBackend> DeviceController<B> {
@@ -151,6 +154,8 @@ impl<B: DeviceBackend> DeviceController<B> {
             },
             last_timestamp: None,
             smoothed_utilization: None,
+            low_token_events: 0,
+            adaptive_capacity_multiplier: 1.0,
         })
     }
 
@@ -193,14 +198,18 @@ impl<B: DeviceBackend> DeviceController<B> {
         let actual_tokens = current_state.tokens;
         let token_drain_rate = (expected_tokens - actual_tokens) / delta_time;
 
+        // Calculate drain ratio for adaptive capacity adjustment
+        let drain_ratio = if self.current_rate > 0.0 {
+            (token_drain_rate / self.current_rate).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
         // Apply saturation clamping ONLY when there's genuinely no workload:
         // 1. Token bucket is saturated (>95% full)
         // 2. GPU utilization is very low (<5%)
-        // 3. Token drain rate is negligible (< 10% of min refill rate)
-        // This prevents clamping when tokens are exhausted due to high demand
-        let is_truly_idle = token_saturation_ratio > 0.95
-            && measured < 0.05
-            && token_drain_rate < self.cfg.rate_min * 0.1;
+        // 3. Token drain rate is negligible (< 5% of current rate)
+        let is_truly_idle = token_saturation_ratio > 0.95 && measured < 0.05 && drain_ratio < 0.05;
 
         let effective_utilization = if is_truly_idle {
             tracing::info!(
@@ -261,8 +270,40 @@ impl<B: DeviceBackend> DeviceController<B> {
         // Update backend with new rate and capacity
         self.backend.write_refill_rate(self.device, new_rate)?;
 
+        // Adaptive capacity adjustment: detect token starvation and increase capacity
         if self.cfg.burst_seconds > 0.0 {
-            let new_capacity = (new_rate * self.cfg.burst_seconds).max(self.cfg.capacity_floor);
+            // Check if tokens are critically low (< 10% of capacity)
+            let token_ratio = if quota.capacity > 0.0 {
+                current_state.tokens / quota.capacity
+            } else {
+                0.0
+            };
+
+            if token_ratio < 0.1 && drain_ratio > 0.3 {
+                // Tokens running low with active workload
+                self.low_token_events += 1;
+
+                // After repeated low-token events, increase capacity multiplier
+                if self.low_token_events > 5 {
+                    self.adaptive_capacity_multiplier *= 1.2;
+                    self.adaptive_capacity_multiplier = self.adaptive_capacity_multiplier.min(3.0);
+                    self.low_token_events = 0;
+
+                    tracing::info!(
+                        device = self.device,
+                        new_multiplier = %format!("{:.2}", self.adaptive_capacity_multiplier),
+                        "Increasing adaptive capacity multiplier to handle bursts"
+                    );
+                }
+            } else if token_ratio > 0.7 && self.adaptive_capacity_multiplier > 1.0 {
+                // Tokens healthy, can reduce multiplier gradually
+                self.low_token_events = 0;
+                self.adaptive_capacity_multiplier *= 0.99;
+                self.adaptive_capacity_multiplier = self.adaptive_capacity_multiplier.max(1.0);
+            }
+
+            let base_capacity = (new_rate * self.cfg.burst_seconds).max(self.cfg.capacity_floor);
+            let new_capacity = base_capacity * self.adaptive_capacity_multiplier;
             self.backend.write_capacity(self.device, new_capacity)?;
             clamp_tokens_if_needed(&self.backend, self.device, new_capacity)?;
         }
