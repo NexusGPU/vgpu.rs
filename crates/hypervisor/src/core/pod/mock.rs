@@ -364,7 +364,15 @@ impl TestLimiterCoordinator {
         // Create default ERL config for testing
         let erl_config = crate::config::ErlConfig {
             update_interval_ms: 100,
-            rate_limit: 5_000.0,
+            rate_min: 10.0,
+            rate_max: 5_000.0,
+            kp: 0.5,
+            ki: 0.1,
+            kd: 0.05,
+            filter_alpha: 0.3,
+            burst_window: 2.0,
+            capacity_min: 100.0,
+            capacity_max: 10_000.0,
         };
 
         let config = super::coordinator::CoordinatorConfig {

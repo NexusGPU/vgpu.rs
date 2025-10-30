@@ -59,18 +59,6 @@ impl Default for DeviceControllerConfig {
     }
 }
 
-impl DeviceControllerConfig {
-    /// Create a new config with specified target utilization and rate limits.
-    pub fn new(target_utilization: f64, rate_max: f64) -> Self {
-        Self {
-            target_utilization,
-            rate_max,
-            capacity_max: rate_max * 2.0,
-            ..Default::default()
-        }
-    }
-}
-
 /// Snapshot of controller state after an update.
 #[derive(Debug, Clone)]
 pub struct DeviceControllerState {
@@ -451,7 +439,12 @@ mod tests {
     #[test]
     fn controller_initializes_correctly() {
         let backend = MockBackend::new(0.0, 0.0, 0.0);
-        let cfg = DeviceControllerConfig::new(0.7, 50000.0);
+        let cfg = DeviceControllerConfig {
+            target_utilization: 0.7,
+            rate_max: 50000.0,
+            capacity_max: 100_000.0,
+            ..Default::default()
+        };
         let ctrl = DeviceController::new(backend, 0, cfg).unwrap();
 
         assert_eq!(ctrl.cfg.target_utilization, 0.7);
@@ -462,7 +455,12 @@ mod tests {
     #[test]
     fn controller_increases_rate_when_under_target() {
         let backend = MockBackend::new(1000.0, 100.0, 500.0);
-        let cfg = DeviceControllerConfig::new(0.7, 50000.0);
+        let cfg = DeviceControllerConfig {
+            target_utilization: 0.7,
+            rate_max: 50000.0,
+            capacity_max: 100_000.0,
+            ..Default::default()
+        };
         let mut ctrl = DeviceController::new(backend, 0, cfg).unwrap();
 
         let rate_before = ctrl.current_rate;
@@ -480,7 +478,12 @@ mod tests {
     #[test]
     fn controller_decreases_rate_when_over_target() {
         let backend = MockBackend::new(1000.0, 100.0, 500.0);
-        let cfg = DeviceControllerConfig::new(0.5, 50000.0);
+        let cfg = DeviceControllerConfig {
+            target_utilization: 0.5,
+            rate_max: 50000.0,
+            capacity_max: 100_000.0,
+            ..Default::default()
+        };
         let mut ctrl = DeviceController::new(backend, 0, cfg).unwrap();
 
         // First establish a higher rate
@@ -502,9 +505,11 @@ mod tests {
     fn controller_respects_rate_limits() {
         let backend = MockBackend::new(1000.0, 100.0, 500.0);
         let cfg = DeviceControllerConfig {
+            target_utilization: 0.5,
             rate_min: 50.0,
             rate_max: 500.0,
-            ..DeviceControllerConfig::new(0.5, 500.0)
+            capacity_max: 1000.0,
+            ..Default::default()
         };
         let mut ctrl = DeviceController::new(backend, 0, cfg).unwrap();
 
@@ -531,8 +536,11 @@ mod tests {
     fn controller_smooths_utilization() {
         let backend = MockBackend::new(1000.0, 100.0, 500.0);
         let cfg = DeviceControllerConfig {
+            target_utilization: 0.5,
+            rate_max: 50000.0,
+            capacity_max: 100_000.0,
             filter_alpha: 0.3,
-            ..DeviceControllerConfig::new(0.5, 50000.0)
+            ..Default::default()
         };
         let mut ctrl = DeviceController::new(backend, 0, cfg).unwrap();
 
@@ -552,7 +560,12 @@ mod tests {
     #[test]
     fn controller_handles_zero_utilization() {
         let backend = MockBackend::new(1000.0, 100.0, 500.0);
-        let cfg = DeviceControllerConfig::new(0.5, 50000.0);
+        let cfg = DeviceControllerConfig {
+            target_utilization: 0.5,
+            rate_max: 50000.0,
+            capacity_max: 100_000.0,
+            ..Default::default()
+        };
         let mut ctrl = DeviceController::new(backend, 0, cfg).unwrap();
 
         // Feed zero utilization repeatedly
@@ -571,7 +584,12 @@ mod tests {
     #[test]
     fn capacity_scales_with_rate() {
         let backend = MockBackend::new(1000.0, 100.0, 500.0);
-        let cfg = DeviceControllerConfig::new(0.5, 50000.0);
+        let cfg = DeviceControllerConfig {
+            target_utilization: 0.5,
+            rate_max: 50000.0,
+            capacity_max: 100_000.0,
+            ..Default::default()
+        };
         let mut ctrl = DeviceController::new(backend, 0, cfg).unwrap();
 
         ctrl.update(0.2, 0.1).unwrap();
@@ -594,7 +612,12 @@ mod tests {
     #[test]
     fn controller_with_timestamp_updates() {
         let backend = MockBackend::new(1000.0, 100.0, 500.0);
-        let cfg = DeviceControllerConfig::new(0.5, 50000.0);
+        let cfg = DeviceControllerConfig {
+            target_utilization: 0.5,
+            rate_max: 50000.0,
+            capacity_max: 100_000.0,
+            ..Default::default()
+        };
         let mut ctrl = DeviceController::new(backend, 0, cfg).unwrap();
 
         // Update with timestamps (in microseconds)

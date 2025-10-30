@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use anyhow::Context;
 use anyhow::Result;
 
-use erl::{DeviceController, DeviceControllerConfig};
+use erl::DeviceController;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, interval_at, Instant};
 use tokio_util::sync::CancellationToken;
@@ -511,9 +511,7 @@ where
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(vacant) => {
                 let backend = ErlSharedMemoryAdapter::new(ctx.handle.clone());
-
-                let ctrl_cfg =
-                    DeviceControllerConfig::new(target_utilization, erl_config.rate_limit);
+                let ctrl_cfg = erl_config.to_device_controller_config(target_utilization);
 
                 match DeviceController::new(backend, ctx.device_index, ctrl_cfg) {
                     Ok(ctrl) => {
@@ -522,7 +520,8 @@ where
                             device_index = ctx.device_index,
                             up_limit = ctx.device_config.up_limit,
                             target_utilization = target_utilization,
-                            rate_limit = %format!("{:.1}", erl_config.rate_limit),
+                            rate_max = %format!("{:.1}", erl_config.rate_max),
+                            rate_min = %format!("{:.1}", erl_config.rate_min),
                             initial_rate = ctrl.state().current_rate,
                             "Initialized ERL controller for pod/device"
                         );
