@@ -1,6 +1,7 @@
 use crate::ErlError;
 use crate::backend::DeviceBackend;
-use error_stack::Result;
+use error_stack::{IntoReport, Report};
+pub type Result<T, C> = core::result::Result<T, Report<C>>;
 
 /// Configuration for the PID-based device controller.
 #[derive(Debug, Clone)]
@@ -103,18 +104,18 @@ impl<B: DeviceBackend> DeviceController<B> {
     pub fn new(backend: B, device: usize, cfg: DeviceControllerConfig) -> Result<Self, ErlError> {
         // Validate configuration
         if !(0.0..=1.0).contains(&cfg.target_utilization) {
-            return Err(error_stack::report!(ErlError::invalid_config(
-                "target_utilization must be in [0, 1]"
+            return Err(IntoReport::into_report(ErlError::invalid_config(
+                "target_utilization must be in [0, 1]",
             )));
         }
         if cfg.rate_min <= 0.0 || cfg.rate_max <= cfg.rate_min {
-            return Err(error_stack::report!(ErlError::invalid_config(
-                "rate_max must be greater than rate_min > 0"
+            return Err(IntoReport::into_report(ErlError::invalid_config(
+                "rate_max must be greater than rate_min > 0",
             )));
         }
         if !(0.0..=1.0).contains(&cfg.filter_alpha) {
-            return Err(error_stack::report!(ErlError::invalid_config(
-                "filter_alpha must be in [0, 1]"
+            return Err(IntoReport::into_report(ErlError::invalid_config(
+                "filter_alpha must be in [0, 1]",
             )));
         }
 

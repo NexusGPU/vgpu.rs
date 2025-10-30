@@ -986,9 +986,9 @@ dependencies = [
 
 [[package]]
 name = "error-stack"
-version = "0.4.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27a72baa257b5e0e2de241967bc5ee8f855d6072351042688621081d66b2a76b"
+checksum = "b878b3fac9613c3c7f22eb70bc8a3c6ebdc03cc11479ee60fde1692d747fd45f"
 dependencies = [
  "anyhow",
  "rustc_version",

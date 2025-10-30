@@ -6,7 +6,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use erl::{DeviceBackend, DeviceQuota, ErlError, TokenState};
-use error_stack::{Report, Result};
+use error_stack::Report;
+pub type Result<T, C> = core::result::Result<T, Report<C>>;
 
 use super::handle::SharedMemoryHandle;
 

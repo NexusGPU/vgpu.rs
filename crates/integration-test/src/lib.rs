@@ -155,17 +155,17 @@ fn build_and_find_cuda_limiter() -> Result<String, Report<IntegrationTestError>>
         .args(["build", "--package", "cuda-limiter"])
         .status()
         .change_context(IntegrationTestError::CudaLimiterBuildFailed)
-        .attach_printable("Failed to invoke cargo build for cuda-limiter")?;
+        .attach("Failed to invoke cargo build for cuda-limiter")?;
 
     if !status.success() {
         return Err(Report::new(IntegrationTestError::CudaLimiterBuildFailed)
-            .attach_printable("Cargo build command returned non-zero exit status"));
+            .attach("Cargo build command returned non-zero exit status"));
     }
 
     // Search again after building
     find_library_in_dirs(&candidate_dirs, &candidate_names).ok_or_else(|| {
         Report::new(IntegrationTestError::CudaLimiterBuildFailed)
-            .attach_printable("Library not found in target directories after build")
+            .attach("Library not found in target directories after build")
     })
 }
 
@@ -184,11 +184,11 @@ fn get_gpu_uuid(gpu_index: usize) -> Result<String, Report<IntegrationTestError>
     let device = nvml
         .device_by_index(gpu_index as u32)
         .change_context(IntegrationTestError::GpuNotFound { index: gpu_index })
-        .attach_printable(format!("NVML device lookup failed for index {gpu_index}"))?;
+        .attach(format!("NVML device lookup failed for index {gpu_index}"))?;
     let uuid = device
         .uuid()
         .change_context(IntegrationTestError::GpuUuidFailed)
-        .attach_printable(format!("Failed to get UUID for GPU device {gpu_index}"))?;
+        .attach(format!("Failed to get UUID for GPU device {gpu_index}"))?;
     Ok(uuid)
 }
 
@@ -203,7 +203,7 @@ fn setup_cuda_command(
     // Verify CUDA program exists
     if !Path::new(cuda_program_path).exists() {
         return Err(
-            Report::new(IntegrationTestError::CudaProgramNotFound).attach_printable(format!(
+            Report::new(IntegrationTestError::CudaProgramNotFound).attach(format!(
                 "CUDA test program not found at: {cuda_program_path}"
             )),
         );
@@ -250,14 +250,14 @@ fn spawn_cuda_process(mut cmd: Command) -> CudaTestResult {
     let child = cmd
         .spawn()
         .change_context(IntegrationTestError::ProcessSpawnFailed)
-        .attach_printable("Failed to spawn CUDA test program process")?;
+        .attach("Failed to spawn CUDA test program process")?;
 
     let child_id = child.id();
     let wait_fn = Box::new(move || {
         child
             .wait_with_output()
             .change_context(IntegrationTestError::ProcessOutputFailed)
-            .attach_printable("Failed to get output from CUDA test program")
+            .attach("Failed to get output from CUDA test program")
     });
 
     Ok((child_id, wait_fn))
@@ -417,7 +417,7 @@ impl TestCoordinatorManager {
         )
         .map_err(|e| {
             Report::new(IntegrationTestError::GpuUuidFailed)
-                .attach_printable(format!("Failed to calculate device limits: {e}"))
+                .attach(format!("Failed to calculate device limits: {e}"))
         })?;
 
         let device_config = DeviceConfig {
@@ -450,7 +450,7 @@ impl TestCoordinatorManager {
             )
             .map_err(|e| {
                 Report::new(IntegrationTestError::ProcessSpawnFailed)
-                    .attach_printable(format!("Failed to register pod '{pod_identifier}': {e}"))
+                    .attach(format!("Failed to register pod '{pod_identifier}': {e}"))
             })?;
 
         self.coordinator
@@ -458,7 +458,7 @@ impl TestCoordinatorManager {
             .await
             .map_err(|e| {
                 Report::new(IntegrationTestError::ProcessSpawnFailed)
-                    .attach_printable(format!("Failed to register pod '{pod_identifier}': {e}"))
+                    .attach(format!("Failed to register pod '{pod_identifier}': {e}"))
             })?;
 
         self.registered_pods.insert(pod_identifier.clone());
@@ -545,7 +545,7 @@ impl TestCoordinatorManager {
             eprintln!("STDOUT: {}", String::from_utf8_lossy(&output.stdout));
             eprintln!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
             return Err(
-                Report::new(IntegrationTestError::ProcessOutputFailed).attach_printable(format!(
+                Report::new(IntegrationTestError::ProcessOutputFailed).attach(format!(
                     "Test '{}' process failed with status {:?}",
                     description, output.status
                 )),
@@ -603,14 +603,14 @@ mod limiter_tests {
         // Check if CUDA is available on the system
         if Command::new("nvidia-smi").output().is_err() {
             return Err(Report::new(IntegrationTestError::CudaProgramNotFound)
-                .attach_printable("nvidia-smi not found"));
+                .attach("nvidia-smi not found"));
         }
         // Check if CUDA test program exists
         let cuda_program_path = env!("CUDA_TEST_PROGRAM_PATH");
         if !Path::new(cuda_program_path).exists() {
             eprintln!("CUDA test program not found at: {cuda_program_path}");
             return Err(Report::new(IntegrationTestError::CudaProgramNotFound)
-                .attach_printable(format!("CUDA test program missing: {cuda_program_path}")));
+                .attach(format!("CUDA test program missing: {cuda_program_path}")));
         }
 
         Ok(())

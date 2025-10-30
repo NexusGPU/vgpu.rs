@@ -1,8 +1,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use error_stack::Report;
+
 use crate::ErlError;
 use crate::backend::DeviceBackend;
-use error_stack::Result;
+
+pub type Result<T, C> = core::result::Result<T, Report<C>>;
 
 /// Configuration for estimating kernel cost when updating the bucket.
 #[derive(Debug, Clone)]
