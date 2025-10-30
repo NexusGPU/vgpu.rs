@@ -1,5 +1,6 @@
 use crate::ErlError;
-use error_stack::Result;
+use error_stack::Report;
+pub type Result<T, C> = core::result::Result<T, Report<C>>;
 
 /// Snapshot of a token bucket.
 #[derive(Debug, Clone, Copy)]
