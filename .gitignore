@@ -21,4 +21,4 @@ GEMINI.md.bak
 
 .gemini/
 gha-creds-*.json
-*.logs
+*.log

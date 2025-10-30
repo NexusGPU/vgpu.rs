@@ -19,7 +19,7 @@ impl Default for KernelLimiterConfig {
     fn default() -> Self {
         Self {
             min_cost: 0.1,
-            max_cost: 500.0,
+            max_cost: 10.0,
             // Larger values make the curve flatter; 400k threads gets ~86% of max cost.
             curve_scale: 400_000.0,
         }
