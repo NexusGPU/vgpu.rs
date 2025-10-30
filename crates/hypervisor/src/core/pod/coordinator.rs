@@ -759,21 +759,20 @@ where
                         let mut tasks = Vec::new();
                         for pod_identifier in pod_identifiers {
                             let pod_path = pod_state.pod_path(&pod_identifier);
+                            let current_timestamp = timestamp;
 
-                            let task = tokio::spawn(async move {
-                                let result = tokio::task::spawn_blocking(move || {
-                                    SharedMemoryHandle::open(&pod_path)
-                                })
-                                .await;
-
-                                match result {
-                                    Ok(Ok(handle)) => {
+                            let task = tokio::task::spawn_blocking(move || {
+                                match SharedMemoryHandle::open(&pod_path) {
+                                    Ok(handle) => {
                                         let state = handle.get_state();
-                                        state.update_heartbeat(timestamp);
+                                        state.update_heartbeat(current_timestamp);
                                     }
-                                    Ok(Err(_)) | Err(_) => {
-                                        // Silently ignore - pod might be newly registered and shm not yet created
-                                        // This is expected during pod registration
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            pod_identifier = %pod_identifier,
+                                            error = %e,
+                                            "Failed to update heartbeat for pod"
+                                        );
                                     }
                                 }
                             });
@@ -782,7 +781,9 @@ where
 
                         // Wait for all heartbeat updates to complete
                         for task in tasks {
-                            let _ = task.await;
+                            if let Err(e) = task.await {
+                                tracing::error!(error = %e, "Heartbeat task panicked");
+                            }
                         }
                     }
                     _ = cancellation_token.cancelled() => {
