@@ -181,6 +181,8 @@ where
             self.device_count
         );
 
+        tracing::info!("ERL config: {:#?}", self.erl_config);
+
         // Start monitoring tasks
         self.start_watcher_with_cancellation(cancellation_token.clone())
             .await;
