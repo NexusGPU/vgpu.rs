@@ -305,6 +305,7 @@ pub async fn mock_coordinator(
         burst_window: 2.0,
         capacity_min: 100.0,
         capacity_max: 10_000.0,
+        integral_decay_factor: 0.95,
     };
 
     let config = CoordinatorConfig {
