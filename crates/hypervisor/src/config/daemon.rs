@@ -67,6 +67,12 @@ pub struct ElasticRateLimitParameters {
         default = "default_capacity_max"
     )]
     pub capacity_max: f64,
+
+    #[serde(
+        deserialize_with = "deserialize_optional_f64_from_string",
+        default = "default_integral_decay_factor"
+    )]
+    pub integral_decay_factor: f64,
 }
 
 impl Default for ElasticRateLimitParameters {
@@ -81,6 +87,7 @@ impl Default for ElasticRateLimitParameters {
             burst_window: default_burst_window(),
             capacity_min: default_capacity_min(),
             capacity_max: default_capacity_max(),
+            integral_decay_factor: default_integral_decay_factor(),
         }
     }
 }
@@ -112,6 +119,9 @@ fn default_capacity_min() -> f64 {
 }
 fn default_capacity_max() -> f64 {
     200_000.0
+}
+fn default_integral_decay_factor() -> f64 {
+    0.95
 }
 
 /// Custom deserializer for f64 that accepts both string and number formats
@@ -299,7 +309,8 @@ mod tests {
                 "kp": "0.5",
                 "burstWindow": "2.0",
                 "capacityMin": "100.0",
-                "capacityMax": "200000.0"
+                "capacityMax": "200000.0",
+                "integralDecayFactor": "0.9"
             }
         }"#;
 
@@ -319,6 +330,7 @@ mod tests {
         assert_eq!(params.burst_window, 2.0, "burst_window should match");
         assert_eq!(params.capacity_min, 100.0, "capacity_min should match");
         assert_eq!(params.capacity_max, 200_000.0, "capacity_max should match");
+        assert_eq!(params.integral_decay_factor, 0.9, "integral_decay_factor should match provided value");
     }
 
     #[test]
@@ -371,6 +383,7 @@ mod tests {
         );
         assert_eq!(params.filter_alpha, 0.3, "filter_alpha should use default");
         assert_eq!(params.ki, 0.1, "ki should use default");
+        assert_eq!(params.integral_decay_factor, 0.95, "integral_decay_factor should use default");
     }
 
     #[test]
@@ -401,6 +414,10 @@ mod tests {
         assert_eq!(
             params.capacity_max, 200_000.0,
             "should use default capacity_max"
+        );
+        assert_eq!(
+            params.integral_decay_factor, 0.95,
+            "should use default integral_decay_factor"
         );
     }
 

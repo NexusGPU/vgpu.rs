@@ -33,6 +33,12 @@ pub struct DeviceControllerConfig {
 
     /// Minimum time between updates (seconds)
     pub min_delta_time: f64,
+
+    /// Integral decay factor (0.0 to 1.0) for exponential decay of integral term
+    /// Higher values (closer to 1.0) = slower decay, retains more history
+    /// Lower values = faster decay, responds more quickly to changes
+    /// Default 0.95 means ~20 update cycles for integral to decay to ~35.8% of original value
+    pub integral_decay_factor: f64,
 }
 
 impl Default for DeviceControllerConfig {
@@ -56,6 +62,10 @@ impl Default for DeviceControllerConfig {
             capacity_max: 200_000.0,
 
             min_delta_time: 0.05,
+
+            // Integral decay factor: 0.95 means old errors gradually fade
+            // Each update multiplies integral by this factor, preventing unbounded growth
+            integral_decay_factor: 0.95,
         }
     }
 }
@@ -116,6 +126,11 @@ impl<B: DeviceBackend> DeviceController<B> {
         if !(0.0..=1.0).contains(&cfg.filter_alpha) {
             return Err(IntoReport::into_report(ErlError::invalid_config(
                 "filter_alpha must be in [0, 1]",
+            )));
+        }
+        if !(0.0..=1.0).contains(&cfg.integral_decay_factor) {
+            return Err(IntoReport::into_report(ErlError::invalid_config(
+                "integral_decay_factor must be in [0, 1]",
             )));
         }
 
@@ -275,8 +290,12 @@ impl<B: DeviceBackend> DeviceController<B> {
         // Proportional term
         let p = self.cfg.kp * error;
 
-        // Integral term with anti-windup
+        // Integral term with exponential decay and anti-windup
+        // Apply decay factor to forget old errors gradually
+        self.integral *= self.cfg.integral_decay_factor;
+        // Add new error contribution
         self.integral += error * delta_time;
+        // Clamp to prevent windup
         self.integral = self.integral.clamp(-1.0, 1.0);
         let i = self.cfg.ki * self.integral;
 

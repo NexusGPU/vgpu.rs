@@ -26,6 +26,8 @@ pub struct ErlConfig {
     pub capacity_min: f64,
     /// Maximum capacity (tokens) - prevents unbounded growth
     pub capacity_max: f64,
+    /// Integral decay factor (0.0 to 1.0) for exponential decay of PID integral term
+    pub integral_decay_factor: f64,
 }
 
 impl ErlConfig {
@@ -47,6 +49,7 @@ impl ErlConfig {
             burst_window: self.burst_window,
             capacity_min: self.capacity_min,
             capacity_max: self.capacity_max,
+            integral_decay_factor: self.integral_decay_factor,
             ..Default::default()
         }
     }
@@ -72,6 +75,7 @@ impl From<&daemon::DaemonArgs> for ErlConfig {
             burst_window: erl_params.burst_window,
             capacity_min: erl_params.capacity_min,
             capacity_max: erl_params.capacity_max,
+            integral_decay_factor: erl_params.integral_decay_factor,
         }
     }
 }
