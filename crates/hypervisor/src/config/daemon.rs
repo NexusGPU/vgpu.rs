@@ -12,116 +12,55 @@ pub struct HypervisorScheduling {
 
 /// Elastic Rate Limit parameters for controlling GPU resource allocation
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct ElasticRateLimitParameters {
-    #[serde(
-        deserialize_with = "deserialize_optional_f64_from_string",
-        default = "default_max_refill_rate"
-    )]
+    #[serde(deserialize_with = "deserialize_optional_f64_from_string")]
     pub max_refill_rate: f64,
 
-    #[serde(
-        deserialize_with = "deserialize_optional_f64_from_string",
-        default = "default_min_refill_rate"
-    )]
+    #[serde(deserialize_with = "deserialize_optional_f64_from_string")]
     pub min_refill_rate: f64,
 
-    #[serde(
-        deserialize_with = "deserialize_optional_f64_from_string",
-        default = "default_filter_alpha"
-    )]
+    #[serde(deserialize_with = "deserialize_optional_f64_from_string")]
     pub filter_alpha: f64,
 
-    #[serde(
-        deserialize_with = "deserialize_optional_f64_from_string",
-        default = "default_ki"
-    )]
+    #[serde(deserialize_with = "deserialize_optional_f64_from_string")]
     pub ki: f64,
 
-    #[serde(
-        deserialize_with = "deserialize_optional_f64_from_string",
-        default = "default_kd"
-    )]
+    #[serde(deserialize_with = "deserialize_optional_f64_from_string")]
     pub kd: f64,
 
-    #[serde(
-        deserialize_with = "deserialize_optional_f64_from_string",
-        default = "default_kp"
-    )]
+    #[serde(deserialize_with = "deserialize_optional_f64_from_string")]
     pub kp: f64,
 
-    #[serde(
-        deserialize_with = "deserialize_optional_f64_from_string",
-        default = "default_burst_window"
-    )]
+    #[serde(deserialize_with = "deserialize_optional_f64_from_string")]
     pub burst_window: f64,
 
-    #[serde(
-        deserialize_with = "deserialize_optional_f64_from_string",
-        default = "default_capacity_min"
-    )]
+    #[serde(deserialize_with = "deserialize_optional_f64_from_string")]
     pub capacity_min: f64,
 
-    #[serde(
-        deserialize_with = "deserialize_optional_f64_from_string",
-        default = "default_capacity_max"
-    )]
+    #[serde(deserialize_with = "deserialize_optional_f64_from_string")]
     pub capacity_max: f64,
 
-    #[serde(
-        deserialize_with = "deserialize_optional_f64_from_string",
-        default = "default_integral_decay_factor"
-    )]
+    #[serde(deserialize_with = "deserialize_optional_f64_from_string")]
     pub integral_decay_factor: f64,
 }
 
 impl Default for ElasticRateLimitParameters {
     fn default() -> Self {
+        let defaults = erl::DeviceControllerConfig::default();
         Self {
-            max_refill_rate: default_max_refill_rate(),
-            min_refill_rate: default_min_refill_rate(),
-            filter_alpha: default_filter_alpha(),
-            ki: default_ki(),
-            kd: default_kd(),
-            kp: default_kp(),
-            burst_window: default_burst_window(),
-            capacity_min: default_capacity_min(),
-            capacity_max: default_capacity_max(),
-            integral_decay_factor: default_integral_decay_factor(),
+            max_refill_rate: defaults.rate_max,
+            min_refill_rate: defaults.rate_min,
+            filter_alpha: defaults.filter_alpha,
+            ki: defaults.ki,
+            kd: defaults.kd,
+            kp: defaults.kp,
+            burst_window: defaults.burst_window,
+            capacity_min: defaults.capacity_min,
+            capacity_max: defaults.capacity_max,
+            integral_decay_factor: defaults.integral_decay_factor,
         }
     }
-}
-
-// Default value functions for ElasticRateLimitParameters
-fn default_max_refill_rate() -> f64 {
-    100_000.0
-}
-fn default_min_refill_rate() -> f64 {
-    10.0
-}
-fn default_filter_alpha() -> f64 {
-    0.3
-}
-fn default_ki() -> f64 {
-    0.1
-}
-fn default_kd() -> f64 {
-    0.05
-}
-fn default_kp() -> f64 {
-    0.5
-}
-fn default_burst_window() -> f64 {
-    2.0
-}
-fn default_capacity_min() -> f64 {
-    100.0
-}
-fn default_capacity_max() -> f64 {
-    200_000.0
-}
-fn default_integral_decay_factor() -> f64 {
-    0.95
 }
 
 /// Custom deserializer for f64 that accepts both string and number formats
@@ -330,7 +269,10 @@ mod tests {
         assert_eq!(params.burst_window, 2.0, "burst_window should match");
         assert_eq!(params.capacity_min, 100.0, "capacity_min should match");
         assert_eq!(params.capacity_max, 200_000.0, "capacity_max should match");
-        assert_eq!(params.integral_decay_factor, 0.9, "integral_decay_factor should match provided value");
+        assert_eq!(
+            params.integral_decay_factor, 0.9,
+            "integral_decay_factor should match provided value"
+        );
     }
 
     #[test]
@@ -383,7 +325,10 @@ mod tests {
         );
         assert_eq!(params.filter_alpha, 0.3, "filter_alpha should use default");
         assert_eq!(params.ki, 0.1, "ki should use default");
-        assert_eq!(params.integral_decay_factor, 0.95, "integral_decay_factor should use default");
+        assert_eq!(
+            params.integral_decay_factor, 0.95,
+            "integral_decay_factor should use default"
+        );
     }
 
     #[test]
