@@ -171,18 +171,17 @@ impl MemoryManager {
         f(shmem)
     }
 
-    /// Cleans up a shared memory segment.
-    pub async fn cleanup(&self, path: impl AsRef<Path>) -> Result<()> {
+    /// remove a shared memory segment.
+    pub async fn remove_shared_memory(&self, path: impl AsRef<Path>) -> Result<()> {
         let mut memories = self.active_memories.write().await;
-
         if let Some(shmem) = memories.remove(path.as_ref()) {
-            // Drop the Shmem object to release the shared memory.
             drop(shmem);
-            info!(path = %path.as_ref().display(), "Cleaned up shared memory segment");
+            std::fs::remove_file(path.as_ref().join(SHM_PATH_SUFFIX))
+                .context(format!("Failed to remove directory {:?}", path.as_ref()))?;
+            info!(path = %path.as_ref().display(), "Removed shared memory segment");
         } else {
-            warn!(path = %path.as_ref().display(), "Attempted to cleanup non-existent shared memory");
+            warn!(path = %path.as_ref().display(), "Attempted to remove non-existent shared memory");
         }
-
         Ok(())
     }
 
@@ -315,7 +314,7 @@ impl MemoryManager {
                 continue;
             }
             if self.should_cleanup(&path).await {
-                match self.cleanup(&path).await {
+                match self.remove_shared_memory(&path).await {
                     Ok(_) => {
                         cleaned_up.push(identifier.clone());
                         info!(path = %path.display(), "Cleaned up unused shared memory segment");
@@ -364,6 +363,10 @@ impl super::traits::SharedMemoryAccess for MemoryManager {
         cfgs: &[super::DeviceConfig],
     ) -> Result<(), Self::Error> {
         self.create_shared_memory(pod_path.as_ref(), cfgs).await
+    }
+
+    async fn remove_shared_memory(&self, path: impl AsRef<Path> + Send) -> Result<(), Self::Error> {
+        self.remove_shared_memory(path).await
     }
 
     async fn get_shared_memory(

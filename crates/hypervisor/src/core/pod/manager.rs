@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use api_types::{QosLevel, WorkerInfo};
 use nvml_wrapper::Nvml;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use utils::shared_memory::traits::SharedMemoryAccess;
-use utils::shared_memory::PodIdentifier;
+use utils::shared_memory::{DeviceConfig, PodIdentifier};
 
 use crate::core::hypervisor::HypervisorType;
 use crate::core::pod::coordinator::LimiterCoordinator;
@@ -24,7 +24,7 @@ use utils::keyed_lock::KeyedAsyncLock;
 
 use super::device_info::create_device_configs_from_worker_info;
 use super::pod_state_store::PodStateStore;
-use super::types::{PodManagementError, Result};
+use super::types::{PodManagementError, PodState, Result};
 
 /// Timeout for PID discovery subscription in seconds
 const PID_DISCOVERY_TIMEOUT_SECS: u64 = 5;
@@ -234,23 +234,38 @@ where
         info!("Cleanup loop stopped");
     }
 
+    /// Check if existing pod configuration matches the new configuration
+    fn check_pod_config_match(
+        existing_state: &PodState,
+        new_info: &WorkerInfo,
+        new_device_configs: &[DeviceConfig],
+    ) -> bool {
+        if existing_state.info != *new_info {
+            return false;
+        }
+
+        if existing_state.device_configs.len() != new_device_configs.len() {
+            return false;
+        }
+
+        // Compare each device config
+        for (existing, new) in existing_state
+            .device_configs
+            .iter()
+            .zip(new_device_configs.iter())
+        {
+            if **existing != *new {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Ensure pod is registered in all components (lazy loading)
     #[tracing::instrument(skip(self), fields(namespace = namespace, pod = pod_name))]
     pub async fn ensure_pod_registered(&self, namespace: &str, pod_name: &str) -> Result<()> {
         let pod_identifier = PodIdentifier::new(namespace, pod_name);
-
-        // Fast path: check if already registered (lock-free)
-        if self.pod_state_store.contains_pod(&pod_identifier) {
-            return Ok(());
-        }
-
-        // Acquire per-pod lock to serialize registration for the same pod
-        let _guard = self.registration_locks.lock(&pod_identifier).await;
-
-        // Double-check after acquiring lock
-        if self.pod_state_store.contains_pod(&pod_identifier) {
-            return Ok(());
-        }
 
         // Get pod info from cache
         let pod_info = self
@@ -281,9 +296,47 @@ where
             Vec::new()
         };
 
+        // Fast path: check if already registered with matching configuration (lock-free)
+        if let Some(existing_state) = self.pod_state_store.get_pod(&pod_identifier) {
+            if Self::check_pod_config_match(&existing_state, &pod_info.0, &device_configs) {
+                return Ok(());
+            }
+            debug!(
+                "Pod {}/{} configuration changed, will re-register",
+                namespace, pod_name
+            );
+        }
+
+        // Acquire per-pod lock to serialize registration for the same pod
+        let _guard = self.registration_locks.lock(&pod_identifier).await;
+
+        // Double-check after acquiring lock
+        if let Some(existing_state) = self.pod_state_store.get_pod(&pod_identifier) {
+            if Self::check_pod_config_match(&existing_state, &pod_info.0, &device_configs) {
+                return Ok(());
+            }
+        }
+
         // Register in state store
-        self.pod_state_store
-            .register_pod(&pod_identifier, pod_info.0, device_configs.clone())?;
+        let was_overwritten = self.pod_state_store.register_pod(
+            &pod_identifier,
+            pod_info.0,
+            device_configs.clone(),
+        )?;
+
+        if was_overwritten {
+            debug!(
+                namespace = %pod_identifier.namespace,
+                pod_name = %pod_identifier.name,
+                "Pod registration overwrote existing pod"
+            );
+            self.limiter_coordinator
+                .unregister_pod(&pod_identifier)
+                .await
+                .map_err(|e| PodManagementError::RegistrationFailed {
+                    message: e.to_string(),
+                })?;
+        }
 
         let restored_pids = self
             .limiter_coordinator
@@ -665,9 +718,10 @@ mod tests {
         let pod_identifier = create_test_pod_identifier("test-pod");
 
         // Test pod registration
-        let result =
-            pod_state_store.register_pod(&pod_identifier, worker_info.clone(), device_configs);
-        assert!(result.is_ok());
+        let was_overwritten = pod_state_store
+            .register_pod(&pod_identifier, worker_info.clone(), device_configs)
+            .unwrap();
+        assert!(!was_overwritten, "First registration should not overwrite");
 
         // Verify pod is registered
         assert!(pod_state_store.contains_pod(&pod_identifier));
@@ -699,7 +753,7 @@ mod tests {
         let pod_identifier = create_test_pod_identifier("test-pod");
 
         // Register pod
-        pod_state_store
+        let _ = pod_state_store
             .register_pod(&pod_identifier, worker_info, device_configs)
             .unwrap();
 
@@ -804,14 +858,14 @@ mod tests {
         ];
 
         // Register pods using different devices
-        pod_state_store
+        let _ = pod_state_store
             .register_pod(
                 &pod1_id,
                 worker_info.clone(),
                 vec![device_configs[0].clone()],
             )
             .unwrap();
-        pod_state_store
+        let _ = pod_state_store
             .register_pod(&pod2_id, worker_info, vec![device_configs[1].clone()])
             .unwrap();
 
@@ -858,7 +912,7 @@ mod tests {
                 let pod_id = PodIdentifier::new("test-namespace", format!("pod-{i}"));
 
                 // Register pod
-                store
+                let _ = store
                     .register_pod(&pod_id, worker_info, device_configs)
                     .unwrap();
 
@@ -911,7 +965,7 @@ mod tests {
             let device_configs = vec![create_test_device_config()];
             let pod_id = PodIdentifier::new("test-namespace", format!("stress-pod-{pod_idx:03}"));
 
-            pod_state_store
+            let _ = pod_state_store
                 .register_pod(&pod_id, worker_info, device_configs)
                 .unwrap();
 

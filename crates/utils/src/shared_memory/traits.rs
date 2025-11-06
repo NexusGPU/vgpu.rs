@@ -58,6 +58,9 @@ pub trait SharedMemoryAccess: Send + Sync {
         cfgs: &[DeviceConfig],
     ) -> Result<(), Self::Error>;
 
+    /// Remove shared memory for a pod
+    async fn remove_shared_memory(&self, path: impl AsRef<Path> + Send) -> Result<(), Self::Error>;
+
     /// Get shared memory pointer for a pod
     async fn get_shared_memory(
         &self,

@@ -443,7 +443,8 @@ impl TestCoordinatorManager {
         let pod_identifier = PodIdentifier::new("test", pod_name);
 
         // Register the pod
-        self.pod_state
+        let _ = self
+            .pod_state
             .register_pod(
                 &pod_identifier,
                 WorkerInfo::default(),

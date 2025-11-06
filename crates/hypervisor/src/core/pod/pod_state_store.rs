@@ -55,12 +55,16 @@ impl PodStateStore {
     /// Register a pod with device configurations
     ///
     /// This operation is idempotent - if the pod already exists, it will be updated.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(true)` if an existing pod was overwritten, or `Ok(false)` if a new pod was created.
     pub fn register_pod(
         &self,
         pod_identifier: &PodIdentifier,
         info: WorkerInfo,
         device_configs: Vec<DeviceConfig>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
         let device_count = device_configs.len();
@@ -68,7 +72,7 @@ impl PodStateStore {
             device_configs.into_iter().map(Arc::new).collect();
 
         // Use entry API to atomically check and update, avoiding nested locks
-        match self.pods.entry(pod_identifier.clone()) {
+        let was_overwritten = match self.pods.entry(pod_identifier.clone()) {
             Entry::Occupied(mut entry) => {
                 let existing = entry.get();
                 let mut pod_state = PodState::new(info, device_configs.clone());
@@ -79,25 +83,28 @@ impl PodStateStore {
                     namespace = %pod_identifier.namespace,
                     pod_name = %pod_identifier.name,
                     existing_processes = existing.processes.len(),
-                    "Updated existing pod registration"
+                    "Overwriting existing pod registration"
                 );
 
                 entry.insert(pod_state);
+                true
             }
             Entry::Vacant(entry) => {
                 let pod_state = PodState::new(info, device_configs);
                 entry.insert(pod_state);
+                false
             }
-        }
+        };
 
         info!(
             namespace = %pod_identifier.namespace,
             pod_name = %pod_identifier.name,
             device_count = device_count,
+            was_overwritten = was_overwritten,
             "Pod registered in state store"
         );
 
-        Ok(())
+        Ok(was_overwritten)
     }
 
     /// Unregister a pod from the state store
@@ -444,9 +451,10 @@ mod tests {
         let device_configs = vec![create_test_device_config()];
 
         // Test pod registration
-        store
+        let was_overwritten = store
             .register_pod(&pod_id, info.clone(), device_configs)
             .unwrap();
+        assert!(!was_overwritten, "First registration should not overwrite");
 
         assert!(store.contains_pod(&pod_id));
         assert_eq!(store.get_pod(&pod_id).unwrap().info.pod_name, "test-pod");
@@ -495,7 +503,7 @@ mod tests {
         let info = create_test_worker_info("test-pod");
         let device_configs = vec![create_test_device_config()];
 
-        store.register_pod(&pod_id, info, device_configs).unwrap();
+        let _ = store.register_pod(&pod_id, info, device_configs).unwrap();
 
         let pods_using_device_0 = store.get_pods_using_device(0);
         assert_eq!(pods_using_device_0.len(), 1);
@@ -514,7 +522,7 @@ mod tests {
         let info = create_test_worker_info("test-pod");
         let device_configs = vec![create_test_device_config()];
 
-        store.register_pod(&pod_id, info, device_configs).unwrap();
+        let _ = store.register_pod(&pod_id, info, device_configs).unwrap();
 
         let config = store
             .get_device_config_for_pod(&pod_id, 0)
@@ -538,5 +546,40 @@ mod tests {
         assert!(store
             .get_device_config_for_pod(&non_existent_id, 0)
             .is_none());
+    }
+
+    #[test]
+    fn test_register_pod_overwrite_detection() {
+        let store = PodStateStore::new("/tmp/test_shm".into());
+        let pod_id = create_test_pod_identifier("overwrite-test");
+        let info = create_test_worker_info("test-pod");
+        let device_configs = vec![create_test_device_config()];
+
+        // First registration should not overwrite
+        let was_overwritten = store
+            .register_pod(&pod_id, info.clone(), device_configs.clone())
+            .unwrap();
+        assert!(!was_overwritten, "First registration should return false");
+
+        // Register a process
+        store.register_process(&pod_id, 1234).unwrap();
+        assert_eq!(store.get_host_pids_for_pod(&pod_id).unwrap().len(), 1);
+
+        // Second registration should overwrite and preserve processes
+        let was_overwritten = store
+            .register_pod(&pod_id, info.clone(), device_configs.clone())
+            .unwrap();
+        assert!(was_overwritten, "Second registration should return true");
+
+        // Verify processes are preserved after overwrite
+        assert_eq!(
+            store.get_host_pids_for_pod(&pod_id).unwrap().len(),
+            1,
+            "Processes should be preserved after overwrite"
+        );
+        assert!(
+            store.get_pod_by_pid(1234).is_some(),
+            "PID mapping should be preserved after overwrite"
+        );
     }
 }
