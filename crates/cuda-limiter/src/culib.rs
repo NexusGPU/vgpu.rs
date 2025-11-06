@@ -4,37 +4,43 @@ use cudarc::driver::sys::CUuuid;
 use cudarc::driver::sys::Lib;
 use libloading::Library;
 
-const DEFAULT_CUDA_LIB_PATH: &str = "/lib/x86_64-linux-gnu/libcuda.so";
+const PRIMARY_CUDA_LIB: &str = "libcuda.so.1";
+const FALLBACK_CUDA_LIB: &str = "libcuda.so";
 
-/// Resolve CUDA library path from environment or system
-fn resolve_cuda_lib_path() -> String {
+/// Provide candidate CUDA library names to attempt in order
+fn candidate_cuda_libs() -> Vec<String> {
+    let mut candidates = Vec::with_capacity(3);
     if let Ok(path) = std::env::var("TF_CUDA_LIB_PATH") {
-        return path;
+        candidates.push(path);
     }
-
-    if std::path::Path::new(DEFAULT_CUDA_LIB_PATH).exists() {
-        return DEFAULT_CUDA_LIB_PATH.to_string();
-    }
-
-    tracing::info!("Default CUDA library path not found, searching with ldconfig");
-    find_libcuda_with_ldconfig().unwrap_or_else(|| {
-        tracing::warn!("Could not find libcuda.so via ldconfig, falling back to default path");
-        DEFAULT_CUDA_LIB_PATH.to_string()
-    })
+    candidates.push(PRIMARY_CUDA_LIB.to_string());
+    candidates.push(FALLBACK_CUDA_LIB.to_string());
+    candidates
 }
 
 pub unsafe fn culib() -> &'static Lib {
     static LIB: std::sync::OnceLock<Lib> = std::sync::OnceLock::new();
     LIB.get_or_init(|| {
-        let lib_path = resolve_cuda_lib_path();
-        tracing::info!("Loading CUDA library from {}", lib_path);
-        let lib = Library::new(&lib_path).expect("Failed to load CUDA library");
-        Lib::from_library(lib).expect("Failed to convert library to Lib")
+        let mut last_err: Option<libloading::Error> = None;
+        for candidate in candidate_cuda_libs() {
+            tracing::info!("Loading CUDA library from {}", candidate);
+            match Library::new(&candidate) {
+                Ok(lib) => {
+                    return Lib::from_library(lib).expect("Failed to convert library to Lib");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to load {}", candidate);
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        panic!("can not load libcuda, error: {last_err:?}")
     })
 }
 
 /// Find libcuda.so using ldconfig
-fn find_libcuda_with_ldconfig() -> Option<String> {
+fn _find_libcuda_with_ldconfig() -> Option<String> {
     let output = std::process::Command::new("ldconfig")
         .arg("-p")
         .output()
