@@ -265,6 +265,11 @@ impl SharedMemoryAccess for MockSharedMemoryAccess {
         Ok(())
     }
 
+    async fn remove_shared_memory(&self, path: impl AsRef<Path> + Send) -> Result<(), Self::Error> {
+        self.log_operation(format!("remove_shared_memory({})", path.as_ref().display()));
+        Ok(())
+    }
+
     async fn get_shared_memory(
         &self,
         pod_path: impl AsRef<Path> + Send,

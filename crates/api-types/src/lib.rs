@@ -24,7 +24,7 @@ impl std::fmt::Display for QosLevel {
 }
 
 /// Worker resource information including requests and limits
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct WorkerInfo {
     /// Pod name
     pub pod_name: String,
@@ -77,7 +77,7 @@ pub struct PodInfoResponse {
 }
 
 /// Pod-level information for GPU and limiter setup
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct PodInfo {
     /// Pod name
     pub pod_name: String,

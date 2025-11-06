@@ -636,6 +636,19 @@ where
         Ok(restored_pids)
     }
 
+    pub async fn unregister_pod(&self, pod_identifier: &PodIdentifier) -> Result<()> {
+        let pod_path = self.pod_state.pod_path(pod_identifier);
+        self.shared_memory
+            .remove_shared_memory(pod_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        info!(
+            pod_identifier = %pod_identifier,
+            "Unregistered pod from coordinator"
+        );
+        Ok(())
+    }
+
     /// Registers a process within a pod (Process-level operation)
     pub async fn register_process(
         &self,

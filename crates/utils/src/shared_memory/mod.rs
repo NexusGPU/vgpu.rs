@@ -1007,7 +1007,7 @@ impl SharedDeviceStateV2 {
 }
 
 /// Device configuration information.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeviceConfig {
     /// Device index
     pub device_idx: u32,
@@ -1319,7 +1319,7 @@ mod tests {
         }
 
         // Test cleanup
-        manager.cleanup(&pod_path).await.unwrap();
+        manager.remove_shared_memory(&pod_path).await.unwrap();
         assert!(!manager.contains(&pod_path).await);
     }
 
@@ -1354,7 +1354,7 @@ mod tests {
 
         // Should have exactly one shared memory
         assert!(manager.contains(&pod_path).await);
-        manager.cleanup(&pod_path).await.unwrap();
+        manager.remove_shared_memory(&pod_path).await.unwrap();
     }
 
     #[tokio::test]
