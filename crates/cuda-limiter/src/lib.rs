@@ -130,6 +130,7 @@ fn init_ngpu_library() {
 
             config::DeviceConfigResult {
                 gpu_uuids: uuids,
+                compute_shard: false,
                 host_pid: 0,
             }
         };
@@ -161,7 +162,8 @@ fn init_ngpu_library() {
             }
         }
 
-        let limiter = Limiter::new(nvml, config.gpu_uuids).expect("failed to initialize Limiter");
+        let limiter = Limiter::new(nvml, config.gpu_uuids, config.compute_shard)
+            .expect("failed to initialize Limiter");
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
     });
 }
@@ -244,6 +246,15 @@ fn init_hooks() {
         let _ = culib::culib();
     }
     init_ngpu_library();
+
+    let is_compute_shard = GLOBAL_LIMITER
+        .get()
+        .expect("GLOBAL_LIMITER")
+        .is_compute_shard();
+    if is_compute_shard {
+        tracing::debug!("Compute shard detected, skipping hook initialization");
+        return;
+    }
 
     // Try to install hooks immediately if libraries are already loaded
     let mut hook_manager = HookManager::default();

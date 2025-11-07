@@ -352,6 +352,7 @@ impl PodStateStore {
             host_pid: host_pids.first().copied().unwrap_or(1234),
             labels: BTreeMap::new(),
             workload_name: Some("test-workload".to_string()),
+            compute_shard: false,
         };
 
         // Create PodIdentifier from namespace and pod name
@@ -428,6 +429,7 @@ mod tests {
             host_pid: 1234,
             labels: BTreeMap::new(),
             workload_name: Some("test-workload".to_string()),
+            compute_shard: false,
         }
     }
 

@@ -79,6 +79,13 @@ impl TensorFusionPodInfo {
             worker_info.containers = Some(value.split(',').map(|s| s.to_string()).collect());
         }
 
+        // Parse isolation level
+        if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/isolation")) {
+            worker_info.compute_shard = value == "shard";
+        } else {
+            worker_info.compute_shard = false;
+        }
+
         Ok(Self(worker_info))
     }
 

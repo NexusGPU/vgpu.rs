@@ -12,6 +12,7 @@ use reqwest::Method;
 #[derive(Debug, Clone)]
 pub struct DeviceConfigResult {
     pub gpu_uuids: Vec<String>,
+    pub compute_shard: bool,
     pub host_pid: u32,
 }
 
@@ -172,6 +173,7 @@ fn request_worker_info(
             DeviceConfigResult {
                 host_pid: container_pid, // Use container_pid as placeholder for GetInfo
                 gpu_uuids: pod_info.gpu_uuids,
+                compute_shard: pod_info.compute_shard,
             }
         }
         WorkerOperation::Initialize => {
@@ -194,8 +196,9 @@ fn request_worker_info(
 
             DeviceConfigResult {
                 host_pid: process_info.host_pid,
-                // there is no gpu_uuids in the process response
+                // there is no gpu_uuids, and compute_shard in the process response
                 gpu_uuids: vec![],
+                compute_shard: false,
             }
         }
     };
