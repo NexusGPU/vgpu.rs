@@ -52,6 +52,8 @@ pub struct WorkerInfo {
     pub workload_name: Option<String>,
     /// Pod labels
     pub labels: BTreeMap<String, String>,
+    // Whether the workload is a compute shard
+    pub compute_shard: bool,
 }
 
 /// Response format for Worker query API (legacy, use PodInfoResponse for new code)
@@ -91,6 +93,8 @@ pub struct PodInfo {
     pub vram_limit: Option<u64>,
     /// QoS level for the workload
     pub qos_level: Option<QosLevel>,
+    /// Whether the workload is a compute shard
+    pub compute_shard: bool,
 }
 
 /// Response for process initialization

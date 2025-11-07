@@ -183,6 +183,7 @@ mod tests {
             host_pid: 1234,
             labels: BTreeMap::new(),
             workload_name: Some("test-workload".to_string()),
+            compute_shard: false,
         }
     }
 

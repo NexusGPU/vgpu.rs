@@ -88,6 +88,7 @@ where
         tflops_limit: pod_entry.tflops_limit,
         vram_limit: pod_entry.vram_limit,
         qos_level: pod_entry.qos_level,
+        compute_shard: pod_entry.compute_shard,
     };
 
     pod_manager

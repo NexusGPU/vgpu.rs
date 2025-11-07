@@ -87,6 +87,8 @@ pub(crate) struct Limiter {
     cu_device_mapping: DashMap<CUdevice, (usize, String)>,
     /// GPU UUIDs
     gpu_idx_uuids: Vec<(usize, String)>,
+    /// compute shard
+    compute_shard: bool,
 }
 
 impl std::fmt::Debug for Limiter {
@@ -97,7 +99,11 @@ impl std::fmt::Debug for Limiter {
 
 impl Limiter {
     /// Creates a new Limiter instance
-    pub(crate) fn new(nvml: Nvml, mut gpu_uuids: Vec<String>) -> Result<Self, Error> {
+    pub(crate) fn new(
+        nvml: Nvml,
+        mut gpu_uuids: Vec<String>,
+        compute_shard: bool,
+    ) -> Result<Self, Error> {
         gpu_uuids.sort();
         gpu_uuids.dedup();
 
@@ -119,6 +125,7 @@ impl Limiter {
             nvml,
             cu_device_mapping: DashMap::new(),
             gpu_idx_uuids,
+            compute_shard,
         })
     }
 
@@ -552,6 +559,11 @@ impl Limiter {
         device.block_z.store(z, Ordering::Release);
 
         Ok(())
+    }
+
+    /// Check if the limiter is a compute shard
+    pub(crate) fn is_compute_shard(&self) -> bool {
+        self.compute_shard
     }
 }
 
