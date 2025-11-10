@@ -1,246 +1,258 @@
+use core::time::Duration;
 use std::env;
 use std::fs;
 
-use anyhow::Result;
 use api_types::{PodInfoResponse, ProcessInitResponse};
-use error_stack::Report;
-use error_stack::ResultExt;
+use error_stack::{Report, ResultExt};
 use reqwest::blocking::Client;
-use reqwest::Method;
 
-/// Result containing device configuration
+/// Service account token path in Kubernetes pods
+const SERVICE_ACCOUNT_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+
+/// Default HTTP request timeout
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Pod configuration returned from GET /api/v1/pod
 #[derive(Debug, Clone)]
-pub struct DeviceConfigResult {
+pub struct PodConfig {
+    /// GPU UUIDs assigned to the pod
     pub gpu_uuids: Vec<String>,
+    /// Whether compute sharding is enabled
     pub compute_shard: bool,
+}
+
+/// Process configuration returned from POST /api/v1/process
+#[derive(Debug, Clone)]
+pub struct ProcessConfig {
+    /// Host PID of the process
     pub host_pid: u32,
-}
-
-/// Worker operation type
-#[derive(Debug, Clone, Copy)]
-pub enum WorkerOperation {
-    /// Get pod information (GET request) - no container_name needed
-    GetInfo,
-    /// Initialize worker process (POST request) - requires container_name
-    Initialize,
-}
-
-impl WorkerOperation {
-    fn http_method(&self) -> Method {
-        match self {
-            WorkerOperation::GetInfo => Method::GET,
-            WorkerOperation::Initialize => Method::POST,
-        }
-    }
-
-    fn requires_container_name(&self) -> bool {
-        matches!(self, WorkerOperation::Initialize)
-    }
-
-    fn endpoint_path(&self) -> &'static str {
-        match self {
-            WorkerOperation::GetInfo => "/api/v1/pod",
-            WorkerOperation::Initialize => "/api/v1/process",
-        }
-    }
 }
 
 /// Error types for configuration operations
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+    #[error("Failed to read service account token")]
+    TokenRead,
+    #[error("Service account token is empty")]
+    EmptyToken,
     #[error("HTTP request failed")]
     HttpRequest,
-    #[error("OIDC authentication failed")]
-    OidcAuth,
+    #[error("Invalid response from hypervisor")]
+    InvalidResponse,
+    #[error("Missing required data in response")]
+    MissingData,
     #[error("JSON parsing failed")]
     JsonParsing,
 }
 
-/// Get worker device configuration from hypervisor (GET request)
+/// Get pod configuration from hypervisor
+///
+/// Makes a GET request to /api/v1/pod to retrieve GPU assignments and compute shard status.
+///
+/// # Errors
+///
+/// Returns [`ConfigError::TokenRead`] if the service account token cannot be read.
+/// Returns [`ConfigError::HttpRequest`] if the HTTP request fails.
+/// Returns [`ConfigError::JsonParsing`] if the response cannot be parsed.
+/// Returns [`ConfigError::MissingData`] if the response is missing required data.
+#[tracing::instrument(skip(hypervisor_ip, hypervisor_port), fields(url))]
 pub fn get_worker_config(
-    hypervisor_ip: &str,
-    hypervisor_port: &str,
-) -> Result<DeviceConfigResult, Report<ConfigError>> {
-    request_worker_info(
-        hypervisor_ip,
-        hypervisor_port,
-        None,
-        WorkerOperation::GetInfo,
+    hypervisor_ip: impl AsRef<str>,
+    hypervisor_port: impl AsRef<str>,
+) -> Result<PodConfig, Report<ConfigError>> {
+    request_pod_info(hypervisor_ip.as_ref(), hypervisor_port.as_ref())
+}
+
+/// Initialize worker process with hypervisor
+///
+/// Makes a POST request to /api/v1/process to register the worker process
+/// and retrieve the host PID.
+///
+/// # Errors
+///
+/// Returns [`ConfigError::TokenRead`] if the service account token cannot be read.
+/// Returns [`ConfigError::HttpRequest`] if the HTTP request fails.
+/// Returns [`ConfigError::JsonParsing`] if the response cannot be parsed.
+/// Returns [`ConfigError::MissingData`] if the response is missing required data.
+#[tracing::instrument(skip(hypervisor_ip, hypervisor_port), fields(url, container_name))]
+pub fn init_worker(
+    hypervisor_ip: impl AsRef<str>,
+    hypervisor_port: impl AsRef<str>,
+    container_name: impl AsRef<str>,
+) -> Result<ProcessConfig, Report<ConfigError>> {
+    request_process_init(
+        hypervisor_ip.as_ref(),
+        hypervisor_port.as_ref(),
+        container_name.as_ref(),
     )
 }
 
-/// Initialize worker with hypervisor (POST request)
-pub fn init_worker(
+/// Request pod information from hypervisor API
+#[tracing::instrument(level = "debug", fields(container_pid))]
+fn request_pod_info(
     hypervisor_ip: &str,
     hypervisor_port: &str,
-    container_name: &str,
-) -> Result<DeviceConfigResult, Report<ConfigError>> {
-    // Initialize the process to get host_pid and GPU UUIDs
-    let process_config = request_worker_info(
-        hypervisor_ip,
-        hypervisor_port,
-        Some(container_name),
-        WorkerOperation::Initialize,
-    )?;
-
-    // Return the process configuration directly
-    Ok(process_config)
-}
-
-/// Request worker information from hypervisor API using Kubernetes service account token
-fn request_worker_info(
-    hypervisor_ip: &str,
-    hypervisor_port: &str,
-    container_name: Option<&str>,
-    operation: WorkerOperation,
-) -> Result<DeviceConfigResult, Report<ConfigError>> {
-    // Get Kubernetes service account token
-    let token = get_k8s_service_account_token().change_context(ConfigError::OidcAuth)?;
-
-    // Get container PID (this process's PID)
+) -> Result<PodConfig, Report<ConfigError>> {
+    let token = read_service_account_token()?;
     let container_pid = std::process::id();
+    let container_name = env::var("CONTAINER_NAME").unwrap_or_default();
 
-    // Create HTTP client
-    let client = Client::new();
-    let url = format!(
-        "http://{hypervisor_ip}:{hypervisor_port}{}",
-        operation.endpoint_path()
-    );
+    tracing::Span::current().record("container_pid", container_pid);
 
-    tracing::debug!(
-        "Requesting worker info from: {} (operation: {:?})",
-        url,
-        operation
-    );
+    let client = build_http_client();
+    let url = format!("http://{hypervisor_ip}:{hypervisor_port}/api/v1/pod");
 
-    // Record request start time
+    tracing::debug!(url = %url, "Requesting pod information");
+
     let request_start = std::time::Instant::now();
 
-    // Prepare query parameters based on operation type
-    let pid_string = container_pid.to_string();
-    let mut query_params = vec![("container_pid", pid_string.as_str())];
+    let mut request = client
+        .get(&url)
+        .bearer_auth(&token)
+        .query(&[("container_pid", container_pid.to_string())]);
 
-    // Only add container_name for operations that require it
-    let container_name_for_request = if operation.requires_container_name() {
-        container_name.unwrap_or_else(|| {
-            tracing::warn!("container_name not provided for {:?} operation", operation);
-            ""
-        })
-    } else {
-        // For GET requests, get from environment if available
-        &env::var("CONTAINER_NAME").unwrap_or_else(|_| {
-            tracing::debug!("CONTAINER_NAME environment variable not set for GET request");
-            String::new()
-        })
-    };
-
-    if !container_name_for_request.is_empty() {
-        query_params.push(("container_name", container_name_for_request));
+    if !container_name.is_empty() {
+        request = request.query(&[("container_name", container_name)]);
     }
 
-    let response = client
-        .request(operation.http_method(), &url)
-        .bearer_auth(&token)
-        .query(&query_params)
+    let response = request
         .send()
-        .change_context(ConfigError::HttpRequest)?;
+        .change_context(ConfigError::HttpRequest)
+        .attach_with(|| format!("Failed to send GET request to {url}"))?;
 
     if !response.status().is_success() {
-        tracing::error!("HTTP request failed with status: {}", response.status());
-        return Err(Report::new(ConfigError::HttpRequest));
+        return Err(Report::new(ConfigError::HttpRequest).attach(format!(
+            "HTTP request failed with status: {}",
+            response.status()
+        )));
     }
+
+    let pod_response: PodInfoResponse = response
+        .json()
+        .change_context(ConfigError::JsonParsing)
+        .attach("Failed to parse PodInfoResponse")?;
+
+    if !pod_response.success {
+        return Err(Report::new(ConfigError::InvalidResponse)
+            .attach(format!("Hypervisor API error: {}", pod_response.message)));
+    }
+
+    let pod_info = pod_response
+        .data
+        .ok_or_else(|| Report::new(ConfigError::MissingData).attach("No pod data in response"))?;
 
     let request_duration = request_start.elapsed();
 
-    // Handle different response types based on operation
-    let result = match operation {
-        WorkerOperation::GetInfo => {
-            // Parse PodInfoResponse for GET requests
-            let pod_response: PodInfoResponse =
-                response.json().change_context(ConfigError::JsonParsing)?;
-
-            if !pod_response.success {
-                tracing::error!("Hypervisor API returned error: {}", pod_response.message);
-                return Err(Report::new(ConfigError::HttpRequest));
-            }
-
-            let pod_info = pod_response.data.ok_or_else(|| {
-                tracing::error!("No pod data returned from hypervisor API");
-                Report::new(ConfigError::JsonParsing)
-            })?;
-
-            // For GetInfo, we don't have host_pid, so use container_pid as placeholder
-            DeviceConfigResult {
-                host_pid: container_pid, // Use container_pid as placeholder for GetInfo
-                gpu_uuids: pod_info.gpu_uuids,
-                compute_shard: pod_info.compute_shard,
-            }
-        }
-        WorkerOperation::Initialize => {
-            // Parse ProcessInitResponse for POST requests
-            let process_response: ProcessInitResponse =
-                response.json().change_context(ConfigError::JsonParsing)?;
-
-            if !process_response.success {
-                tracing::error!(
-                    "Hypervisor API returned error: {}",
-                    process_response.message
-                );
-                return Err(Report::new(ConfigError::HttpRequest));
-            }
-
-            let process_info = process_response.data.ok_or_else(|| {
-                tracing::error!("No process data returned from hypervisor API");
-                Report::new(ConfigError::JsonParsing)
-            })?;
-
-            DeviceConfigResult {
-                host_pid: process_info.host_pid,
-                // there is no gpu_uuids, and compute_shard in the process response
-                gpu_uuids: vec![],
-                compute_shard: false,
-            }
-        }
-    };
-
     tracing::info!(
-        "Successfully processed hypervisor response: operation: {:?}, request_time: {:?}, host_pid: {}",
-        operation,
-        request_duration,
-        result.host_pid
+        duration_ms = request_duration.as_millis(),
+        gpu_count = pod_info.gpu_uuids.len(),
+        compute_shard = pod_info.compute_shard,
+        "Successfully retrieved pod configuration"
     );
 
-    Ok(result)
+    Ok(PodConfig {
+        gpu_uuids: pod_info.gpu_uuids,
+        compute_shard: pod_info.compute_shard,
+    })
 }
 
-/// Get Kubernetes service account token from the pod
-fn get_k8s_service_account_token() -> Result<String, Report<ConfigError>> {
-    // Read the service account token directly from the mounted file
-    const SERVICE_ACCOUNT_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+/// Request process initialization from hypervisor API
+#[tracing::instrument(level = "debug", fields(container_pid, host_pid))]
+fn request_process_init(
+    hypervisor_ip: &str,
+    hypervisor_port: &str,
+    container_name: &str,
+) -> Result<ProcessConfig, Report<ConfigError>> {
+    let token = read_service_account_token()?;
+    let container_pid = std::process::id();
 
-    tracing::debug!(
-        "Reading Kubernetes service account token from: {}",
-        SERVICE_ACCOUNT_TOKEN_PATH
-    );
+    tracing::Span::current().record("container_pid", container_pid);
 
-    let token = fs::read_to_string(SERVICE_ACCOUNT_TOKEN_PATH).map_err(|e| {
-        tracing::error!("Failed to read service account token: {}", e);
-        Report::new(ConfigError::OidcAuth)
-    })?;
+    let client = build_http_client();
+    let url = format!("http://{hypervisor_ip}:{hypervisor_port}/api/v1/process");
 
-    let token = token.trim().to_string();
+    tracing::debug!(url = %url, container_name = %container_name, "Initializing worker process");
 
-    if token.is_empty() {
-        tracing::error!("Service account token is empty");
-        return Err(Report::new(ConfigError::OidcAuth));
+    let request_start = std::time::Instant::now();
+
+    let response = client
+        .post(&url)
+        .bearer_auth(&token)
+        .query(&[
+            ("container_pid", container_pid.to_string()),
+            ("container_name", container_name.to_string()),
+        ])
+        .send()
+        .change_context(ConfigError::HttpRequest)
+        .attach_with(|| format!("Failed to send POST request to {url}"))?;
+
+    if !response.status().is_success() {
+        return Err(Report::new(ConfigError::HttpRequest).attach(format!(
+            "HTTP request failed with status: {}",
+            response.status()
+        )));
     }
 
-    tracing::debug!("Successfully read Kubernetes service account token");
+    let process_response: ProcessInitResponse = response
+        .json()
+        .change_context(ConfigError::JsonParsing)
+        .attach("Failed to parse ProcessInitResponse")?;
 
-    Ok(token)
+    if !process_response.success {
+        return Err(Report::new(ConfigError::InvalidResponse).attach(format!(
+            "Hypervisor API error: {}",
+            process_response.message
+        )));
+    }
+
+    let process_info = process_response.data.ok_or_else(|| {
+        Report::new(ConfigError::MissingData).attach("No process data in response")
+    })?;
+
+    let request_duration = request_start.elapsed();
+
+    tracing::Span::current().record("host_pid", process_info.host_pid);
+
+    tracing::info!(
+        duration_ms = request_duration.as_millis(),
+        host_pid = process_info.host_pid,
+        "Successfully initialized worker process"
+    );
+
+    Ok(ProcessConfig {
+        host_pid: process_info.host_pid,
+    })
+}
+
+/// Read and validate Kubernetes service account token
+#[tracing::instrument(level = "debug")]
+fn read_service_account_token() -> Result<String, Report<ConfigError>> {
+    let token = fs::read_to_string(SERVICE_ACCOUNT_TOKEN_PATH)
+        .change_context(ConfigError::TokenRead)
+        .attach_with(|| format!("Failed to read token from {SERVICE_ACCOUNT_TOKEN_PATH}"))?;
+
+    let token = token.trim();
+
+    if token.is_empty() {
+        return Err(Report::new(ConfigError::EmptyToken).attach("Service account token is empty"));
+    }
+
+    tracing::debug!("Successfully read service account token");
+
+    Ok(token.to_string())
+}
+
+/// Build HTTP client with default configuration
+fn build_http_client() -> Client {
+    Client::builder()
+        .timeout(DEFAULT_REQUEST_TIMEOUT)
+        .build()
+        .expect("should build HTTP client")
 }
 
 /// Get hypervisor configuration from environment variables
+///
+/// Returns `None` if either `HYPERVISOR_IP` or `HYPERVISOR_PORT` is not set.
 pub fn get_hypervisor_config() -> Option<(String, String)> {
     let hypervisor_ip = env::var("HYPERVISOR_IP").ok()?;
     let hypervisor_port = env::var("HYPERVISOR_PORT").ok()?;
@@ -248,6 +260,8 @@ pub fn get_hypervisor_config() -> Option<(String, String)> {
 }
 
 /// Get container name from environment variable
+///
+/// Returns `None` if `CONTAINER_NAME` is not set.
 pub fn get_container_name() -> Option<String> {
     env::var("CONTAINER_NAME").ok()
 }
@@ -256,39 +270,35 @@ pub fn get_container_name() -> Option<String> {
 mod tests {
     use std::io::Write;
 
+    use serial_test::serial;
     use tempfile::NamedTempFile;
 
     use super::*;
 
-    fn get_k8s_service_account_token_from_path(path: &str) -> Result<String, Report<ConfigError>> {
-        tracing::debug!("Reading Kubernetes service account token from: {}", path);
+    fn read_token_from_path(path: &str) -> Result<String, Report<ConfigError>> {
+        let token = fs::read_to_string(path)
+            .change_context(ConfigError::TokenRead)
+            .attach_with(|| format!("Failed to read token from {path}"))?;
 
-        let token = fs::read_to_string(path).map_err(|e| {
-            tracing::error!("Failed to read service account token: {}", e);
-            Report::new(ConfigError::OidcAuth)
-        })?;
-
-        let token = token.trim().to_string();
+        let token = token.trim();
 
         if token.is_empty() {
-            tracing::error!("Service account token is empty");
-            return Err(Report::new(ConfigError::OidcAuth));
+            return Err(
+                Report::new(ConfigError::EmptyToken).attach("Service account token is empty")
+            );
         }
 
-        tracing::debug!("Successfully read Kubernetes service account token");
-
-        Ok(token)
+        Ok(token.to_string())
     }
 
     #[test]
-    fn test_read_token_successfully() {
-        // Create a temporary file with a token
-        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+    fn read_token_successfully() {
+        let mut temp_file = NamedTempFile::new().expect("should create temp file");
         let test_token = "test-token-123";
-        writeln!(temp_file, "{test_token}").expect("Failed to write to temp file");
+        writeln!(temp_file, "{test_token}").expect("should write to temp file");
 
         let token_path = temp_file.path().to_str().unwrap();
-        let result = get_k8s_service_account_token_from_path(token_path);
+        let result = read_token_from_path(token_path);
 
         assert!(result.is_ok(), "Should successfully read token");
         assert_eq!(
@@ -299,59 +309,55 @@ mod tests {
     }
 
     #[test]
-    fn test_read_token_with_whitespace() {
-        // Create a temporary file with a token that has surrounding whitespace
-        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+    fn read_token_with_whitespace() {
+        let mut temp_file = NamedTempFile::new().expect("should create temp file");
         let test_token = "test-token-with-spaces";
-        writeln!(temp_file, "  {test_token}  \n").expect("Failed to write to temp file");
+        writeln!(temp_file, "  {test_token}  \n").expect("should write to temp file");
 
         let token_path = temp_file.path().to_str().unwrap();
-        let result = get_k8s_service_account_token_from_path(token_path);
+        let result = read_token_from_path(token_path);
 
         assert!(result.is_ok(), "Should successfully read token");
         assert_eq!(result.unwrap(), test_token, "Token should be trimmed");
     }
 
     #[test]
-    fn test_token_file_not_found() {
+    fn token_file_not_found() {
         let non_existent_path = "/path/that/does/not/exist/token";
-        let result = get_k8s_service_account_token_from_path(non_existent_path);
+        let result = read_token_from_path(non_existent_path);
 
         assert!(result.is_err(), "Should return error for non-existent file");
 
         let error = result.unwrap_err();
         assert!(
-            matches!(error.current_context(), ConfigError::OidcAuth),
-            "Should return OidcAuth error"
+            matches!(error.current_context(), ConfigError::TokenRead),
+            "Should return TokenRead error"
         );
     }
 
     #[test]
-    fn test_empty_token_file() {
-        // Create a temporary file with empty content
-        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-        // Don't write anything to the file, leaving it empty
+    fn empty_token_file() {
+        let temp_file = NamedTempFile::new().expect("should create temp file");
 
         let token_path = temp_file.path().to_str().unwrap();
-        let result = get_k8s_service_account_token_from_path(token_path);
+        let result = read_token_from_path(token_path);
 
         assert!(result.is_err(), "Should return error for empty file");
 
         let error = result.unwrap_err();
         assert!(
-            matches!(error.current_context(), ConfigError::OidcAuth),
-            "Should return OidcAuth error"
+            matches!(error.current_context(), ConfigError::EmptyToken),
+            "Should return EmptyToken error"
         );
     }
 
     #[test]
-    fn test_whitespace_only_token_file() {
-        // Create a temporary file with only whitespace
-        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
-        writeln!(temp_file, "   \n\t  \n").expect("Failed to write to temp file");
+    fn whitespace_only_token_file() {
+        let mut temp_file = NamedTempFile::new().expect("should create temp file");
+        writeln!(temp_file, "   \n\t  \n").expect("should write to temp file");
 
         let token_path = temp_file.path().to_str().unwrap();
-        let result = get_k8s_service_account_token_from_path(token_path);
+        let result = read_token_from_path(token_path);
 
         assert!(
             result.is_err(),
@@ -360,8 +366,65 @@ mod tests {
 
         let error = result.unwrap_err();
         assert!(
-            matches!(error.current_context(), ConfigError::OidcAuth),
-            "Should return OidcAuth error"
+            matches!(error.current_context(), ConfigError::EmptyToken),
+            "Should return EmptyToken error"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn hypervisor_config_with_env_vars() {
+        env::set_var("HYPERVISOR_IP", "127.0.0.1");
+        env::set_var("HYPERVISOR_PORT", "8080");
+
+        let config = get_hypervisor_config();
+
+        assert!(
+            config.is_some(),
+            "Should return config when env vars are set"
+        );
+        let (ip, port) = config.unwrap();
+        assert_eq!(ip, "127.0.0.1");
+        assert_eq!(port, "8080");
+
+        env::remove_var("HYPERVISOR_IP");
+        env::remove_var("HYPERVISOR_PORT");
+    }
+
+    #[test]
+    #[serial]
+    fn hypervisor_config_without_env_vars() {
+        env::remove_var("HYPERVISOR_IP");
+        env::remove_var("HYPERVISOR_PORT");
+
+        let config = get_hypervisor_config();
+
+        assert!(
+            config.is_none(),
+            "Should return None when env vars are not set"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn container_name_with_env_var() {
+        env::set_var("CONTAINER_NAME", "test-container");
+
+        let name = get_container_name();
+
+        assert!(name.is_some(), "Should return name when env var is set");
+        assert_eq!(name.unwrap(), "test-container");
+
+        env::remove_var("CONTAINER_NAME");
+    }
+
+    #[test]
+    #[serial]
+    fn container_name_without_env_var() {
+        env::remove_var("CONTAINER_NAME");
+
+        let name = get_container_name();
+
+        assert!(name.is_none(), "Should return None when env var is not set");
     }
 }

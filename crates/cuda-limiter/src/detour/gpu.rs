@@ -339,21 +339,38 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
                     return FN_CU_INIT(flags);
                 };
 
-                let result = match config::init_worker(
+                // Get pod configuration for logging
+                let pod_config = match config::get_worker_config(&hypervisor_ip, &hypervisor_port) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to get pod configuration via cu_init_detour: {}, will retry on next call",
+                            e
+                        );
+                        return FN_CU_INIT(flags);
+                    }
+                };
+
+                // Initialize worker process to get host_pid
+                let process_config = match config::init_worker(
                     &hypervisor_ip,
                     &hypervisor_port,
                     &container_name,
                 ) {
-                    Ok(result) => {
+                    Ok(config) => {
                         tracing::info!(
-                            "Worker initialized successfully via cu_init_detour: host_pid={}, gpu_uuids={:?}",
-                            result.host_pid,
-                            result.gpu_uuids
+                            "Worker initialized successfully via cu_init_detour: host_pid={}, gpu_uuids={:?}, compute_shard={}",
+                            config.host_pid,
+                            pod_config.gpu_uuids,
+                            pod_config.compute_shard
                         );
-                        result
+                        config
                     }
                     Err(e) => {
-                        tracing::error!("Failed to initialize worker via cu_init_detour: {}, will retry on next call", e);
+                        tracing::error!(
+                            "Failed to initialize worker via cu_init_detour: {}, will retry on next call",
+                            e
+                        );
                         return FN_CU_INIT(flags);
                     }
                 };
@@ -376,7 +393,7 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
                     command_handler::start_background_handler(
                         &hypervisor_ip,
                         &hypervisor_port,
-                        result.host_pid,
+                        process_config.host_pid,
                     );
                 }
 

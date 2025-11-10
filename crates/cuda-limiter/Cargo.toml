@@ -27,4 +27,5 @@ dashmap = { workspace = true }
 erl = { path = "../erl" }
 
 [dev-dependencies]
+serial_test = { workspace = true }
 tempfile = { workspace = true }

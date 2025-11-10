@@ -656,6 +656,7 @@ dependencies = [
  "nvml-wrapper-sys",
  "once_cell",
  "reqwest",
+ "serial_test",
  "tempfile",
  "tf-macro",
  "thiserror 2.0.17",

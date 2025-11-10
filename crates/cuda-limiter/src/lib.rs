@@ -80,7 +80,7 @@ pub(crate) fn mock_shm_path() -> Option<PathBuf> {
         .ok()
 }
 
-fn init_ngpu_library() {
+fn init_limiter() {
     static NGPU_INITIALIZED: Once = Once::new();
     NGPU_INITIALIZED.call_once(|| {
         let nvml =
@@ -128,10 +128,9 @@ fn init_ngpu_library() {
                 panic!("TF_VISIBLE_DEVICES not set");
             };
 
-            config::DeviceConfigResult {
+            config::PodConfig {
                 gpu_uuids: uuids,
                 compute_shard: false,
-                host_pid: 0,
             }
         };
 
@@ -245,7 +244,7 @@ fn init_hooks() {
         // Load CUDA library to ensure it's loaded before hooks are installed
         let _ = culib::culib();
     }
-    init_ngpu_library();
+    init_limiter();
 
     let is_compute_shard = GLOBAL_LIMITER
         .get()
