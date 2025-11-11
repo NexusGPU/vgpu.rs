@@ -63,7 +63,7 @@ test-log = "0.2"
 async-stream = "0.3"
 eventsource = { git="https://github.com/NexusGPU/eventsource.git" }
 url = "2.5"
-libloading = "0.8"
+libloading = "0.9"
 shared_memory = { git="https://github.com/NexusGPU/shared_memory.git", rev="d679661" }
 tower = "0.5"
 schemars = "1.1"
