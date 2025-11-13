@@ -166,9 +166,14 @@ impl Limiter {
     ) -> Result<(), Error> {
         if !self.cu_device_mapping.contains_key(&cu_device) {
             let device_uuid = f()?;
-            let device = self
-                .nvml
-                .device_by_uuid(device_uuid.replace("gpu-", "GPU-").as_str())?;
+            // Create a new NVML instance to ensure proper initialization in this context
+            let nvml = Nvml::builder()
+                .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
+                    std::ffi::OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
+                ))
+                .init()?;
+
+            let device = nvml.device_by_uuid(device_uuid.replace("gpu-", "GPU-").as_str())?;
             let raw_index = device.index()?;
             self.cu_device_mapping
                 .insert(cu_device, (raw_index as usize, device_uuid));
@@ -184,9 +189,14 @@ impl Limiter {
             Ok(dev_idx_uuid.0)
         } else {
             let uuid = culib::device_uuid(cu_device).map_err(Error::Cuda)?;
-            let device = self
-                .nvml
-                .device_by_uuid(uuid.replace("gpu-", "GPU-").as_str())?;
+            // Create a new NVML instance to ensure proper initialization in this context
+            let nvml = Nvml::builder()
+                .lib_path(&std::env::var_os("TF_NVML_LIB_PATH").unwrap_or(
+                    std::ffi::OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
+                ))
+                .init()?;
+
+            let device = nvml.device_by_uuid(uuid.replace("gpu-", "GPU-").as_str())?;
             let index: u32 = device.index()?;
             self.cu_device_mapping
                 .insert(cu_device, (index as usize, uuid));
