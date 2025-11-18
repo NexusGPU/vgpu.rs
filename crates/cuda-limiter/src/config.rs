@@ -19,6 +19,8 @@ pub struct PodConfig {
     pub gpu_uuids: Vec<String>,
     /// Whether compute sharding is enabled
     pub compute_shard: bool,
+    /// Auto-freeze configuration
+    pub auto_freeze: Option<api_types::AutoFreezeInfo>,
 }
 
 /// Process configuration returned from POST /api/v1/process
@@ -153,6 +155,7 @@ fn request_pod_info(
     Ok(PodConfig {
         gpu_uuids: pod_info.gpu_uuids,
         compute_shard: pod_info.compute_shard,
+        auto_freeze: pod_info.auto_freeze,
     })
 }
 
@@ -264,6 +267,30 @@ pub fn get_hypervisor_config() -> Option<(String, String)> {
 /// Returns `None` if `CONTAINER_NAME` is not set.
 pub fn get_container_name() -> Option<String> {
     env::var("CONTAINER_NAME").ok()
+}
+
+/// Parse duration string (e.g., "5m", "1h", "30s") to Duration
+///
+/// Uses the `humantime` crate to parse duration strings with support for:
+/// - "s" or "sec": seconds
+/// - "m" or "min": minutes
+/// - "h" or "hr": hours
+/// - "d" or "day": days
+/// - And many other formats (e.g., "1h 30m", "2.5h")
+///
+/// # Errors
+///
+/// Returns [`ConfigError::InvalidResponse`] if the duration format is invalid
+pub fn parse_duration(duration_str: &str) -> Result<Duration, Report<ConfigError>> {
+    let duration_str = duration_str.trim();
+
+    if duration_str.is_empty() {
+        return Err(Report::new(ConfigError::InvalidResponse).attach("Duration string is empty"));
+    }
+
+    humantime::parse_duration(duration_str)
+        .change_context(ConfigError::InvalidResponse)
+        .attach_with(|| format!("Failed to parse duration: {duration_str}"))
 }
 
 #[cfg(test)]
@@ -426,5 +453,61 @@ mod tests {
         let name = get_container_name();
 
         assert!(name.is_none(), "Should return None when env var is not set");
+    }
+
+    #[test]
+    fn parse_duration_seconds() {
+        let result = super::parse_duration("30s");
+        assert!(result.is_ok(), "Should parse seconds successfully");
+        assert_eq!(
+            result.unwrap().as_secs(),
+            30,
+            "Should parse 30 seconds correctly"
+        );
+    }
+
+    #[test]
+    fn parse_duration_minutes() {
+        let result = super::parse_duration("5m");
+        assert!(result.is_ok(), "Should parse minutes successfully");
+        assert_eq!(
+            result.unwrap().as_secs(),
+            300,
+            "Should parse 5 minutes correctly"
+        );
+    }
+
+    #[test]
+    fn parse_duration_hours() {
+        let result = super::parse_duration("2h");
+        assert!(result.is_ok(), "Should parse hours successfully");
+        assert_eq!(
+            result.unwrap().as_secs(),
+            7200,
+            "Should parse 2 hours correctly"
+        );
+    }
+
+    #[test]
+    fn parse_duration_complex() {
+        let result = super::parse_duration("1h 30m");
+        assert!(result.is_ok(), "Should parse complex duration successfully");
+        assert_eq!(
+            result.unwrap().as_secs(),
+            5400,
+            "Should parse '1h 30m' correctly"
+        );
+    }
+
+    #[test]
+    fn parse_duration_empty_string() {
+        let result = super::parse_duration("");
+        assert!(result.is_err(), "Should fail on empty string");
+    }
+
+    #[test]
+    fn parse_duration_invalid_format() {
+        let result = super::parse_duration("invalid");
+        assert!(result.is_err(), "Should fail on invalid format");
     }
 }

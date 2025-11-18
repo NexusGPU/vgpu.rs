@@ -16,8 +16,10 @@ use super::PodInfoResponse;
 use super::ProcessInfo;
 use super::ProcessInitResponse;
 
+use crate::config::AutoFreezeAndResume;
 use crate::core::pod::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
 use crate::core::pod::PodManager;
+use api_types::AutoFreezeInfo;
 use utils::shared_memory::traits::SharedMemoryAccess;
 
 /// Query parameters for process initialization
@@ -32,6 +34,7 @@ pub struct ProcessInitQuery {
 pub async fn get_pod_info<M, P, D, T>(
     req: &Request,
     pod_manager: Data<&Arc<PodManager<M, P, D, T>>>,
+    auto_freeze_config: Data<&Arc<AutoFreezeAndResume>>,
 ) -> poem::Result<poem::web::Json<PodInfoResponse>>
 where
     M: SharedMemoryAccess + 'static,
@@ -73,6 +76,18 @@ where
         }
     };
 
+    let auto_freeze = pod_entry.qos_level.and_then(|qos| {
+        auto_freeze_config
+            .auto_freeze
+            .iter()
+            .find(|config| config.qos == qos)
+            .map(|config| AutoFreezeInfo {
+                freeze_to_mem_ttl: config.freeze_to_mem_ttl.clone(),
+                freeze_to_disk_ttl: config.freeze_to_disk_ttl.clone(),
+                enable: config.enable.unwrap_or(false),
+            })
+    });
+
     let pod_info = PodInfo {
         pod_name: pod_entry.pod_name.clone(),
         namespace: pod_entry.namespace.clone(),
@@ -89,6 +104,7 @@ where
         vram_limit: pod_entry.vram_limit,
         qos_level: pod_entry.qos_level,
         compute_shard: pod_entry.compute_shard,
+        auto_freeze,
     };
 
     pod_manager

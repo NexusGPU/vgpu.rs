@@ -22,9 +22,13 @@ use trap::http::BlockingHttpTrap;
 use trap::http::HttpTrapConfig;
 use trap::{Trap, TrapAction, TrapError, TrapFrame};
 use utils::hooks::HookManager;
+use utils::hooks::NativePointer;
 use utils::logging;
 use utils::replace_symbol;
 
+use crate::auto_freeze::AutoFreezeManager;
+
+mod auto_freeze;
 mod command_handler;
 mod config;
 mod culib;
@@ -32,6 +36,7 @@ mod detour;
 mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
+static GLOBAL_AUTO_FREEZE_MANAGER: OnceLock<Arc<AutoFreezeManager>> = OnceLock::new();
 static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
 static HOOKS_INITIALIZED: (AtomicBool, AtomicBool) =
     (AtomicBool::new(false), AtomicBool::new(false));
@@ -131,6 +136,7 @@ fn init_limiter() {
             config::PodConfig {
                 gpu_uuids: uuids,
                 compute_shard: false,
+                auto_freeze: None,
             }
         };
 
@@ -164,7 +170,67 @@ fn init_limiter() {
         let limiter = Limiter::new(nvml, config.gpu_uuids, config.compute_shard)
             .expect("failed to initialize Limiter");
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
+
+        // Initialize AutoFreezeManager if configured
+        initialize_auto_freeze_manager(config.auto_freeze);
     });
+}
+
+/// Initialize auto-freeze manager from configuration
+fn initialize_auto_freeze_manager(auto_freeze_config: Option<api_types::AutoFreezeInfo>) {
+    let Some(config) = auto_freeze_config else {
+        tracing::debug!("No auto-freeze configuration received from hypervisor");
+        return;
+    };
+
+    if !config.enable {
+        tracing::debug!("Auto-freeze is disabled in configuration");
+        return;
+    }
+
+    let idle_timeout = match parse_freeze_timeout(&config.freeze_to_mem_ttl) {
+        Ok(timeout) => timeout,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to parse freeze timeout, using default");
+            default_freeze_timeout()
+        }
+    };
+
+    // Create and register the manager
+    register_auto_freeze_manager(idle_timeout);
+}
+
+/// Parse freeze timeout from configuration string
+fn parse_freeze_timeout(
+    freeze_ttl: &Option<String>,
+) -> Result<core::time::Duration, error_stack::Report<config::ConfigError>> {
+    let Some(ttl_str) = freeze_ttl else {
+        tracing::warn!(
+            "Auto-freeze enabled but freeze_to_mem_ttl not set, using default 5 minutes"
+        );
+        return Ok(default_freeze_timeout());
+    };
+
+    config::parse_duration(ttl_str)
+}
+
+/// Get the default freeze timeout (5 minutes)
+const fn default_freeze_timeout() -> core::time::Duration {
+    core::time::Duration::from_secs(5 * 60)
+}
+
+/// Register the auto-freeze manager globally
+fn register_auto_freeze_manager(idle_timeout: core::time::Duration) {
+    tracing::info!(
+        timeout_secs = idle_timeout.as_secs(),
+        "Initializing auto-freeze with idle timeout"
+    );
+
+    let manager = AutoFreezeManager::new(idle_timeout);
+
+    if GLOBAL_AUTO_FREEZE_MANAGER.set(manager).is_err() {
+        tracing::warn!("Global auto-freeze manager already initialized");
+    }
 }
 
 fn try_install_cuda_hooks() {
@@ -338,7 +404,33 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
         try_install_nvml_hooks();
     }
 
-    FN_DLSYM(handle, symbol)
+    let sym_ptr = FN_DLSYM(handle, symbol);
+
+    if may_be_cuda {
+        // Only attach auto-freeze if checkpoint API is supported
+        if !culib::checkpoint_api().is_supported() {
+            return sym_ptr;
+        }
+
+        let maybe_auto_freeze_manager = GLOBAL_AUTO_FREEZE_MANAGER.get();
+        let auto_freeze_manager = match maybe_auto_freeze_manager {
+            Some(auto_freeze_manager) => auto_freeze_manager,
+            None => {
+                return sym_ptr;
+            }
+        };
+        let native_pointer = NativePointer(sym_ptr as *mut c_void);
+        if !auto_freeze_manager.contains_native_pointer(&native_pointer) {
+            if let Err(e) = auto_freeze_manager.attach_to_pointer(native_pointer) {
+                tracing::error!(
+                    error = %e,
+                    pointer = ?native_pointer,
+                    "Failed to attach auto-freeze listener"
+                );
+            }
+        }
+    }
+    sym_ptr
 }
 
 enum TrapImpl {

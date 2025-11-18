@@ -24,6 +24,7 @@ use trap::Waker;
 use super::auth::JwtAuthMiddleware;
 use super::ApiError;
 use super::JwtAuthConfig;
+use crate::config::AutoFreezeAndResume;
 use crate::controller::handlers::get_pod_info;
 use crate::controller::handlers::ping;
 use crate::controller::handlers::process_init;
@@ -39,6 +40,7 @@ pub struct ApiServer<M, P, D, T> {
     jwt_config: JwtAuthConfig,
     trap_handler: Arc<dyn TrapHandler + Send + Sync + 'static>,
     command_dispatcher: Arc<CommandDispatcher>,
+    auto_freeze_config: Arc<AutoFreezeAndResume>,
 }
 
 impl<M, P, D, T> ApiServer<M, P, D, T>
@@ -55,6 +57,7 @@ where
         jwt_config: JwtAuthConfig,
         trap_handler: Arc<dyn TrapHandler + Send + Sync + 'static>,
         command_dispatcher: Arc<CommandDispatcher>,
+        auto_freeze_config: Arc<AutoFreezeAndResume>,
     ) -> Self {
         Self {
             pod_manager,
@@ -62,6 +65,7 @@ where
             jwt_config,
             trap_handler,
             command_dispatcher,
+            auto_freeze_config,
         }
     }
 
@@ -97,6 +101,7 @@ where
             .nest("/api/v1/limiter", limiter_routes)
             .data(self.pod_manager.clone())
             .data(self.command_dispatcher.clone())
+            .data(self.auto_freeze_config.clone())
             .with(Tracing);
 
         let listener = TcpListener::bind(&self.listen_addr);
