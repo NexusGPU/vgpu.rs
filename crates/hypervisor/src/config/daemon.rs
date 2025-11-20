@@ -3,32 +3,24 @@ use clap::Parser;
 use serde::{Deserialize, Deserializer};
 use std::path::PathBuf;
 
-/// Auto-freeze configuration for a specific QoS level
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoFreeze {
-    /// QoS level this configuration applies to
     pub qos: QosLevel,
-    /// Time-to-live for freezing to memory (duration string, e.g., "5m", "1h")
     #[serde(rename = "freezeToMemTTL")]
     pub freeze_to_mem_ttl: Option<String>,
-    /// Time-to-live for freezing to disk (duration string, e.g., "30m", "2h")
     #[serde(rename = "freezeToDiskTTL")]
     pub freeze_to_disk_ttl: Option<String>,
-    /// Whether auto-freeze is enabled for this QoS level
     pub enable: Option<bool>,
 }
 
-/// Auto-freeze and resume configuration
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoFreezeAndResume {
-    /// List of auto-freeze configurations for different QoS levels
     #[serde(default)]
     pub auto_freeze: Vec<AutoFreeze>,
 }
 
-/// Hypervisor scheduling configuration containing all scheduling-related parameters
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HypervisorScheduling {
@@ -38,7 +30,6 @@ pub struct HypervisorScheduling {
     pub auto_freeze_and_resume: AutoFreezeAndResume,
 }
 
-/// Elastic Rate Limit parameters for controlling GPU resource allocation
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ElasticRateLimitParameters {

@@ -172,65 +172,35 @@ fn init_limiter() {
             .expect("failed to initialize Limiter");
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
 
-        // Initialize AutoFreezeManager if configured
-        initialize_auto_freeze_manager(config.auto_freeze);
-    });
-}
+        if let Some(auto_freeze_config) = config.auto_freeze {
+            if auto_freeze_config.enable {
+                const DEFAULT_IDLE_TIMEOUT: core::time::Duration =
+                    core::time::Duration::from_secs(5 * 60);
 
-/// Initialize auto-freeze manager from configuration
-fn initialize_auto_freeze_manager(auto_freeze_config: Option<api_types::AutoFreezeInfo>) {
-    let Some(config) = auto_freeze_config else {
-        tracing::debug!("No auto-freeze configuration received from hypervisor");
-        return;
-    };
+                let idle_timeout = auto_freeze_config
+                    .freeze_to_mem_ttl
+                    .as_deref()
+                    .and_then(|ttl| config::parse_duration(ttl).ok())
+                    .unwrap_or_else(|| {
+                        tracing::warn!(
+                            "Using default freeze timeout: {} seconds",
+                            DEFAULT_IDLE_TIMEOUT.as_secs()
+                        );
+                        DEFAULT_IDLE_TIMEOUT
+                    });
 
-    if !config.enable {
-        tracing::debug!("Auto-freeze is disabled in configuration");
-        return;
-    }
+                tracing::info!(
+                    timeout_secs = idle_timeout.as_secs(),
+                    "Initializing auto-freeze with idle timeout"
+                );
 
-    let idle_timeout = match parse_freeze_timeout(&config.freeze_to_mem_ttl) {
-        Ok(timeout) => timeout,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to parse freeze timeout, using default");
-            default_freeze_timeout()
+                let manager = AutoFreezeManager::new(idle_timeout);
+                if GLOBAL_AUTO_FREEZE_MANAGER.set(manager).is_err() {
+                    tracing::warn!("Global auto-freeze manager already initialized");
+                }
+            }
         }
-    };
-
-    register_auto_freeze_manager(idle_timeout);
-}
-
-/// Parse freeze timeout from configuration string
-fn parse_freeze_timeout(
-    freeze_ttl: &Option<String>,
-) -> Result<core::time::Duration, error_stack::Report<config::ConfigError>> {
-    let Some(ttl_str) = freeze_ttl else {
-        tracing::warn!(
-            "Auto-freeze enabled but freeze_to_mem_ttl not set, using default 5 minutes"
-        );
-        return Ok(default_freeze_timeout());
-    };
-
-    config::parse_duration(ttl_str)
-}
-
-/// Get the default freeze timeout (5 minutes)
-const fn default_freeze_timeout() -> core::time::Duration {
-    core::time::Duration::from_secs(5 * 60)
-}
-
-/// Register the auto-freeze manager globally
-fn register_auto_freeze_manager(idle_timeout: core::time::Duration) {
-    tracing::info!(
-        timeout_secs = idle_timeout.as_secs(),
-        "Initializing auto-freeze with idle timeout"
-    );
-
-    let manager = AutoFreezeManager::new(idle_timeout);
-
-    if GLOBAL_AUTO_FREEZE_MANAGER.set(manager).is_err() {
-        tracing::warn!("Global auto-freeze manager already initialized");
-    }
+    });
 }
 
 fn try_install_cuda_hooks() {

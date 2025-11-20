@@ -36,35 +36,19 @@ impl From<NativePointer> for SendNativePointer {
     }
 }
 
-/// Auto-freeze manager that monitors CUDA activity and automatically
-/// freezes/resumes the process based on idle timeout.
 #[allow(dead_code, reason = "Fields are used in implementation methods")]
 pub struct AutoFreezeManager {
-    /// Timestamp of the last CUDA activity
     last_activity: Arc<Mutex<Instant>>,
-    /// Condition variable to wake up the monitor thread when activity occurs
     activity_notifier: Arc<Condvar>,
-    /// Idle timeout duration after which the process will be frozen
     idle_timeout: Duration,
-    /// Shutdown signal for the background thread
     shutdown: Arc<AtomicBool>,
-    /// Attached native pointers
     attached: Arc<RwLock<HashSet<SendNativePointer>>>,
-    /// Storage for listeners and their Frida handles
-    /// We only store the listener and the handle, not HookManager (which is just a one-time tool)
-    /// Protected by Mutex for thread safety, even though typically only accessed from dlsym detour
     listeners: Mutex<Vec<(Listener, Box<AutoFreezeListener>)>>,
 }
 
-// Safety: AutoFreezeManager can be safely shared and sent between threads because:
-// 1. All fields use proper synchronization primitives (Arc<Mutex/RwLock/AtomicBool>)
-// 2. The Listener and AutoFreezeListener are opaque handles that are never actually moved between threads
-// 3. They're only accessed through the Mutex, providing runtime protection
 unsafe impl Sync for AutoFreezeManager {}
 unsafe impl Send for AutoFreezeManager {}
 
-/// Lightweight listener wrapper for attaching to hooks.
-/// Holds a weak reference to the global AutoFreezeManager.
 pub struct AutoFreezeListener {
     manager: Arc<AutoFreezeManager>,
 }
@@ -89,7 +73,6 @@ impl AutoFreezeManager {
             listeners: Mutex::new(Vec::new()),
         });
 
-        // Start background monitoring thread
         Self::start_monitor_thread_for(&manager);
 
         manager
@@ -136,27 +119,19 @@ impl AutoFreezeManager {
         guard.insert(SendNativePointer::from(pointer));
     }
 
-    /// Attaches an auto-freeze listener to a native pointer (CUDA function).
-    /// The listener and Frida handle are stored internally to keep them alive.
     pub fn attach_to_pointer(
         self: &Arc<Self>,
         pointer: NativePointer,
     ) -> Result<(), AutoFreezeError> {
-        // Mark this pointer as attached first
         self.add_native_pointer(pointer);
 
-        // Create a temporary hook manager (just a tool to call attach)
         let mut hook_manager = HookManager::default();
-        // Box the listener to ensure its address remains stable when moved to the vector
         let mut listener = Box::new(self.as_listener());
 
-        // Attach the listener to the native pointer, get the Frida handle
         let frida_listener = hook_manager
             .attach(pointer, &mut *listener)
             .map_err(|e| AutoFreezeError::AttachFailed(format!("{e:?}")))?;
 
-        // Store the listener and Frida handle to keep them alive
-        // The HookManager is dropped here, we don't need it anymore
         self.listeners
             .lock()
             .expect("should acquire listeners lock")
@@ -237,16 +212,10 @@ impl AutoFreezeManager {
                 } else {
                     consecutive_failures = 0;
                     let remaining = idle_timeout - elapsed;
-                    let (guard, timeout_result) = activity_notifier
+                    let (guard, _timeout_result) = activity_notifier
                         .wait_timeout(last_guard, remaining)
                         .expect("should wait on condvar");
                     last_guard = guard;
-
-                    if timeout_result.timed_out() {
-                        tracing::trace!("Idle timeout expired, will freeze on next iteration");
-                    } else {
-                        tracing::trace!("New activity detected, restarting idle timer");
-                    }
                 }
             }
 
@@ -331,9 +300,7 @@ impl Drop for AutoFreezeManager {
     fn drop(&mut self) {
         tracing::debug!("Shutting down auto-freeze manager");
 
-        // Detach all listeners from Frida
         if let Ok(mut listeners) = self.listeners.lock() {
-            // Create a temporary HookManager to call detach
             let mut hook_manager = HookManager::default();
             for (frida_listener, _auto_freeze_listener) in listeners.drain(..) {
                 hook_manager.detach(frida_listener);
@@ -354,7 +321,6 @@ impl InvocationListener for AutoFreezeListener {
     fn on_leave(&mut self, _context: InvocationContext) {}
 }
 
-/// Errors that can occur during auto-freeze operations
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code, reason = "Used when auto-freeze is enabled")]
 pub enum AutoFreezeError {

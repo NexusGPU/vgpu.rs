@@ -95,7 +95,6 @@ fn candidate_cuda_libs() -> Vec<String> {
     candidates
 }
 
-/// Trait for CUDA Checkpoint/Restore API
 pub trait CheckpointApi: Send + Sync {
     fn checkpoint(&self) -> CUresult;
     fn restore(&self) -> CUresult;
@@ -106,7 +105,6 @@ pub trait CheckpointApi: Send + Sync {
     fn pid(&self) -> u32;
 }
 
-/// Real implementation using dynamically loaded CUDA library
 pub struct CudaCheckpointApi {
     _lib: &'static Library,
     pid: ffi::c_int,
@@ -203,31 +201,35 @@ impl CudaCheckpointApi {
 
 impl CheckpointApi for CudaCheckpointApi {
     fn checkpoint(&self) -> CUresult {
-        match &self.checkpoint_fn {
-            Some(f) => unsafe { f(self.pid, core::ptr::null_mut()) },
-            None => CUresult::CUDA_ERROR_NOT_SUPPORTED,
-        }
+        self.checkpoint_fn
+            .as_ref()
+            .map_or(CUresult::CUDA_ERROR_NOT_SUPPORTED, |f| unsafe {
+                f(self.pid, core::ptr::null_mut())
+            })
     }
 
     fn restore(&self) -> CUresult {
-        match &self.restore_fn {
-            Some(f) => unsafe { f(self.pid, core::ptr::null_mut()) },
-            None => CUresult::CUDA_ERROR_NOT_SUPPORTED,
-        }
+        self.restore_fn
+            .as_ref()
+            .map_or(CUresult::CUDA_ERROR_NOT_SUPPORTED, |f| unsafe {
+                f(self.pid, core::ptr::null_mut())
+            })
     }
 
     fn lock(&self) -> CUresult {
-        match &self.lock_fn {
-            Some(f) => unsafe { f(self.pid, core::ptr::null_mut()) },
-            None => CUresult::CUDA_ERROR_NOT_SUPPORTED,
-        }
+        self.lock_fn
+            .as_ref()
+            .map_or(CUresult::CUDA_ERROR_NOT_SUPPORTED, |f| unsafe {
+                f(self.pid, core::ptr::null_mut())
+            })
     }
 
     fn unlock(&self) -> CUresult {
-        match &self.unlock_fn {
-            Some(f) => unsafe { f(self.pid, core::ptr::null_mut()) },
-            None => CUresult::CUDA_ERROR_NOT_SUPPORTED,
-        }
+        self.unlock_fn
+            .as_ref()
+            .map_or(CUresult::CUDA_ERROR_NOT_SUPPORTED, |f| unsafe {
+                f(self.pid, core::ptr::null_mut())
+            })
     }
 
     fn is_supported(&self) -> bool {
@@ -352,7 +354,6 @@ static TEST_CHECKPOINT_API: MockCheckpointApi = MockCheckpointApi::new();
 #[cfg(not(test))]
 static CHECKPOINT_API: OnceLock<Box<dyn CheckpointApi>> = OnceLock::new();
 
-/// Initialize the checkpoint API with the given host PID
 pub fn init_checkpoint_api(pid: u32) {
     #[cfg(not(test))]
     {
@@ -368,7 +369,6 @@ pub fn init_checkpoint_api(pid: u32) {
     }
 }
 
-/// Get the global checkpoint API instance
 pub fn checkpoint_api() -> Option<&'static dyn CheckpointApi> {
     #[cfg(not(test))]
     {
