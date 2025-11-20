@@ -103,13 +103,13 @@ pub trait CheckpointApi: Send + Sync {
     fn unlock(&self) -> CUresult;
     fn is_supported(&self) -> bool;
     fn get_process_state(&self) -> Result<CUprocessState, CUresult>;
-    fn host_pid(&self) -> u32;
+    fn pid(&self) -> u32;
 }
 
 /// Real implementation using dynamically loaded CUDA library
 pub struct CudaCheckpointApi {
     _lib: &'static Library,
-    host_pid: ffi::c_int,
+    pid: ffi::c_int,
     process_state_fn: Option<
         Symbol<
             'static,
@@ -147,7 +147,7 @@ pub struct CudaCheckpointApi {
 
 impl CudaCheckpointApi {
     #[cfg(not(test))]
-    unsafe fn new(host_pid: u32) -> Self {
+    unsafe fn new(pid: u32) -> Self {
         static RAW_LIB: OnceLock<Library> = OnceLock::new();
         let lib = RAW_LIB.get_or_init(|| {
             for candidate in candidate_cuda_libs() {
@@ -184,14 +184,14 @@ impl CudaCheckpointApi {
             .map(|sym| core::mem::transmute(sym));
 
         if checkpoint_fn.is_some() {
-            tracing::info!(host_pid = host_pid, "CUDA Checkpoint API: Available");
+            tracing::info!(pid = pid, "CUDA Checkpoint API: Available");
         } else {
             tracing::info!("CUDA Checkpoint API: Not available");
         }
 
         Self {
             _lib: lib,
-            host_pid: host_pid as ffi::c_int,
+            pid: pid as ffi::c_int,
             process_state_fn,
             checkpoint_fn,
             restore_fn,
@@ -204,28 +204,28 @@ impl CudaCheckpointApi {
 impl CheckpointApi for CudaCheckpointApi {
     fn checkpoint(&self) -> CUresult {
         match &self.checkpoint_fn {
-            Some(f) => unsafe { f(self.host_pid, core::ptr::null_mut()) },
+            Some(f) => unsafe { f(self.pid, core::ptr::null_mut()) },
             None => CUresult::CUDA_ERROR_NOT_SUPPORTED,
         }
     }
 
     fn restore(&self) -> CUresult {
         match &self.restore_fn {
-            Some(f) => unsafe { f(self.host_pid, core::ptr::null_mut()) },
+            Some(f) => unsafe { f(self.pid, core::ptr::null_mut()) },
             None => CUresult::CUDA_ERROR_NOT_SUPPORTED,
         }
     }
 
     fn lock(&self) -> CUresult {
         match &self.lock_fn {
-            Some(f) => unsafe { f(self.host_pid, core::ptr::null_mut()) },
+            Some(f) => unsafe { f(self.pid, core::ptr::null_mut()) },
             None => CUresult::CUDA_ERROR_NOT_SUPPORTED,
         }
     }
 
     fn unlock(&self) -> CUresult {
         match &self.unlock_fn {
-            Some(f) => unsafe { f(self.host_pid, core::ptr::null_mut()) },
+            Some(f) => unsafe { f(self.pid, core::ptr::null_mut()) },
             None => CUresult::CUDA_ERROR_NOT_SUPPORTED,
         }
     }
@@ -241,7 +241,7 @@ impl CheckpointApi for CudaCheckpointApi {
         match &self.process_state_fn {
             Some(f) => {
                 let mut state = CUprocessState_enum(0);
-                let result = unsafe { f(self.host_pid, &mut state) };
+                let result = unsafe { f(self.pid, &mut state) };
                 if result == CUresult::CUDA_SUCCESS {
                     Ok(state)
                 } else {
@@ -252,8 +252,8 @@ impl CheckpointApi for CudaCheckpointApi {
         }
     }
 
-    fn host_pid(&self) -> u32 {
-        self.host_pid as u32
+    fn pid(&self) -> u32 {
+        self.pid as u32
     }
 }
 
@@ -341,7 +341,7 @@ impl CheckpointApi for MockCheckpointApi {
         Ok(*self.state.read().expect("should acquire read lock"))
     }
 
-    fn host_pid(&self) -> u32 {
+    fn pid(&self) -> u32 {
         0
     }
 }
@@ -353,10 +353,10 @@ static TEST_CHECKPOINT_API: MockCheckpointApi = MockCheckpointApi::new();
 static CHECKPOINT_API: OnceLock<Box<dyn CheckpointApi>> = OnceLock::new();
 
 /// Initialize the checkpoint API with the given host PID
-pub fn init_checkpoint_api(host_pid: u32) {
+pub fn init_checkpoint_api(pid: u32) {
     #[cfg(not(test))]
     {
-        let api = Box::new(unsafe { CudaCheckpointApi::new(host_pid) });
+        let api = Box::new(unsafe { CudaCheckpointApi::new(pid) });
         if CHECKPOINT_API.set(api).is_err() {
             tracing::warn!("Checkpoint API already initialized");
         }
@@ -364,7 +364,7 @@ pub fn init_checkpoint_api(host_pid: u32) {
 
     #[cfg(test)]
     {
-        let _ = host_pid;
+        let _ = pid;
     }
 }
 

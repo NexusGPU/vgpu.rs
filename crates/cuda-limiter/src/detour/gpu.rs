@@ -1,6 +1,7 @@
 use std::ffi::c_int;
 use std::ffi::c_uint;
 use std::ffi::c_void;
+use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -376,7 +377,7 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
                 };
 
                 // Initialize checkpoint API with host_pid
-                crate::checkpoint::init_checkpoint_api(process_config.host_pid);
+                crate::checkpoint::init_checkpoint_api(process::id());
 
                 // Load tensor-fusion/ngpu.so
                 if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
