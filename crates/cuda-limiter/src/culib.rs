@@ -26,7 +26,7 @@ pub unsafe fn culib() -> &'static Lib {
             tracing::info!("Loading CUDA library from {}", candidate);
             match Library::new(&candidate) {
                 Ok(lib) => {
-                    return Lib::from_library(lib).expect("Failed to convert library to Lib");
+                    return Lib::from_library(lib).expect("should convert library to Lib");
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Failed to load {}", candidate);
