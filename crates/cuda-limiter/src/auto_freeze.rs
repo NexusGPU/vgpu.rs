@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use cudarc::driver::sys::CUresult;
 use utils::hooks::{HookManager, InvocationContext, InvocationListener, Listener, NativePointer};
 
-use crate::culib::checkpoint_api;
+use crate::checkpoint::{checkpoint_api, CUprocessState_enum};
 
 #[derive(Clone)]
 struct SendNativePointer(pub NativePointer);
@@ -46,8 +46,6 @@ pub struct AutoFreezeManager {
     activity_notifier: Arc<Condvar>,
     /// Idle timeout duration after which the process will be frozen
     idle_timeout: Duration,
-    /// Whether the process is currently frozen
-    is_frozen: Arc<AtomicBool>,
     /// Shutdown signal for the background thread
     shutdown: Arc<AtomicBool>,
     /// Attached native pointers
@@ -80,14 +78,12 @@ impl AutoFreezeManager {
 
         let last_activity = Arc::new(Mutex::new(Instant::now()));
         let activity_notifier = Arc::new(Condvar::new());
-        let is_frozen = Arc::new(AtomicBool::new(false));
         let shutdown = Arc::new(AtomicBool::new(false));
 
         let manager = Arc::new(Self {
             last_activity: Arc::clone(&last_activity),
             activity_notifier: Arc::clone(&activity_notifier),
             idle_timeout,
-            is_frozen: Arc::clone(&is_frozen),
             shutdown: Arc::clone(&shutdown),
             attached: Default::default(),
             listeners: Mutex::new(Vec::new()),
@@ -106,8 +102,14 @@ impl AutoFreezeManager {
     }
 
     pub fn record_activity(&self) -> Result<(), AutoFreezeError> {
-        if self.is_frozen.load(Ordering::Acquire) {
-            self.restore_process()?;
+        let Some(api) = checkpoint_api() else {
+            return Ok(());
+        };
+
+        if let Ok(state) = api.get_process_state() {
+            if state == CUprocessState_enum::CU_PROCESS_STATE_CHECKPOINTED {
+                self.restore_process()?;
+            }
         }
 
         if let Ok(mut last) = self.last_activity.lock() {
@@ -166,7 +168,6 @@ impl AutoFreezeManager {
     fn start_monitor_thread_for(manager: &Arc<Self>) {
         let last_activity = Arc::clone(&manager.last_activity);
         let activity_notifier = Arc::clone(&manager.activity_notifier);
-        let is_frozen = Arc::clone(&manager.is_frozen);
         let shutdown = Arc::clone(&manager.shutdown);
         let idle_timeout = manager.idle_timeout;
 
@@ -180,11 +181,21 @@ impl AutoFreezeManager {
             let mut consecutive_failures = 0;
 
             while !shutdown.load(Ordering::Acquire) {
-                let is_currently_frozen = is_frozen.load(Ordering::Acquire);
+                let Some(api) = checkpoint_api() else {
+                    let (guard, _) = activity_notifier
+                        .wait_timeout(last_guard, Duration::from_secs(1))
+                        .expect("should wait on condvar");
+                    last_guard = guard;
+                    continue;
+                };
+
+                let is_currently_frozen = api
+                    .get_process_state()
+                    .ok()
+                    .map(|state| state == CUprocessState_enum::CU_PROCESS_STATE_CHECKPOINTED)
+                    .unwrap_or(false);
 
                 if is_currently_frozen {
-                    // If frozen, just wait for activity notification or shutdown
-                    // Use a 1-second timeout to periodically check shutdown flag
                     let (guard, _timeout_result) = activity_notifier
                         .wait_timeout(last_guard, Duration::from_secs(1))
                         .expect("should wait on condvar");
@@ -192,19 +203,16 @@ impl AutoFreezeManager {
                     continue;
                 }
 
-                // Calculate remaining time until timeout
                 let elapsed = last_guard.elapsed();
 
                 if elapsed >= idle_timeout {
-                    // Timeout reached, freeze the process
                     let idle_secs = elapsed.as_secs();
-                    drop(last_guard); // Release lock before checkpoint
+                    drop(last_guard);
 
                     tracing::info!(idle_secs, "Idle timeout reached, freezing process");
 
                     if let Err(e) = Self::checkpoint_process() {
                         consecutive_failures += 1;
-                        // Backoff strategy: 5s initially, then 60s after 3 failures
                         let retry_delay = if consecutive_failures >= 3 {
                             Duration::from_secs(60)
                         } else {
@@ -212,7 +220,6 @@ impl AutoFreezeManager {
                         };
 
                         tracing::error!(error = %e, ?retry_delay, "Failed to checkpoint process");
-                        // On error, reacquire lock and retry after a delay
                         last_guard = last_activity
                             .lock()
                             .expect("should acquire last_activity lock");
@@ -222,16 +229,13 @@ impl AutoFreezeManager {
                         last_guard = guard;
                     } else {
                         consecutive_failures = 0;
-                        is_frozen.store(true, Ordering::Release);
                         tracing::info!("Process successfully frozen");
-                        // Reacquire lock to continue loop
                         last_guard = last_activity
                             .lock()
                             .expect("should acquire last_activity lock");
                     }
                 } else {
                     consecutive_failures = 0;
-                    // Wait for the remaining time or until notified of new activity
                     let remaining = idle_timeout - elapsed;
                     let (guard, timeout_result) = activity_notifier
                         .wait_timeout(last_guard, remaining)
@@ -250,15 +254,27 @@ impl AutoFreezeManager {
         });
     }
 
-    /// Attempts to checkpoint (freeze) the current process.
     fn checkpoint_process() -> Result<(), AutoFreezeError> {
-        let api = checkpoint_api();
+        let Some(api) = checkpoint_api() else {
+            return Err(AutoFreezeError::CheckpointNotSupported);
+        };
 
         if !api.is_supported() {
             return Err(AutoFreezeError::CheckpointNotSupported);
         }
 
-        // Lock GPU before checkpoint
+        let state = api
+            .get_process_state()
+            .map_err(AutoFreezeError::GetStateFailed)?;
+
+        if state != CUprocessState_enum::CU_PROCESS_STATE_RUNNING {
+            tracing::warn!(
+                state = ?state,
+                "Process is not in RUNNING state, skipping checkpoint"
+            );
+            return Ok(());
+        }
+
         let lock_result = api.lock();
         if lock_result != CUresult::CUDA_SUCCESS {
             return Err(AutoFreezeError::LockFailed(lock_result));
@@ -266,7 +282,6 @@ impl AutoFreezeManager {
 
         let result = api.checkpoint();
         if result != CUresult::CUDA_SUCCESS {
-            // If checkpoint fails, try to unlock before returning error
             let _ = api.unlock();
             return Err(AutoFreezeError::CheckpointFailed(result));
         }
@@ -274,30 +289,26 @@ impl AutoFreezeManager {
         Ok(())
     }
 
-    /// Restores the process from a checkpoint.
     fn restore_process(&self) -> Result<(), AutoFreezeError> {
         tracing::info!("Restoring process from checkpoint");
 
-        let api = checkpoint_api();
+        let Some(api) = checkpoint_api() else {
+            return Err(AutoFreezeError::CheckpointNotSupported);
+        };
+
         let result = api.restore();
         if result != CUresult::CUDA_SUCCESS {
             return Err(AutoFreezeError::RestoreFailed(result));
         }
 
-        // Unlock GPU after restore
         let unlock_result = api.unlock();
         if unlock_result != CUresult::CUDA_SUCCESS {
             return Err(AutoFreezeError::UnlockFailed(unlock_result));
         }
 
-        // Reset the idle timer BEFORE marking as unfrozen to avoid race condition
-        // with the monitor thread which might see is_frozen=false but old timestamp
         if let Ok(mut last) = self.last_activity.lock() {
             *last = Instant::now();
         }
-
-        // Mark as unfrozen
-        self.is_frozen.store(false, Ordering::Release);
 
         tracing::info!("Process successfully restored");
 
@@ -348,6 +359,9 @@ pub enum AutoFreezeError {
     #[error("Failed to unlock GPU: {0:?}")]
     UnlockFailed(CUresult),
 
+    #[error("Failed to get process state: {0:?}")]
+    GetStateFailed(CUresult),
+
     #[error("Failed to attach listener: {0}")]
     AttachFailed(String),
 
@@ -360,7 +374,7 @@ mod tests {
     use serial_test::serial;
 
     use super::*;
-    use crate::culib::mock_checkpoint_api;
+    use crate::checkpoint::mock_checkpoint_api;
 
     fn setup_test() {
         mock_checkpoint_api().reset_counters();
@@ -375,7 +389,6 @@ mod tests {
         let manager = AutoFreezeManager::new(timeout);
 
         assert_eq!(manager.idle_timeout, timeout);
-        assert!(!manager.is_frozen.load(Ordering::Acquire));
     }
 
     #[test_log::test]
@@ -391,7 +404,6 @@ mod tests {
 
         thread::sleep(Duration::from_millis(100));
 
-        assert!(!manager.is_frozen.load(Ordering::Acquire));
         assert_eq!(mock_checkpoint_api().checkpoint_call_count(), 0);
         assert_eq!(mock_checkpoint_api().restore_call_count(), 0);
     }
@@ -401,15 +413,11 @@ mod tests {
     fn freezes_after_idle_timeout() {
         setup_test();
 
-        // Use a very short timeout for testing
         let timeout = Duration::from_millis(200);
-        let manager = AutoFreezeManager::new(timeout);
+        let _manager = AutoFreezeManager::new(timeout);
 
-        // Wait for timeout plus some buffer
         thread::sleep(timeout + Duration::from_millis(300));
 
-        // Should have frozen by now
-        assert!(manager.is_frozen.load(Ordering::Acquire));
         assert_eq!(mock_checkpoint_api().checkpoint_call_count(), 1);
     }
 
@@ -421,16 +429,12 @@ mod tests {
         let timeout = Duration::from_millis(200);
         let manager = AutoFreezeManager::new(timeout);
 
-        // Wait for freeze
         thread::sleep(timeout + Duration::from_millis(300));
-        assert!(manager.is_frozen.load(Ordering::Acquire));
 
-        // Record activity should restore
         manager
             .record_activity()
             .expect("should restore and record activity");
 
-        assert!(!manager.is_frozen.load(Ordering::Acquire));
         assert_eq!(mock_checkpoint_api().restore_call_count(), 1);
     }
 
@@ -442,32 +446,22 @@ mod tests {
         let timeout = Duration::from_millis(200);
         let manager = AutoFreezeManager::new(timeout);
 
-        // First cycle: freeze
         thread::sleep(timeout + Duration::from_millis(300));
-        assert!(manager.is_frozen.load(Ordering::Acquire));
         let first_checkpoint_count = mock_checkpoint_api().checkpoint_call_count();
         assert_eq!(first_checkpoint_count, 1);
 
-        // Unfreeze with activity
         manager.record_activity().expect("should restore process");
-        assert!(!manager.is_frozen.load(Ordering::Acquire));
         assert_eq!(mock_checkpoint_api().restore_call_count(), 1);
 
-        // Second cycle: freeze again
         thread::sleep(timeout + Duration::from_millis(300));
-        assert!(manager.is_frozen.load(Ordering::Acquire));
         assert_eq!(mock_checkpoint_api().checkpoint_call_count(), 2);
 
-        // Unfreeze again
         manager
             .record_activity()
             .expect("should restore process again");
-        assert!(!manager.is_frozen.load(Ordering::Acquire));
         assert_eq!(mock_checkpoint_api().restore_call_count(), 2);
 
-        // Third cycle to prove unlimited rounds
         thread::sleep(timeout + Duration::from_millis(300));
-        assert!(manager.is_frozen.load(Ordering::Acquire));
         assert_eq!(mock_checkpoint_api().checkpoint_call_count(), 3);
     }
 
@@ -479,14 +473,11 @@ mod tests {
         let timeout = Duration::from_millis(300);
         let manager = AutoFreezeManager::new(timeout);
 
-        // Record activity periodically to prevent freezing
         for _ in 0..5 {
             thread::sleep(Duration::from_millis(150));
             manager.record_activity().expect("should record activity");
         }
 
-        // Should not have frozen
-        assert!(!manager.is_frozen.load(Ordering::Acquire));
         assert_eq!(mock_checkpoint_api().checkpoint_call_count(), 0);
     }
 
@@ -500,7 +491,6 @@ mod tests {
 
         let start = Instant::now();
 
-        // Record activity multiple times in quick succession
         for _ in 0..10 {
             manager.record_activity().expect("should record activity");
             thread::sleep(Duration::from_millis(50));
@@ -508,11 +498,7 @@ mod tests {
 
         let elapsed = start.elapsed();
 
-        // Should not have frozen even though we're constantly notifying
-        assert!(!manager.is_frozen.load(Ordering::Acquire));
         assert_eq!(mock_checkpoint_api().checkpoint_call_count(), 0);
-
-        // Verify the test ran quickly (no long sleep delays)
         assert!(elapsed < Duration::from_secs(2));
     }
 
@@ -524,13 +510,10 @@ mod tests {
         mock_checkpoint_api().set_should_fail(true);
 
         let timeout = Duration::from_millis(200);
-        let manager = AutoFreezeManager::new(timeout);
+        let _manager = AutoFreezeManager::new(timeout);
 
-        // Wait for attempted freeze
         thread::sleep(timeout + Duration::from_millis(500));
 
-        // Should have attempted checkpoint but remain unfrozen due to failure
-        assert!(!manager.is_frozen.load(Ordering::Acquire));
         assert!(mock_checkpoint_api().checkpoint_call_count() > 0);
     }
 
@@ -544,13 +527,10 @@ mod tests {
 
         let checkpoint_count_before = mock_checkpoint_api().checkpoint_call_count();
 
-        // Trigger shutdown by dropping
         drop(manager);
 
-        // Give thread time to notice shutdown
         thread::sleep(Duration::from_millis(300));
 
-        // No new checkpoints should occur after shutdown
         let checkpoint_count_after = mock_checkpoint_api().checkpoint_call_count();
         assert!(checkpoint_count_after <= checkpoint_count_before + 1);
     }

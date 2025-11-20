@@ -29,6 +29,7 @@ use utils::replace_symbol;
 use crate::auto_freeze::AutoFreezeManager;
 
 mod auto_freeze;
+mod checkpoint;
 mod command_handler;
 mod config;
 mod culib;
@@ -407,8 +408,11 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     let sym_ptr = FN_DLSYM(handle, symbol);
 
     if may_be_cuda {
-        // Only attach auto-freeze if checkpoint API is supported
-        if !culib::checkpoint_api().is_supported() {
+        let Some(api) = checkpoint::checkpoint_api() else {
+            return sym_ptr;
+        };
+
+        if !api.is_supported() {
             return sym_ptr;
         }
 
