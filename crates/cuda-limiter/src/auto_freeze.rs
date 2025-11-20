@@ -177,6 +177,8 @@ impl AutoFreezeManager {
                 .lock()
                 .expect("should acquire last_activity lock");
 
+            let mut consecutive_failures = 0;
+
             while !shutdown.load(Ordering::Acquire) {
                 let is_currently_frozen = is_frozen.load(Ordering::Acquire);
 
@@ -201,16 +203,25 @@ impl AutoFreezeManager {
                     tracing::info!(idle_secs, "Idle timeout reached, freezing process");
 
                     if let Err(e) = Self::checkpoint_process() {
-                        tracing::error!(error = %e, "Failed to checkpoint process");
-                        // On error, reacquire lock and retry after a short delay
+                        consecutive_failures += 1;
+                        // Backoff strategy: 5s initially, then 60s after 3 failures
+                        let retry_delay = if consecutive_failures >= 3 {
+                            Duration::from_secs(60)
+                        } else {
+                            Duration::from_secs(5)
+                        };
+
+                        tracing::error!(error = %e, ?retry_delay, "Failed to checkpoint process");
+                        // On error, reacquire lock and retry after a delay
                         last_guard = last_activity
                             .lock()
                             .expect("should acquire last_activity lock");
                         let (guard, _) = activity_notifier
-                            .wait_timeout(last_guard, Duration::from_secs(1))
+                            .wait_timeout(last_guard, retry_delay)
                             .expect("should wait on condvar");
                         last_guard = guard;
                     } else {
+                        consecutive_failures = 0;
                         is_frozen.store(true, Ordering::Release);
                         tracing::info!("Process successfully frozen");
                         // Reacquire lock to continue loop
@@ -219,6 +230,7 @@ impl AutoFreezeManager {
                             .expect("should acquire last_activity lock");
                     }
                 } else {
+                    consecutive_failures = 0;
                     // Wait for the remaining time or until notified of new activity
                     let remaining = idle_timeout - elapsed;
                     let (guard, timeout_result) = activity_notifier
@@ -278,15 +290,14 @@ impl AutoFreezeManager {
             return Err(AutoFreezeError::UnlockFailed(unlock_result));
         }
 
-        // Mark as unfrozen and reset timer
-        // Note: We set is_frozen to false BEFORE calling record_activity()
-        // to prevent infinite recursion, since record_activity() checks this flag
-        self.is_frozen.store(false, Ordering::Release);
-
-        // Reset the idle timer (will not trigger restore again since is_frozen is now false)
+        // Reset the idle timer BEFORE marking as unfrozen to avoid race condition
+        // with the monitor thread which might see is_frozen=false but old timestamp
         if let Ok(mut last) = self.last_activity.lock() {
             *last = Instant::now();
         }
+
+        // Mark as unfrozen
+        self.is_frozen.store(false, Ordering::Release);
 
         tracing::info!("Process successfully restored");
 
