@@ -103,6 +103,7 @@ pub trait CheckpointApi: Send + Sync {
     fn unlock(&self) -> CUresult;
     fn is_supported(&self) -> bool;
     fn get_process_state(&self) -> Result<CUprocessState, CUresult>;
+    fn host_pid(&self) -> u32;
 }
 
 /// Real implementation using dynamically loaded CUDA library
@@ -250,6 +251,10 @@ impl CheckpointApi for CudaCheckpointApi {
             None => Err(CUresult::CUDA_ERROR_NOT_SUPPORTED),
         }
     }
+
+    fn host_pid(&self) -> u32 {
+        self.host_pid as u32
+    }
 }
 
 #[cfg(test)]
@@ -334,6 +339,10 @@ impl CheckpointApi for MockCheckpointApi {
 
     fn get_process_state(&self) -> Result<CUprocessState, CUresult> {
         Ok(*self.state.read().expect("should acquire read lock"))
+    }
+
+    fn host_pid(&self) -> u32 {
+        0
     }
 }
 

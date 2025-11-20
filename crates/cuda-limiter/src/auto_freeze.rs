@@ -263,12 +263,15 @@ impl AutoFreezeManager {
             return Err(AutoFreezeError::CheckpointNotSupported);
         }
 
+        let host_pid = api.host_pid();
+
         let state = api
             .get_process_state()
-            .map_err(AutoFreezeError::GetStateFailed)?;
+            .map_err(|result| AutoFreezeError::GetStateFailed { host_pid, result })?;
 
         if state != CUprocessState_enum::CU_PROCESS_STATE_RUNNING {
             tracing::warn!(
+                host_pid,
                 state = ?state,
                 "Process is not in RUNNING state, skipping checkpoint"
             );
@@ -277,40 +280,48 @@ impl AutoFreezeManager {
 
         let lock_result = api.lock();
         if lock_result != CUresult::CUDA_SUCCESS {
-            return Err(AutoFreezeError::LockFailed(lock_result));
+            return Err(AutoFreezeError::LockFailed {
+                host_pid,
+                result: lock_result,
+            });
         }
 
         let result = api.checkpoint();
         if result != CUresult::CUDA_SUCCESS {
             let _ = api.unlock();
-            return Err(AutoFreezeError::CheckpointFailed(result));
+            return Err(AutoFreezeError::CheckpointFailed { host_pid, result });
         }
 
         Ok(())
     }
 
     fn restore_process(&self) -> Result<(), AutoFreezeError> {
-        tracing::info!("Restoring process from checkpoint");
-
         let Some(api) = checkpoint_api() else {
             return Err(AutoFreezeError::CheckpointNotSupported);
         };
 
+        let host_pid = api.host_pid();
+
+        tracing::info!(host_pid, "Restoring process from checkpoint");
+
         let result = api.restore();
         if result != CUresult::CUDA_SUCCESS {
-            return Err(AutoFreezeError::RestoreFailed(result));
+            return Err(AutoFreezeError::RestoreFailed { host_pid, result });
         }
 
         let unlock_result = api.unlock();
         if unlock_result != CUresult::CUDA_SUCCESS {
-            return Err(AutoFreezeError::UnlockFailed(unlock_result));
+            return Err(AutoFreezeError::UnlockFailed {
+                host_pid,
+                result: unlock_result,
+            });
         }
 
         if let Ok(mut last) = self.last_activity.lock() {
             *last = Instant::now();
         }
 
-        tracing::info!("Process successfully restored");
+        tracing::info!(host_pid, "Process successfully restored");
 
         Ok(())
     }
@@ -347,20 +358,20 @@ impl InvocationListener for AutoFreezeListener {
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code, reason = "Used when auto-freeze is enabled")]
 pub enum AutoFreezeError {
-    #[error("Failed to checkpoint process: {0:?}")]
-    CheckpointFailed(CUresult),
+    #[error("Failed to checkpoint process (host_pid={host_pid}): {result:?}")]
+    CheckpointFailed { host_pid: u32, result: CUresult },
 
-    #[error("Failed to restore process: {0:?}")]
-    RestoreFailed(CUresult),
+    #[error("Failed to restore process (host_pid={host_pid}): {result:?}")]
+    RestoreFailed { host_pid: u32, result: CUresult },
 
-    #[error("Failed to lock GPU: {0:?}")]
-    LockFailed(CUresult),
+    #[error("Failed to lock GPU (host_pid={host_pid}): {result:?}")]
+    LockFailed { host_pid: u32, result: CUresult },
 
-    #[error("Failed to unlock GPU: {0:?}")]
-    UnlockFailed(CUresult),
+    #[error("Failed to unlock GPU (host_pid={host_pid}): {result:?}")]
+    UnlockFailed { host_pid: u32, result: CUresult },
 
-    #[error("Failed to get process state: {0:?}")]
-    GetStateFailed(CUresult),
+    #[error("Failed to get process state (host_pid={host_pid}): {result:?}")]
+    GetStateFailed { host_pid: u32, result: CUresult },
 
     #[error("Failed to attach listener: {0}")]
     AttachFailed(String),
