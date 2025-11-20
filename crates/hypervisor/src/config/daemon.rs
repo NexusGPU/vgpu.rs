@@ -413,13 +413,13 @@ mod tests {
             "autoFreezeAndResume": {
                 "autoFreeze": [
                     {
-                        "qos": "High",
+                        "qos": "high",
                         "freezeToMemTTL": "5m",
                         "freezeToDiskTTL": "30m",
                         "enable": true
                     },
                     {
-                        "qos": "Low",
+                        "qos": "low",
                         "freezeToMemTTL": "1m",
                         "freezeToDiskTTL": "10m",
                         "enable": false
@@ -478,7 +478,7 @@ mod tests {
             "autoFreezeAndResume": {
                 "autoFreeze": [
                     {
-                        "qos": "Medium"
+                        "qos": "medium"
                     }
                 ]
             }
@@ -528,7 +528,7 @@ mod tests {
             "autoFreezeAndResume": {
                 "autoFreeze": [
                     {
-                        "qos": "Critical",
+                        "qos": "critical",
                         "freezeToMemTTL": "10m",
                         "enable": true
                     }
