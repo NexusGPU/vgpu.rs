@@ -197,7 +197,6 @@ fn initialize_auto_freeze_manager(auto_freeze_config: Option<api_types::AutoFree
         }
     };
 
-    // Create and register the manager
     register_auto_freeze_manager(idle_timeout);
 }
 
@@ -408,6 +407,11 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     let sym_ptr = FN_DLSYM(handle, symbol);
 
     if may_be_cuda {
+        // Skip checkpoint APIs to avoid recursive calls in auto-freeze manager
+        if symbol_str.starts_with("cuCheckpoint") {
+            return sym_ptr;
+        }
+
         let Some(api) = checkpoint::checkpoint_api() else {
             return sym_ptr;
         };
