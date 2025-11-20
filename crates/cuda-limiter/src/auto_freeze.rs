@@ -55,7 +55,7 @@ pub struct AutoFreezeManager {
     /// Storage for listeners and their Frida handles
     /// We only store the listener and the handle, not HookManager (which is just a one-time tool)
     /// Protected by Mutex for thread safety, even though typically only accessed from dlsym detour
-    listeners: Mutex<Vec<(Listener, AutoFreezeListener)>>,
+    listeners: Mutex<Vec<(Listener, Box<AutoFreezeListener>)>>,
 }
 
 // Safety: AutoFreezeManager can be safely shared and sent between threads because:
@@ -145,11 +145,12 @@ impl AutoFreezeManager {
 
         // Create a temporary hook manager (just a tool to call attach)
         let mut hook_manager = HookManager::default();
-        let mut listener = self.as_listener();
+        // Box the listener to ensure its address remains stable when moved to the vector
+        let mut listener = Box::new(self.as_listener());
 
         // Attach the listener to the native pointer, get the Frida handle
         let frida_listener = hook_manager
-            .attach(pointer, &mut listener)
+            .attach(pointer, &mut *listener)
             .map_err(|e| AutoFreezeError::AttachFailed(format!("{e:?}")))?;
 
         // Store the listener and Frida handle to keep them alive
