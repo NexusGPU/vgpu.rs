@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum QosLevel {
     Low,
     Medium,
