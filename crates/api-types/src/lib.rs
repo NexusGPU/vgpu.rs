@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum QosLevel {
     Low,
     Medium,
@@ -78,6 +79,17 @@ pub struct PodInfoResponse {
     pub message: String,
 }
 
+/// Auto-freeze configuration information
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutoFreezeInfo {
+    /// Time-to-live for freezing to memory (duration string, e.g., "5m", "1h")
+    pub freeze_to_mem_ttl: Option<String>,
+    /// Time-to-live for freezing to disk (duration string, e.g., "30m", "2h")
+    pub freeze_to_disk_ttl: Option<String>,
+    /// Whether auto-freeze is enabled
+    pub enable: bool,
+}
+
 /// Pod-level information for GPU and limiter setup
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct PodInfo {
@@ -95,6 +107,9 @@ pub struct PodInfo {
     pub qos_level: Option<QosLevel>,
     /// Whether the workload is a compute shard
     pub compute_shard: bool,
+    /// Auto-freeze configuration based on QoS level
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_freeze: Option<AutoFreezeInfo>,
 }
 
 /// Response for process initialization

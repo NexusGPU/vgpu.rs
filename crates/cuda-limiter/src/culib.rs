@@ -7,22 +7,18 @@ use libloading::Library;
 const PRIMARY_CUDA_LIB: &str = "libcuda.so.1";
 const FALLBACK_CUDA_LIB: &str = "libcuda.so";
 
-/// Provide candidate CUDA library names to attempt in order
-fn candidate_cuda_libs() -> Vec<String> {
-    let mut candidates = Vec::with_capacity(3);
-    if let Ok(path) = std::env::var("TF_CUDA_LIB_PATH") {
-        candidates.push(path);
-    }
-    candidates.push(PRIMARY_CUDA_LIB.to_string());
-    candidates.push(FALLBACK_CUDA_LIB.to_string());
-    candidates
-}
-
 pub unsafe fn culib() -> &'static Lib {
     static LIB: std::sync::OnceLock<Lib> = std::sync::OnceLock::new();
     LIB.get_or_init(|| {
         let mut last_err: Option<libloading::Error> = None;
-        for candidate in candidate_cuda_libs() {
+        let mut candidates = Vec::with_capacity(3);
+        if let Ok(path) = std::env::var("TF_CUDA_LIB_PATH") {
+            candidates.push(path);
+        }
+        candidates.push(PRIMARY_CUDA_LIB.to_string());
+        candidates.push(FALLBACK_CUDA_LIB.to_string());
+
+        for candidate in candidates {
             tracing::info!("Loading CUDA library from {}", candidate);
             match Library::new(&candidate) {
                 Ok(lib) => {

@@ -216,6 +216,13 @@ impl Tasks {
         let hypervisor = app.services().hypervisor.clone();
         let token = self.cancellation_token.clone();
 
+        let auto_freeze_config = cli
+            .scheduling_config
+            .as_ref()
+            .map(|sc| sc.auto_freeze_and_resume.clone())
+            .unwrap_or_default();
+        let auto_freeze_config = std::sync::Arc::new(auto_freeze_config);
+
         tokio::spawn(async move {
             tracing::info!("Starting API server on {}", listen_addr);
 
@@ -230,6 +237,7 @@ impl Tasks {
                 jwt_config,
                 hypervisor,
                 command_dispatcher,
+                auto_freeze_config,
             );
 
             if let Err(e) = api_server.run(token).await {
