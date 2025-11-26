@@ -98,8 +98,7 @@ fn init_limiter() {
             {
                 Ok(nvml) => nvml,
                 Err(e) => {
-                    tracing::error!("failed to initialize NVML: {}", e);
-                    return;
+                    panic!("failed to initialize NVML: {e}");
                 }
             };
 

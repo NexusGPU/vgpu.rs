@@ -26,7 +26,7 @@ jobs:
       published: ${{ github.event_name == 'workflow_dispatch' || steps.semantic.outputs.new_release_published }}
       version: ${{ github.event_name == 'workflow_dispatch' && steps.set_tag.outputs.tag || steps.semantic.outputs.new_release_version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set Tag
         if: github.event_name == 'workflow_dispatch'
@@ -111,7 +111,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Update apt repositories
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -184,7 +184,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Download all artifacts
         uses: actions/download-artifact@v6
@@ -249,7 +249,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
@@ -337,7 +337,7 @@ jobs:
     if: needs.publish_hypervisor.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Login to DockerHub
         uses: docker/login-action@v3
