@@ -79,6 +79,12 @@ impl Tasks {
         let pod_manager_cleanup_loop_task = self.spawn_pod_manager_cleanup_loop_task(app);
         self.tasks.push(pod_manager_cleanup_loop_task);
 
+        // start device plugin if enabled
+        if cli.enable_device_plugin {
+            let device_plugin_task = self.spawn_device_plugin_task(app);
+            self.tasks.push(device_plugin_task);
+        }
+
         Ok(())
     }
 
@@ -276,6 +282,52 @@ impl Tasks {
             pod_manager
                 .run_cleanup_loop(Duration::from_secs(120), token)
                 .await;
+        })
+    }
+
+    fn spawn_device_plugin_task(&self, app: &Application) -> JoinHandle<()> {
+        let cli = app.daemon_args();
+        let device_plugin = app.services().device_plugin.clone();
+        let device_plugin_path = cli.device_plugin_path.clone();
+        let token = self.cancellation_token.clone();
+
+        tokio::spawn(async move {
+            let Some(device_plugin) = device_plugin else {
+                tracing::warn!("Device plugin not initialized, skipping device plugin task");
+                return;
+            };
+
+            tracing::info!("Starting device plugin task");
+
+            let socket_path = device_plugin_path.join("tensor-fusion.sock");
+            let socket_path_str = socket_path.to_string_lossy().to_string();
+
+            // start device plugin server
+            if let Err(e) = device_plugin.start(&socket_path_str, token.clone()).await {
+                tracing::error!("Failed to start device plugin server: {e}");
+                return;
+            }
+
+            // wait a moment for the server to start
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // register with kubelet
+            let kubelet_socket = device_plugin_path.join("kubelet.sock");
+            let kubelet_socket_str = kubelet_socket.to_string_lossy().to_string();
+
+            if let Err(e) = device_plugin
+                .register_with_kubelet(&kubelet_socket_str)
+                .await
+            {
+                tracing::error!("Failed to register device plugin with kubelet: {e}");
+                return;
+            }
+
+            tracing::info!("Device plugin registered successfully");
+
+            // wait for cancellation
+            token.cancelled().await;
+            tracing::info!("Device plugin task completed");
         })
     }
 }

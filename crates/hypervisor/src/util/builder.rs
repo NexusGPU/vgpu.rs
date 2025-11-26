@@ -13,6 +13,7 @@ use crate::core::pod::{
     pod_state_store::PodStateStore,
 };
 use crate::platform::host_pid_probe::HostPidProbe;
+use crate::platform::k8s::device_plugin::GpuDevicePlugin;
 use crate::platform::k8s::PodInfoCache;
 use crate::platform::limiter_comm::CommandDispatcher;
 use crate::platform::nvml::gpu_device_state_watcher::GpuDeviceStateWatcher;
@@ -46,6 +47,13 @@ impl ApplicationBuilder {
         // Create pod manager (special handling for callback functions)
         let pod_manager = self.create_pod_manager(&components, &gpu_system).await?;
 
+        // Create device plugin if enabled
+        let device_plugin = if self.daemon_args.enable_device_plugin {
+            Some(self.create_device_plugin())
+        } else {
+            None
+        };
+
         // Build application services with all components
         let services = ApplicationServices {
             hypervisor: components.hypervisor,
@@ -56,6 +64,7 @@ impl ApplicationBuilder {
             limiter_coordinator: components.limiter_coordinator,
             gpu_device_state_watcher: components.gpu_device_state_watcher,
             pod_info_cache: components.pod_info_cache,
+            device_plugin,
         };
 
         Ok(Application::new(services, self.daemon_args))
@@ -156,6 +165,25 @@ impl ApplicationBuilder {
         ));
 
         Ok(pod_manager)
+    }
+
+    /// Create device plugin
+    fn create_device_plugin(&self) -> Arc<GpuDevicePlugin> {
+        let endpoint = "tensor-fusion.sock".to_string();
+        let resource_name = self.daemon_args.device_plugin_resource_name.clone();
+        let host_path = self
+            .daemon_args
+            .shared_memory_base_path
+            .to_string_lossy()
+            .to_string();
+
+        GpuDevicePlugin::new(
+            endpoint,
+            resource_name,
+            host_path,
+            false, // pre_start_required
+            false, // get_preferred_allocation_available
+        )
     }
 }
 
