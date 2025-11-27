@@ -1,16 +1,35 @@
+use api_types::QosLevel;
 use clap::Parser;
 use serde::{Deserialize, Deserializer};
 use std::path::PathBuf;
 
-/// Hypervisor scheduling configuration containing all scheduling-related parameters
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFreeze {
+    pub qos: QosLevel,
+    #[serde(rename = "freezeToMemTTL")]
+    pub freeze_to_mem_ttl: Option<String>,
+    #[serde(rename = "freezeToDiskTTL")]
+    pub freeze_to_disk_ttl: Option<String>,
+    pub enable: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFreezeAndResume {
+    #[serde(default)]
+    pub auto_freeze: Vec<AutoFreeze>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HypervisorScheduling {
     #[serde(default)]
     pub elastic_rate_limit_parameters: ElasticRateLimitParameters,
+    #[serde(default)]
+    pub auto_freeze_and_resume: AutoFreezeAndResume,
 }
 
-/// Elastic Rate Limit parameters for controlling GPU resource allocation
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ElasticRateLimitParameters {
@@ -392,6 +411,154 @@ mod tests {
         assert_eq!(
             config.elastic_rate_limit_parameters.max_refill_rate,
             100_000.0
+        );
+    }
+
+    #[test]
+    fn deserialize_auto_freeze_config() {
+        let json = r#"{
+            "autoFreezeAndResume": {
+                "autoFreeze": [
+                    {
+                        "qos": "high",
+                        "freezeToMemTTL": "5m",
+                        "freezeToDiskTTL": "30m",
+                        "enable": true
+                    },
+                    {
+                        "qos": "low",
+                        "freezeToMemTTL": "1m",
+                        "freezeToDiskTTL": "10m",
+                        "enable": false
+                    }
+                ]
+            }
+        }"#;
+
+        let config: HypervisorScheduling =
+            serde_json::from_str(json).expect("should deserialize auto-freeze configuration");
+
+        assert_eq!(
+            config.auto_freeze_and_resume.auto_freeze.len(),
+            2,
+            "should have two auto-freeze configurations"
+        );
+
+        let high_qos = &config.auto_freeze_and_resume.auto_freeze[0];
+        assert_eq!(
+            high_qos.qos,
+            api_types::QosLevel::High,
+            "first config should be for High QoS"
+        );
+        assert_eq!(
+            high_qos.freeze_to_mem_ttl.as_deref(),
+            Some("5m"),
+            "freeze_to_mem_ttl should match"
+        );
+        assert_eq!(
+            high_qos.freeze_to_disk_ttl.as_deref(),
+            Some("30m"),
+            "freeze_to_disk_ttl should match"
+        );
+        assert_eq!(
+            high_qos.enable,
+            Some(true),
+            "enable should be true for High QoS"
+        );
+
+        let low_qos = &config.auto_freeze_and_resume.auto_freeze[1];
+        assert_eq!(
+            low_qos.qos,
+            api_types::QosLevel::Low,
+            "second config should be for Low QoS"
+        );
+        assert_eq!(
+            low_qos.enable,
+            Some(false),
+            "enable should be false for Low QoS"
+        );
+    }
+
+    #[test]
+    fn deserialize_auto_freeze_with_optional_fields() {
+        let json = r#"{
+            "autoFreezeAndResume": {
+                "autoFreeze": [
+                    {
+                        "qos": "medium"
+                    }
+                ]
+            }
+        }"#;
+
+        let config: HypervisorScheduling =
+            serde_json::from_str(json).expect("should deserialize with optional fields missing");
+
+        let medium_qos = &config.auto_freeze_and_resume.auto_freeze[0];
+        assert_eq!(
+            medium_qos.qos,
+            api_types::QosLevel::Medium,
+            "should be Medium QoS"
+        );
+        assert_eq!(
+            medium_qos.freeze_to_mem_ttl, None,
+            "freeze_to_mem_ttl should be None"
+        );
+        assert_eq!(
+            medium_qos.freeze_to_disk_ttl, None,
+            "freeze_to_disk_ttl should be None"
+        );
+        assert_eq!(medium_qos.enable, None, "enable should be None");
+    }
+
+    #[test]
+    fn deserialize_empty_auto_freeze_config() {
+        let json = r#"{}"#;
+
+        let config: HypervisorScheduling =
+            serde_json::from_str(json).expect("should deserialize empty config");
+
+        assert_eq!(
+            config.auto_freeze_and_resume.auto_freeze.len(),
+            0,
+            "should have empty auto-freeze list"
+        );
+    }
+
+    #[test]
+    fn deserialize_combined_config() {
+        let json = r#"{
+            "elasticRateLimitParameters": {
+                "maxRefillRate": "50000.0",
+                "minRefillRate": "5.0"
+            },
+            "autoFreezeAndResume": {
+                "autoFreeze": [
+                    {
+                        "qos": "critical",
+                        "freezeToMemTTL": "10m",
+                        "enable": true
+                    }
+                ]
+            }
+        }"#;
+
+        let config: HypervisorScheduling =
+            serde_json::from_str(json).expect("should deserialize combined configuration");
+
+        assert_eq!(
+            config.elastic_rate_limit_parameters.max_refill_rate, 50_000.0,
+            "elastic rate limit should be parsed"
+        );
+        assert_eq!(
+            config.auto_freeze_and_resume.auto_freeze.len(),
+            1,
+            "should have one auto-freeze config"
+        );
+        assert_eq!(
+            config.auto_freeze_and_resume.auto_freeze[0].qos,
+            api_types::QosLevel::Critical,
+            "should be Critical QoS"
         );
     }
 }

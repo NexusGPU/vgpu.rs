@@ -6,29 +6,21 @@ use api_types::{PodInfoResponse, ProcessInitResponse};
 use error_stack::{Report, ResultExt};
 use reqwest::blocking::Client;
 
-/// Service account token path in Kubernetes pods
 const SERVICE_ACCOUNT_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
-
-/// Default HTTP request timeout
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Pod configuration returned from GET /api/v1/pod
 #[derive(Debug, Clone)]
 pub struct PodConfig {
-    /// GPU UUIDs assigned to the pod
     pub gpu_uuids: Vec<String>,
-    /// Whether compute sharding is enabled
     pub compute_shard: bool,
+    pub auto_freeze: Option<api_types::AutoFreezeInfo>,
 }
 
-/// Process configuration returned from POST /api/v1/process
 #[derive(Debug, Clone)]
 pub struct ProcessConfig {
-    /// Host PID of the process
     pub host_pid: u32,
 }
 
-/// Error types for configuration operations
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("Failed to read service account token")]
@@ -45,16 +37,6 @@ pub enum ConfigError {
     JsonParsing,
 }
 
-/// Get pod configuration from hypervisor
-///
-/// Makes a GET request to /api/v1/pod to retrieve GPU assignments and compute shard status.
-///
-/// # Errors
-///
-/// Returns [`ConfigError::TokenRead`] if the service account token cannot be read.
-/// Returns [`ConfigError::HttpRequest`] if the HTTP request fails.
-/// Returns [`ConfigError::JsonParsing`] if the response cannot be parsed.
-/// Returns [`ConfigError::MissingData`] if the response is missing required data.
 #[tracing::instrument(skip(hypervisor_ip, hypervisor_port), fields(url))]
 pub fn get_worker_config(
     hypervisor_ip: impl AsRef<str>,
@@ -63,17 +45,6 @@ pub fn get_worker_config(
     request_pod_info(hypervisor_ip.as_ref(), hypervisor_port.as_ref())
 }
 
-/// Initialize worker process with hypervisor
-///
-/// Makes a POST request to /api/v1/process to register the worker process
-/// and retrieve the host PID.
-///
-/// # Errors
-///
-/// Returns [`ConfigError::TokenRead`] if the service account token cannot be read.
-/// Returns [`ConfigError::HttpRequest`] if the HTTP request fails.
-/// Returns [`ConfigError::JsonParsing`] if the response cannot be parsed.
-/// Returns [`ConfigError::MissingData`] if the response is missing required data.
 #[tracing::instrument(skip(hypervisor_ip, hypervisor_port), fields(url, container_name))]
 pub fn init_worker(
     hypervisor_ip: impl AsRef<str>,
@@ -87,7 +58,6 @@ pub fn init_worker(
     )
 }
 
-/// Request pod information from hypervisor API
 #[tracing::instrument(level = "debug", fields(container_pid))]
 fn request_pod_info(
     hypervisor_ip: &str,
@@ -153,10 +123,10 @@ fn request_pod_info(
     Ok(PodConfig {
         gpu_uuids: pod_info.gpu_uuids,
         compute_shard: pod_info.compute_shard,
+        auto_freeze: pod_info.auto_freeze,
     })
 }
 
-/// Request process initialization from hypervisor API
 #[tracing::instrument(level = "debug", fields(container_pid, host_pid))]
 fn request_process_init(
     hypervisor_ip: &str,
@@ -224,7 +194,6 @@ fn request_process_init(
     })
 }
 
-/// Read and validate Kubernetes service account token
 #[tracing::instrument(level = "debug")]
 fn read_service_account_token() -> Result<String, Report<ConfigError>> {
     let token = fs::read_to_string(SERVICE_ACCOUNT_TOKEN_PATH)
@@ -242,7 +211,6 @@ fn read_service_account_token() -> Result<String, Report<ConfigError>> {
     Ok(token.to_string())
 }
 
-/// Build HTTP client with default configuration
 fn build_http_client() -> Client {
     Client::builder()
         .timeout(DEFAULT_REQUEST_TIMEOUT)
@@ -250,126 +218,33 @@ fn build_http_client() -> Client {
         .expect("should build HTTP client")
 }
 
-/// Get hypervisor configuration from environment variables
-///
-/// Returns `None` if either `HYPERVISOR_IP` or `HYPERVISOR_PORT` is not set.
 pub fn get_hypervisor_config() -> Option<(String, String)> {
     let hypervisor_ip = env::var("HYPERVISOR_IP").ok()?;
     let hypervisor_port = env::var("HYPERVISOR_PORT").ok()?;
     Some((hypervisor_ip, hypervisor_port))
 }
 
-/// Get container name from environment variable
-///
-/// Returns `None` if `CONTAINER_NAME` is not set.
 pub fn get_container_name() -> Option<String> {
     env::var("CONTAINER_NAME").ok()
 }
 
+pub fn parse_duration(duration_str: &str) -> Result<Duration, Report<ConfigError>> {
+    let duration_str = duration_str.trim();
+
+    if duration_str.is_empty() {
+        return Err(Report::new(ConfigError::InvalidResponse).attach("Duration string is empty"));
+    }
+
+    humantime::parse_duration(duration_str)
+        .change_context(ConfigError::InvalidResponse)
+        .attach_with(|| format!("Failed to parse duration: {duration_str}"))
+}
+
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use serial_test::serial;
-    use tempfile::NamedTempFile;
 
     use super::*;
-
-    fn read_token_from_path(path: &str) -> Result<String, Report<ConfigError>> {
-        let token = fs::read_to_string(path)
-            .change_context(ConfigError::TokenRead)
-            .attach_with(|| format!("Failed to read token from {path}"))?;
-
-        let token = token.trim();
-
-        if token.is_empty() {
-            return Err(
-                Report::new(ConfigError::EmptyToken).attach("Service account token is empty")
-            );
-        }
-
-        Ok(token.to_string())
-    }
-
-    #[test]
-    fn read_token_successfully() {
-        let mut temp_file = NamedTempFile::new().expect("should create temp file");
-        let test_token = "test-token-123";
-        writeln!(temp_file, "{test_token}").expect("should write to temp file");
-
-        let token_path = temp_file.path().to_str().unwrap();
-        let result = read_token_from_path(token_path);
-
-        assert!(result.is_ok(), "Should successfully read token");
-        assert_eq!(
-            result.unwrap(),
-            test_token,
-            "Token should match expected value"
-        );
-    }
-
-    #[test]
-    fn read_token_with_whitespace() {
-        let mut temp_file = NamedTempFile::new().expect("should create temp file");
-        let test_token = "test-token-with-spaces";
-        writeln!(temp_file, "  {test_token}  \n").expect("should write to temp file");
-
-        let token_path = temp_file.path().to_str().unwrap();
-        let result = read_token_from_path(token_path);
-
-        assert!(result.is_ok(), "Should successfully read token");
-        assert_eq!(result.unwrap(), test_token, "Token should be trimmed");
-    }
-
-    #[test]
-    fn token_file_not_found() {
-        let non_existent_path = "/path/that/does/not/exist/token";
-        let result = read_token_from_path(non_existent_path);
-
-        assert!(result.is_err(), "Should return error for non-existent file");
-
-        let error = result.unwrap_err();
-        assert!(
-            matches!(error.current_context(), ConfigError::TokenRead),
-            "Should return TokenRead error"
-        );
-    }
-
-    #[test]
-    fn empty_token_file() {
-        let temp_file = NamedTempFile::new().expect("should create temp file");
-
-        let token_path = temp_file.path().to_str().unwrap();
-        let result = read_token_from_path(token_path);
-
-        assert!(result.is_err(), "Should return error for empty file");
-
-        let error = result.unwrap_err();
-        assert!(
-            matches!(error.current_context(), ConfigError::EmptyToken),
-            "Should return EmptyToken error"
-        );
-    }
-
-    #[test]
-    fn whitespace_only_token_file() {
-        let mut temp_file = NamedTempFile::new().expect("should create temp file");
-        writeln!(temp_file, "   \n\t  \n").expect("should write to temp file");
-
-        let token_path = temp_file.path().to_str().unwrap();
-        let result = read_token_from_path(token_path);
-
-        assert!(
-            result.is_err(),
-            "Should return error for whitespace-only file"
-        );
-
-        let error = result.unwrap_err();
-        assert!(
-            matches!(error.current_context(), ConfigError::EmptyToken),
-            "Should return EmptyToken error"
-        );
-    }
 
     #[test]
     #[serial]
@@ -426,5 +301,61 @@ mod tests {
         let name = get_container_name();
 
         assert!(name.is_none(), "Should return None when env var is not set");
+    }
+
+    #[test]
+    fn parse_duration_seconds() {
+        let result = super::parse_duration("30s");
+        assert!(result.is_ok(), "Should parse seconds successfully");
+        assert_eq!(
+            result.unwrap().as_secs(),
+            30,
+            "Should parse 30 seconds correctly"
+        );
+    }
+
+    #[test]
+    fn parse_duration_minutes() {
+        let result = super::parse_duration("5m");
+        assert!(result.is_ok(), "Should parse minutes successfully");
+        assert_eq!(
+            result.unwrap().as_secs(),
+            300,
+            "Should parse 5 minutes correctly"
+        );
+    }
+
+    #[test]
+    fn parse_duration_hours() {
+        let result = super::parse_duration("2h");
+        assert!(result.is_ok(), "Should parse hours successfully");
+        assert_eq!(
+            result.unwrap().as_secs(),
+            7200,
+            "Should parse 2 hours correctly"
+        );
+    }
+
+    #[test]
+    fn parse_duration_complex() {
+        let result = super::parse_duration("1h 30m");
+        assert!(result.is_ok(), "Should parse complex duration successfully");
+        assert_eq!(
+            result.unwrap().as_secs(),
+            5400,
+            "Should parse '1h 30m' correctly"
+        );
+    }
+
+    #[test]
+    fn parse_duration_empty_string() {
+        let result = super::parse_duration("");
+        assert!(result.is_err(), "Should fail on empty string");
+    }
+
+    #[test]
+    fn parse_duration_invalid_format() {
+        let result = super::parse_duration("invalid");
+        assert!(result.is_err(), "Should fail on invalid format");
     }
 }

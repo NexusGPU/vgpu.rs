@@ -5,10 +5,13 @@ use std::sync::LazyLock;
 use std::sync::OnceLock;
 
 use frida_gum::interceptor::Interceptor;
+pub use frida_gum::interceptor::InvocationContext;
+pub use frida_gum::interceptor::InvocationListener;
+pub use frida_gum::interceptor::Listener;
 use frida_gum::Gum;
 use frida_gum::Module;
 use frida_gum::ModuleMap;
-use frida_gum::NativePointer;
+pub use frida_gum::NativePointer;
 
 use crate::Error;
 
@@ -105,12 +108,25 @@ impl HookManager {
     ) -> Result<NativePointer, Error> {
         self.hooker(module)?.hook_export(symbol, detour)
     }
+
+    pub fn attach<I: InvocationListener>(
+        &mut self,
+        function: NativePointer,
+        listener: &mut I,
+    ) -> Result<Listener, Error> {
+        self.interceptor
+            .attach(function, listener)
+            .map_err(Into::into)
+    }
+
+    pub fn detach(&mut self, listener: Listener) {
+        self.interceptor.detach(listener);
+    }
 }
 
 impl Default for HookManager {
     fn default() -> Self {
         let mut interceptor = Interceptor::obtain(&GUM);
-        tracing::debug!("Starting interceptor transaction");
         interceptor.begin_transaction();
         Self {
             interceptor,
@@ -121,7 +137,6 @@ impl Default for HookManager {
 
 impl Drop for HookManager {
     fn drop(&mut self) {
-        tracing::debug!("Ending interceptor transaction");
         self.interceptor.end_transaction()
     }
 }
