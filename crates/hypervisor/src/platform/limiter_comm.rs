@@ -126,7 +126,7 @@ mod tests {
         let dispatcher = CommandDispatcher::new();
 
         let command_id = dispatcher
-            .enqueue_command("test_limiter", LimiterCommandType::TfHealthCheck)
+            .enqueue_command("test_limiter", LimiterCommandType::HealthCheck)
             .await
             .expect("should enqueue command");
 
@@ -156,14 +156,14 @@ mod tests {
         // fill queue to the configured limit (1000)
         for _ in 0..1000 {
             dispatcher
-                .enqueue_command("overflow_limiter", LimiterCommandType::TfHealthCheck)
+                .enqueue_command("overflow_limiter", LimiterCommandType::HealthCheck)
                 .await
                 .expect("should enqueue until limit");
         }
 
         // the 1001st enqueue should fail
         let result = dispatcher
-            .enqueue_command("overflow_limiter", LimiterCommandType::TfHealthCheck)
+            .enqueue_command("overflow_limiter", LimiterCommandType::HealthCheck)
             .await;
         assert!(result.is_err(), "should fail when queue is full");
 
@@ -181,15 +181,15 @@ mod tests {
 
         // enqueue different number of commands for multiple limiters
         dispatcher
-            .enqueue_command("limiter1", LimiterCommandType::TfHealthCheck)
+            .enqueue_command("limiter1", LimiterCommandType::HealthCheck)
             .await
             .expect("should enqueue command");
         dispatcher
-            .enqueue_command("limiter1", LimiterCommandType::TfResume)
+            .enqueue_command("limiter1", LimiterCommandType::Resume)
             .await
             .expect("should enqueue second command");
         dispatcher
-            .enqueue_command("limiter2", LimiterCommandType::TfSuspend)
+            .enqueue_command("limiter2", LimiterCommandType::Suspend)
             .await
             .expect("should enqueue command for second limiter");
 

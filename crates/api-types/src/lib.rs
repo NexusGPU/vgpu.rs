@@ -190,13 +190,13 @@ pub struct JwtAuthConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum LimiterCommandType {
     /// TensorFusion health check
-    TfHealthCheck,
+    HealthCheck,
     /// suspend TensorFusion
-    TfSuspend,
+    Suspend,
     /// resume TensorFusion
-    TfResume,
+    Resume,
     /// reclaim VRAM
-    TfVramReclaim,
+    VramReclaim,
 }
 
 /// command sent by Hypervisor to Limiter

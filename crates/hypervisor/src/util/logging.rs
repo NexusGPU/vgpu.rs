@@ -4,6 +4,8 @@ use std::env;
 use std::fmt::{self};
 use std::path::Path;
 
+use std::path::PathBuf;
+
 use tracing::field::Field;
 use tracing::field::Visit;
 use tracing::Event;
@@ -19,6 +21,8 @@ use tracing_subscriber::fmt::FormatEvent;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry;
 use utils::logging::LOG_PATH_ENV_VAR;
+
+const DEFAULT_METRICS_PREFIX: &str = "metrics.log";
 
 struct InfluxDBFormatter;
 
@@ -62,12 +66,22 @@ pub fn init<P: AsRef<Path>>(
     let fmt_layer = utils::logging::get_fmt_layer(log_path);
 
     let gpu_metrics_file = gpu_metrics_file
-        .as_ref()
-        .map(|p| p.as_ref())
-        .unwrap_or(Path::new("/logs/metrics.log"));
-
-    let path = gpu_metrics_file.parent().expect("path");
-    let file = gpu_metrics_file.file_name().expect("log file");
+        .map(|p| p.as_ref().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/logs/metrics.log"));
+    let is_dir = gpu_metrics_file.is_dir();
+    let (rotation_dir, prefix) = if is_dir {
+        (gpu_metrics_file.as_path(), DEFAULT_METRICS_PREFIX)
+    } else {
+        let parent = gpu_metrics_file
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let prefix = gpu_metrics_file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(DEFAULT_METRICS_PREFIX);
+        (parent, prefix)
+    };
     let env_filter = filter::EnvFilter::builder()
         .with_default_directive(filter::LevelFilter::INFO.into())
         .from_env_lossy();
@@ -76,14 +90,21 @@ pub fn init<P: AsRef<Path>>(
         !metadata.target().eq("metrics")
     })));
 
-    let appender = RollingFileAppender::builder()
+    let (file_writer, file_guard) = match RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
-        .filename_prefix(file.to_str().expect("metrics file name"))
+        .filename_prefix(prefix)
         .max_log_files(3)
-        .build(path)
-        .expect("failed to create rolling file appender");
-
-    let (file_writer, file_guard) = tracing_appender::non_blocking(appender);
+        .build(rotation_dir)
+    {
+        Ok(appender) => tracing_appender::non_blocking(appender),
+        Err(err) => {
+            tracing::error!(
+                "failed to create metrics rolling file appender at {}: {err}; falling back to stdout",
+                rotation_dir.display()
+            );
+            tracing_appender::non_blocking(std::io::stdout())
+        }
+    };
 
     let metrics_layer = layer()
         .event_format(InfluxDBFormatter {})

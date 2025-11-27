@@ -8,13 +8,18 @@ macro_rules! replace_symbol {
             let replaced = hook_manager
                 .hook_export($mod, symbol_name, detour as *mut std::ffi::c_void)?
                 .0;
-            let original_fn: $detour_type = std::mem::transmute(replaced);
+            let original_fn: $detour_type = unsafe { std::mem::transmute(replaced) };
 
             tracing::trace!("hooked {symbol_name:?}");
             Ok(original_fn)
         };
 
-        let _ = intercept($hook_manager, $func, $detour_function)
-            .and_then(|hooked| Ok($hook_fn.set(hooked).unwrap()));
+        (|| -> Result<(), $crate::Error> {
+            let hooked = intercept($hook_manager, $func, $detour_function)?;
+            $hook_fn.set(hooked).map_err(|_| {
+                $crate::Error::HookAlreadyInitialized(std::borrow::Cow::Borrowed($func))
+            })?;
+            Ok(())
+        })()
     }};
 }

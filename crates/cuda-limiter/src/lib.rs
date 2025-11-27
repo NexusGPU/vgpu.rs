@@ -38,9 +38,11 @@ mod limiter;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
 static GLOBAL_AUTO_FREEZE_MANAGER: OnceLock<Arc<AutoFreezeManager>> = OnceLock::new();
+static GLOBAL_LIMITER_ERROR: OnceLock<String> = OnceLock::new();
 static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
 static HOOKS_INITIALIZED: (AtomicBool, AtomicBool) =
     (AtomicBool::new(false), AtomicBool::new(false));
+static LIMITER_ERROR_REPORTED: AtomicBool = AtomicBool::new(false);
 
 #[ctor]
 unsafe fn entry_point() {
@@ -76,6 +78,25 @@ fn are_hooks_enabled() -> (bool, bool) {
     (enable_nvml_hooks, enable_cuda_hooks)
 }
 
+fn record_limiter_error(message: impl Into<String>) {
+    let message = message.into();
+    tracing::error!("{message}");
+    let _ = GLOBAL_LIMITER_ERROR.set(message);
+}
+
+pub(crate) fn report_limiter_not_initialized() {
+    if LIMITER_ERROR_REPORTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        if let Some(reason) = GLOBAL_LIMITER_ERROR.get() {
+            tracing::warn!("Limiter not initialized; last error: {reason}");
+        } else {
+            tracing::warn!("Limiter not initialized; init has not run");
+        }
+    }
+}
+
 pub(crate) fn mock_shm_path() -> Option<PathBuf> {
     env::var("TF_SHM_FILE")
         .map(PathBuf::from)
@@ -98,7 +119,8 @@ fn init_limiter() {
             {
                 Ok(nvml) => nvml,
                 Err(e) => {
-                    panic!("failed to initialize NVML: {e}");
+                    record_limiter_error(format!("failed to initialize NVML: {e}"));
+                    return;
                 }
             };
 
@@ -106,8 +128,9 @@ fn init_limiter() {
             let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
                 Some((ip, port)) => (ip, port),
                 None => {
-                    tracing::info!(
-                        "HYPERVISOR_IP or HYPERVISOR_PORT not set, skip command handler"
+                    record_limiter_error(
+                        "HYPERVISOR_IP or HYPERVISOR_PORT not set; skipping limiter init"
+                            .to_string(),
                     );
                     return;
                 }
@@ -117,20 +140,26 @@ fn init_limiter() {
             let config = match config::get_worker_config(&hypervisor_ip, &hypervisor_port) {
                 Ok(config) => config,
                 Err(err) => {
-                    tracing::error!("failed to get device configs: {err}");
+                    record_limiter_error(format!("failed to get device configs: {err}"));
                     return;
                 }
             };
             config
         } else {
             // In mock/test mode, derive UUIDs from either CUDA_VISIBLE_DEVICES or list all devices
-            let uuids = if let Ok(visible_devices) = env::var("TF_VISIBLE_DEVICES") {
-                visible_devices
+            let uuids = match env::var("TF_VISIBLE_DEVICES") {
+                Ok(visible_devices) => visible_devices
                     .split(',')
                     .map(|s| s.trim().to_string())
-                    .collect::<Vec<_>>()
-            } else {
-                panic!("TF_VISIBLE_DEVICES not set");
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>(),
+                Err(_) => {
+                    record_limiter_error(
+                        "TF_VISIBLE_DEVICES not set in mock/test mode; skipping limiter init"
+                            .to_string(),
+                    );
+                    return;
+                }
             };
 
             config::PodConfig {
@@ -143,14 +172,32 @@ fn init_limiter() {
         if !config.gpu_uuids.is_empty() {
             let lower_case_uuids: HashSet<_> =
                 config.gpu_uuids.iter().map(|u| u.to_lowercase()).collect();
-            let device_count = nvml.device_count().expect("failed to get device count");
+            let device_count = match nvml.device_count() {
+                Ok(count) => count,
+                Err(err) => {
+                    record_limiter_error(format!("failed to get device count: {err}"));
+                    return;
+                }
+            };
 
             let mut device_indices = Vec::new();
             for i in 0..device_count {
-                let device = nvml
-                    .device_by_index(i)
-                    .expect("failed to get device by index");
-                let uuid = device.uuid().expect("failed to get device uuid");
+                let device = match nvml.device_by_index(i) {
+                    Ok(device) => device,
+                    Err(err) => {
+                        record_limiter_error(format!("failed to get device by index {i}: {err}"));
+                        return;
+                    }
+                };
+                let uuid = match device.uuid() {
+                    Ok(uuid) => uuid,
+                    Err(err) => {
+                        record_limiter_error(format!(
+                            "failed to get device uuid for index {i}: {err}"
+                        ));
+                        return;
+                    }
+                };
                 if lower_case_uuids.contains(&uuid.to_lowercase()) {
                     device_indices.push(i.to_string());
                 }
@@ -167,8 +214,14 @@ fn init_limiter() {
             }
         }
 
-        let limiter = Limiter::new(nvml, config.gpu_uuids, config.compute_shard)
-            .expect("failed to initialize Limiter");
+        let limiter = match Limiter::new(nvml, config.gpu_uuids, config.compute_shard) {
+            Ok(limiter) => limiter,
+            Err(err) => {
+                record_limiter_error(format!("failed to initialize limiter: {err}"));
+                return;
+            }
+        };
+
         GLOBAL_LIMITER.set(limiter).expect("set GLOBAL_LIMITER");
 
         if let Some(auto_freeze_config) = config.auto_freeze {
@@ -221,14 +274,17 @@ fn try_install_cuda_hooks() {
     tracing::debug!("Installing CUDA hooks...");
 
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        detour::gpu::enable_hooks(&mut hook_manager);
-        detour::mem::enable_hooks(&mut hook_manager);
+        detour::gpu::enable_hooks(&mut hook_manager)
+            .and_then(|_| detour::mem::enable_hooks(&mut hook_manager))
     }));
 
     match install_result {
-        Ok(_) => {
+        Ok(Ok(())) => {
             HOOKS_INITIALIZED.1.store(true, Ordering::Release);
             tracing::debug!("CUDA hooks installed successfully");
+        }
+        Ok(Err(e)) => {
+            tracing::error!("CUDA hooks installation failed: {}", e);
         }
         Err(e) => {
             tracing::error!("CUDA hooks installation panicked: {:?}", e);
@@ -255,13 +311,16 @@ fn try_install_nvml_hooks() {
     tracing::debug!("Installing NVML hooks...");
 
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        detour::nvml::enable_hooks(&mut hook_manager, is_mapping_device_idx());
+        detour::nvml::enable_hooks(&mut hook_manager, is_mapping_device_idx())
     }));
 
     match install_result {
-        Ok(_) => {
+        Ok(Ok(())) => {
             HOOKS_INITIALIZED.0.store(true, Ordering::Release);
             tracing::debug!("NVML hooks installed successfully");
+        }
+        Ok(Err(e)) => {
+            tracing::error!("NVML hooks installation failed: {}", e);
         }
         Err(e) => {
             tracing::error!("NVML hooks installation panicked: {:?}", e);
@@ -315,15 +374,17 @@ fn init_hooks() {
 
     // Install dlsym hook to catch dynamic library loading
     static DLSYM_HOOK_ONCE: Once = Once::new();
-    DLSYM_HOOK_ONCE.call_once(|| unsafe {
-        replace_symbol!(
+    DLSYM_HOOK_ONCE.call_once(|| {
+        if let Err(err) = replace_symbol!(
             &mut hook_manager,
             None,
             "dlsym",
             dlsym_detour,
             FnDlsym,
             FN_DLSYM
-        );
+        ) {
+            tracing::error!("Failed to install dlsym hook: {}", err);
+        }
     });
     tracing::debug!("Hook initialization completed");
 }
@@ -332,25 +393,33 @@ thread_local! {
     static IN_DLSYM_DETOUR: Cell<bool> = const { Cell::new(false) };
 }
 
+fn call_original_dlsym(handle: *const c_void, symbol: *const c_char) -> *const c_void {
+    if let Some(original) = FN_DLSYM.get() {
+        unsafe { original(handle, symbol) }
+    } else {
+        unsafe { libc::dlsym(handle as *mut c_void, symbol) }
+    }
+}
+
 #[hook_fn]
 unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) -> *const c_void {
     if symbol.is_null() {
-        return FN_DLSYM(handle, symbol);
+        return call_original_dlsym(handle, symbol);
     }
 
     let Ok(symbol_str) = CStr::from_ptr(symbol).to_str() else {
-        return FN_DLSYM(handle, symbol);
+        return call_original_dlsym(handle, symbol);
     };
     let may_be_cuda = symbol_str.starts_with("cu");
     let may_be_nvml = symbol_str.starts_with("nvml");
 
     if !may_be_cuda && !may_be_nvml {
-        return FN_DLSYM(handle, symbol);
+        return call_original_dlsym(handle, symbol);
     }
 
     // Prevent recursion
     if IN_DLSYM_DETOUR.with(|flag| flag.get()) {
-        return FN_DLSYM(handle, symbol);
+        return call_original_dlsym(handle, symbol);
     }
 
     IN_DLSYM_DETOUR.with(|flag| flag.set(true));
@@ -366,10 +435,12 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
 
     // Try to install hooks if not already done
     if may_be_cuda && !HOOKS_INITIALIZED.1.load(Ordering::Acquire) {
+        tracing::debug!("dlsym observed CUDA symbol {symbol_str}, ensuring hooks installed");
         try_install_cuda_hooks();
     }
 
     if may_be_nvml && !HOOKS_INITIALIZED.0.load(Ordering::Acquire) {
+        tracing::debug!("dlsym observed NVML symbol {symbol_str}, ensuring hooks installed");
         try_install_nvml_hooks();
     }
 
@@ -458,7 +529,12 @@ pub fn global_trap() -> impl Trap {
         TrapImpl::Dummy(DummyTrap {}).into()
     });
 
-    trap.lock().expect("poisoned").clone()
+    trap.lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|poisoned| {
+            tracing::warn!("global trap mutex poisoned, reusing inner trap");
+            poisoned.into_inner().clone()
+        })
 }
 
 fn is_mapping_device_idx() -> bool {

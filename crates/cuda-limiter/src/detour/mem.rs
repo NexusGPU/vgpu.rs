@@ -378,7 +378,7 @@ pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> 
 }
 
 /// Enables hooks for CUDA memory management functions.
-pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
+pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) -> Result<(), utils::Error> {
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -386,7 +386,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_alloc_v2_detour,
         FnCu_mem_alloc_v2,
         FN_CU_MEM_ALLOC_V2
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -394,7 +394,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_alloc_detour,
         FnCu_mem_alloc,
         FN_CU_MEM_ALLOC
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -402,7 +402,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_alloc_managed_detour,
         FnCu_mem_alloc_managed,
         FN_CU_MEM_ALLOC_MANAGED
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -410,7 +410,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_alloc_pitch_v2_detour,
         FnCu_mem_alloc_pitch_v2,
         FN_CU_MEM_ALLOC_PITCH_V2
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -418,7 +418,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_alloc_pitch_detour,
         FnCu_mem_alloc_pitch,
         FN_CU_MEM_ALLOC_PITCH
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -426,7 +426,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_array_create_v2_detour,
         FnCu_array_create_v2,
         FN_CU_ARRAY_CREATE_V2
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -434,7 +434,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_array_create_detour,
         FnCu_array_create,
         FN_CU_ARRAY_CREATE
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -442,7 +442,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_array_3d_create_v2_detour,
         FnCu_array_3d_create_v2,
         FN_CU_ARRAY_3D_CREATE_V2
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -450,7 +450,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_array_3d_create_detour,
         FnCu_array_3d_create,
         FN_CU_ARRAY_3D_CREATE
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -458,7 +458,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mipmapped_array_create_detour,
         FnCu_mipmapped_array_create,
         FN_CU_MIPMAPPED_ARRAY_CREATE
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -466,7 +466,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_device_total_mem_v2_detour,
         FnCu_device_total_mem_v2,
         FN_CU_DEVICE_TOTAL_MEM_V2
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -474,7 +474,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_device_total_mem_detour,
         FnCu_device_total_mem,
         FN_CU_DEVICE_TOTAL_MEM
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -482,7 +482,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_alloc_async_detour,
         FnCu_mem_alloc_async,
         FN_CU_MEM_ALLOC_ASYNC
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -490,7 +490,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_alloc_from_pool_async_detour,
         FnCu_mem_alloc_from_pool_async,
         FN_CU_MEM_ALLOC_FROM_POOL_ASYNC
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -498,7 +498,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_get_info_v2_detour,
         FnCu_mem_get_info_v2,
         FN_CU_MEM_GET_INFO_V2
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -506,7 +506,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_get_info_detour,
         FnCu_mem_get_info,
         FN_CU_MEM_GET_INFO
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -514,7 +514,9 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_mem_create_detour,
         FnCu_mem_create,
         FN_CU_MEM_CREATE
-    );
+    )?;
+
+    Ok(())
 }
 
 #[inline]

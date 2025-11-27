@@ -8,8 +8,14 @@ use hypervisor::config::{Cli, Commands};
 fn setup_panic() {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        crossterm::terminal::disable_raw_mode().unwrap();
-        crossterm::execute!(std::io::stderr(), crossterm::terminal::LeaveAlternateScreen).unwrap();
+        if let Err(err) = crossterm::terminal::disable_raw_mode() {
+            eprintln!("failed to disable raw mode: {err}");
+        }
+        if let Err(err) =
+            crossterm::execute!(std::io::stderr(), crossterm::terminal::LeaveAlternateScreen)
+        {
+            eprintln!("failed to leave alternate screen: {err}");
+        }
         original_hook(panic_info);
     }));
 }

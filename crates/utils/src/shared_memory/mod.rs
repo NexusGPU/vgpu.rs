@@ -5,6 +5,8 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use tracing::warn;
 
@@ -114,6 +116,19 @@ const MAX_PROCESSES: usize = 2048;
 const MAX_DEVICES: usize = 16;
 /// Maximum length of device UUID string (including null terminator)
 const MAX_UUID_LEN: usize = 64;
+
+fn current_unix_timestamp() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs(),
+        Err(error) => {
+            warn!(
+                %error,
+                "System clock is before UNIX_EPOCH, defaulting timestamp to zero"
+            );
+            0
+        }
+    }
+}
 /// Error type for reference count operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefCountError {
@@ -761,19 +776,17 @@ impl SharedDeviceState {
 impl SharedDeviceStateV1 {
     /// Creates a new SharedDeviceStateV1 instance.
     pub fn new(configs: &[DeviceConfig]) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = current_unix_timestamp();
 
         let state = Self {
             devices: std::array::from_fn(|_| DeviceEntryV1::new()),
-            device_count: AtomicU32::new(configs.len() as u32),
+            device_count: AtomicU32::new(0),
             last_heartbeat: AtomicU64::new(now),
             pids: ShmMutex::new(Set::new()),
             _padding: [0; 512],
         };
 
+        let mut active_devices = 0u32;
         for config in configs {
             let device_idx = config.device_idx as usize;
             if device_idx >= MAX_DEVICES {
@@ -784,9 +797,14 @@ impl SharedDeviceStateV1 {
                 continue;
             }
 
-            state.devices[device_idx].set_uuid(&config.device_uuid);
+            let device_entry = &state.devices[device_idx];
+            if !device_entry.is_active() {
+                active_devices = active_devices.saturating_add(1);
+            }
+
+            device_entry.set_uuid(&config.device_uuid);
             // Use atomic operations to set device info
-            let device_info = &state.devices[device_idx].device_info;
+            let device_info = &device_entry.device_info;
             device_info
                 .total_cuda_cores
                 .store(config.total_cuda_cores, Ordering::Relaxed);
@@ -799,8 +817,9 @@ impl SharedDeviceStateV1 {
             device_info
                 .mem_limit
                 .store(config.mem_limit, Ordering::Relaxed);
-            state.devices[device_idx].set_active(true);
+            device_entry.set_active(true);
         }
+        state.device_count.store(active_devices, Ordering::Release);
         state
     }
 
@@ -826,22 +845,14 @@ impl SharedDeviceStateV1 {
 
     /// Checks if the shared memory is healthy based on heartbeat.
     pub fn is_healthy(&self, timeout: Duration) -> bool {
-        let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            Ok(duration) => duration.as_secs(),
-            Err(_) => {
-                // If system time is before UNIX_EPOCH, consider unhealthy
-                tracing::warn!("System time is before UNIX_EPOCH, considering unhealthy");
-                return false;
-            }
-        };
-        let last_heartbeat = self.get_last_heartbeat();
-
-        if last_heartbeat == 0 {
-            return false; // No heartbeat recorded
+        let now = current_unix_timestamp();
+        if now == 0 {
+            return false;
         }
 
-        if last_heartbeat > now {
-            // If last heartbeat is in the future, consider unhealthy
+        let last_heartbeat = self.get_last_heartbeat();
+
+        if last_heartbeat == 0 || last_heartbeat > now {
             return false;
         }
 
@@ -891,19 +902,17 @@ impl SharedDeviceStateV1 {
 impl SharedDeviceStateV2 {
     /// Creates a new SharedDeviceStateV2 instance with ERL support.
     pub fn new(configs: &[DeviceConfig]) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = current_unix_timestamp();
 
         let state = Self {
             devices: std::array::from_fn(|_| DeviceEntry::new()),
-            device_count: AtomicU32::new(configs.len() as u32),
+            device_count: AtomicU32::new(0),
             last_heartbeat: AtomicU64::new(now),
             pids: ShmMutex::new(Set::new()),
             _padding: [0; 512],
         };
 
+        let mut active_devices = 0u32;
         for config in configs {
             let device_idx = config.device_idx as usize;
             if device_idx >= MAX_DEVICES {
@@ -914,8 +923,13 @@ impl SharedDeviceStateV2 {
                 continue;
             }
 
-            state.devices[device_idx].set_uuid(&config.device_uuid);
-            let device_info = &state.devices[device_idx].device_info;
+            let device_entry = &state.devices[device_idx];
+            if !device_entry.is_active() {
+                active_devices = active_devices.saturating_add(1);
+            }
+
+            device_entry.set_uuid(&config.device_uuid);
+            let device_info = &device_entry.device_info;
 
             device_info
                 .total_cuda_cores
@@ -933,8 +947,9 @@ impl SharedDeviceStateV2 {
             device_info.set_erl_current_tokens(100.0);
             device_info.set_erl_last_token_update(now as f64);
 
-            state.devices[device_idx].set_active(true);
+            device_entry.set_active(true);
         }
+        state.device_count.store(active_devices, Ordering::Release);
         state
     }
 
@@ -955,13 +970,10 @@ impl SharedDeviceStateV2 {
     }
 
     pub fn is_healthy(&self, timeout: Duration) -> bool {
-        let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            Ok(duration) => duration.as_secs(),
-            Err(_) => {
-                tracing::warn!("System time is before UNIX_EPOCH, considering unhealthy");
-                return false;
-            }
-        };
+        let now = current_unix_timestamp();
+        if now == 0 {
+            return false;
+        }
         let last_heartbeat = self.get_last_heartbeat();
 
         if last_heartbeat == 0 || last_heartbeat > now {

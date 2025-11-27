@@ -31,27 +31,43 @@ pub fn get_fmt_layer(log_path: Option<String>) -> Box<dyn Layer<Registry> + Send
         Some(path) => {
             // path could be a specific a/b/c.log file name, split it to get base dir and prefix
             let path = Path::new(&path);
-            let base_dir = path.parent().unwrap();
-            let prefix = path.file_name().unwrap();
             let is_dir = path.is_dir();
+            let (rotation_dir, prefix) = if is_dir {
+                (path, DEFAULT_LOG_PREFIX)
+            } else {
+                let base_dir = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or_else(|| Path::new("."));
+                let prefix = path
+                    .file_name()
+                    .and_then(|file| file.to_str())
+                    .unwrap_or(DEFAULT_LOG_PREFIX);
+                (base_dir, prefix)
+            };
 
-            let appender = RollingFileAppender::builder()
+            match RollingFileAppender::builder()
                 .rotation(Rotation::DAILY)
-                .filename_prefix(if is_dir {
-                    DEFAULT_LOG_PREFIX
-                } else {
-                    prefix.to_str().unwrap()
-                })
+                .filename_prefix(prefix)
                 .max_log_files(7)
-                .build(if is_dir { path } else { base_dir })
-                .expect("failed to create rolling file appender");
-
-            // Use synchronous file writer directly
-            layer()
-                .with_writer(appender)
-                .with_target(true)
-                .with_ansi(false)
-                .boxed()
+                .build(rotation_dir)
+            {
+                Ok(appender) => layer()
+                    .with_writer(appender)
+                    .with_target(true)
+                    .with_ansi(false)
+                    .boxed(),
+                Err(err) => {
+                    tracing::error!(
+                        "failed to create rolling file appender at {}: {err}",
+                        rotation_dir.display()
+                    );
+                    layer()
+                        .with_writer(std::io::stdout)
+                        .with_target(true)
+                        .boxed()
+                }
+            }
         }
         _ => layer()
             .with_writer(std::io::stdout)
