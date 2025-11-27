@@ -10,5 +10,6 @@ pub mod gpu_init;
 pub mod gpu_observer;
 
 pub use gpu_device_state_watcher::GpuDeviceStateWatcher;
+pub use gpu_init::init_nvml;
 pub use gpu_init::GpuSystem;
 pub use gpu_observer::GpuObserver;

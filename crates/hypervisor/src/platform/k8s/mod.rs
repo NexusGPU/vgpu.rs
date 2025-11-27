@@ -10,7 +10,7 @@
 
 use core::error::Error;
 
-// pub(crate) mod device_plugin;
+pub mod device_plugin;
 pub mod pod_info;
 pub mod pod_info_cache;
 
