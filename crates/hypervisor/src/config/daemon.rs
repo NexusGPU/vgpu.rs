@@ -244,6 +244,22 @@ pub struct DaemonArgs {
         value_parser = parse_scheduling_config
     )]
     pub scheduling_config: Option<HypervisorScheduling>,
+
+    #[arg(
+        long,
+        help = "Device plugin socket directory. If set, enables device plugin for Kubernetes",
+        env = "DEVICE_PLUGIN_PATH",
+        value_hint = clap::ValueHint::DirPath
+    )]
+    pub device_plugin_path: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "Device plugin resource name",
+        default_value = "tensor-fusion.ai/index",
+        env = "DEVICE_PLUGIN_RESOURCE_NAME"
+    )]
+    pub device_plugin_resource_name: String,
 }
 
 /// Parse JSON string into HypervisorScheduling configuration

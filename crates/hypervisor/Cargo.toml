@@ -27,6 +27,7 @@ base64 = { workspace = true }
 kube = { workspace = true, features = ["runtime", "derive", "rustls-tls", "client", "config"] }
 k8s-openapi = { workspace = true, features = ["latest"] }
 tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true, features = ["net"] }
 error-stack = { workspace = true }
 futures.workspace = true
 poem = { workspace = true }
@@ -51,7 +52,7 @@ prost = "0.14"
 tonic-prost = "0.14"
 
 [build-dependencies]
-tonic-prost-build  = "0.14"
+tonic-prost-build = "0.14"
 
 [[bin]]
 name = "hypervisor"

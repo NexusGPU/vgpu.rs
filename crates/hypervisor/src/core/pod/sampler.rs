@@ -3,13 +3,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::Context as _;
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 
 use super::traits::{DeviceSnapshotProvider, TimeSource};
 use super::utilization::{DeviceSnapshot, ProcessUtilization};
+use crate::platform::nvml::init_nvml;
 
 /// Production NVML-based device snapshot provider
 pub struct NvmlDeviceSampler {
@@ -19,7 +20,7 @@ pub struct NvmlDeviceSampler {
 impl NvmlDeviceSampler {
     pub fn init() -> Result<Self, anyhow::Error> {
         Ok(Self {
-            nvml: Arc::new(Nvml::init().context("Failed to initialize NVML")?),
+            nvml: Arc::new(init_nvml().context("Failed to initialize NVML")?),
         })
     }
 }
