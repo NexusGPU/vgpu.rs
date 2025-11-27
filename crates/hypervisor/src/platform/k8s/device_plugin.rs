@@ -1,10 +1,11 @@
-#![allow(clippy::doc_markdown)]
+#![expect(clippy::doc_markdown, reason = "Generated proto code")]
 pub mod api {
-    #![allow(clippy::doc_overindented_list_items)]
     tonic::include_proto!("v1beta1");
 }
 
+use core::fmt;
 use std::collections::HashMap;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -23,11 +24,15 @@ use api::PreStartContainerResponse;
 use api::PreferredAllocationRequest;
 use api::PreferredAllocationResponse;
 use api::RegisterRequest;
+use error_stack::Report;
+use error_stack::ResultExt as _;
 use futures::Stream;
 use hyper_util::rt::TokioIo;
+use nvml_wrapper::Nvml;
 use tokio::net::UnixListener;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 use tonic::transport::Endpoint;
@@ -41,6 +46,29 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
+use crate::platform::nvml::init_nvml;
+
+#[derive(Debug)]
+pub enum DevicePluginError {
+    SocketCleanup,
+    SocketBind,
+    UdsConnection,
+    Registration,
+}
+
+impl fmt::Display for DevicePluginError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SocketCleanup => write!(f, "failed to clean up old socket file"),
+            Self::SocketBind => write!(f, "failed to bind Unix socket"),
+            Self::UdsConnection => write!(f, "failed to create UDS connection"),
+            Self::Registration => write!(f, "failed to register with kubelet"),
+        }
+    }
+}
+
+impl core::error::Error for DevicePluginError {}
+
 /// GPU Device Plugin for Kubernetes
 #[derive(Debug)]
 pub struct GpuDevicePlugin {
@@ -48,60 +76,63 @@ pub struct GpuDevicePlugin {
     endpoint: String,
     /// resource name (e.g. "tensor-fusion.ai/index")
     resource_name: String,
-    /// host path to mount
-    host_path: String,
     /// device plugin options
     options: DevicePluginOptions,
 }
 
 impl GpuDevicePlugin {
-    /// create a new GPU Device Plugin instance
-    pub fn new(
-        endpoint: String,
-        resource_name: String,
-        host_path: String,
-        pre_start_required: bool,
-        get_preferred_allocation_available: bool,
-    ) -> Arc<Self> {
+    /// Create a new GPU Device Plugin instance
+    pub fn new(endpoint: String, resource_name: String) -> Arc<Self> {
         let options = DevicePluginOptions {
-            pre_start_required,
-            get_preferred_allocation_available,
+            pre_start_required: false,
+            get_preferred_allocation_available: false,
         };
 
         Arc::new(Self {
             endpoint,
             resource_name,
-            host_path,
             options,
         })
     }
 
-    /// start device plugin server
+    /// Start device plugin server
+    ///
+    /// Returns a oneshot receiver that will be signaled when the server is ready
     pub async fn start(
         self: &Arc<Self>,
-        socket_path: &str,
+        socket_path: impl AsRef<Path>,
         cancellation_token: CancellationToken,
-    ) -> anyhow::Result<()> {
-        info!("start device plugin server: {}", socket_path);
+    ) -> Result<oneshot::Receiver<()>, Report<DevicePluginError>> {
+        let socket_path = socket_path.as_ref();
+        info!("start device plugin server: {}", socket_path.display());
 
         // clean up old socket file if it exists
-        if std::path::Path::new(socket_path).exists() {
-            std::fs::remove_file(socket_path)?;
+        if socket_path.exists() {
+            tokio::fs::remove_file(socket_path)
+                .await
+                .change_context(DevicePluginError::SocketCleanup)?;
         }
 
         // create Unix socket listener
-        let listener = UnixListener::bind(socket_path)?;
+        let listener =
+            UnixListener::bind(socket_path).change_context(DevicePluginError::SocketBind)?;
 
         // create DevicePlugin service
         let device_plugin_service =
             DevicePluginService::new(self.clone(), cancellation_token.clone());
         let device_plugin_server = DevicePluginServer::new(device_plugin_service);
 
-        info!("gRPC server is bound to: {}", socket_path);
+        info!("gRPC server is bound to: {}", socket_path.display());
+
+        // create ready signal channel
+        let (ready_tx, ready_rx) = oneshot::channel();
 
         // start gRPC server
         tokio::spawn(async move {
-            tonic::transport::Server::builder()
+            // signal that server is ready before starting to serve
+            let _ = ready_tx.send(());
+
+            if let Err(e) = tonic::transport::Server::builder()
                 .add_service(device_plugin_server)
                 .serve_with_incoming_shutdown(
                     tokio_stream::wrappers::UnixListenerStream::new(listener),
@@ -111,17 +142,30 @@ impl GpuDevicePlugin {
                     },
                 )
                 .await
+            {
+                error!("gRPC server error: {e}");
+            }
         });
 
-        Ok(())
+        Ok(ready_rx)
     }
 
-    /// register device plugin with kubelet
-    pub async fn register_with_kubelet(&self, kubelet_socket: &str) -> anyhow::Result<()> {
-        info!("registering device plugin with kubelet: {}", kubelet_socket);
+    /// Register device plugin with kubelet
+    pub async fn register_with_kubelet(
+        &self,
+        kubelet_socket: impl AsRef<Path>,
+    ) -> Result<(), Report<DevicePluginError>> {
+        let kubelet_socket = kubelet_socket.as_ref();
+        info!(
+            "registering device plugin with kubelet: {}",
+            kubelet_socket.display()
+        );
 
         // create UDS client connection
-        let channel = self.create_uds_channel(kubelet_socket).await?;
+        let channel = self
+            .create_uds_channel(kubelet_socket)
+            .await
+            .change_context(DevicePluginError::UdsConnection)?;
         let mut client = RegistrationClient::new(channel);
 
         // create registration request
@@ -133,22 +177,25 @@ impl GpuDevicePlugin {
         };
 
         // send registration request
-        match client.register(Request::new(request)).await {
-            Ok(_) => {
-                info!("successfully registered device plugin with kubelet");
-                Ok(())
-            }
-            Err(e) => Err(anyhow::anyhow!("registration failed: {e}")),
-        }
+        client
+            .register(Request::new(request))
+            .await
+            .change_context(DevicePluginError::Registration)?;
+
+        info!("successfully registered device plugin with kubelet");
+        Ok(())
     }
 
-    /// create Unix Domain Socket client connection
-    async fn create_uds_channel(&self, socket_path: &str) -> anyhow::Result<Channel> {
-        let socket_path = socket_path.to_string();
+    /// Create Unix Domain Socket client connection
+    async fn create_uds_channel(
+        &self,
+        socket_path: impl AsRef<Path>,
+    ) -> Result<Channel, tonic::transport::Error> {
+        let socket_path = socket_path.as_ref().to_path_buf();
 
         // create UDS connection using TokioIo wrapper
         // Note: The HTTP URL is a placeholder since we're using Unix socket connector
-        let channel = Endpoint::from_static("http://tonic")
+        Endpoint::from_static("http://tonic")
             .connect_with_connector(service_fn(move |_: Uri| {
                 let socket_path = socket_path.clone();
                 async move {
@@ -158,9 +205,7 @@ impl GpuDevicePlugin {
                     }
                 }
             }))
-            .await?;
-
-        Ok(channel)
+            .await
     }
 }
 
@@ -169,7 +214,6 @@ impl GpuDevicePlugin {
 #[derive(Debug)]
 pub struct DevicePluginService {
     device_plugin: Arc<GpuDevicePlugin>,
-    /// device state change notification sender
     cancellation_token: CancellationToken,
 }
 
@@ -181,8 +225,8 @@ impl DevicePluginService {
         }
     }
 
-    /// collect all NVIDIA devices that should be passed to containers
-    fn get_nvidia_devices() -> Vec<DeviceSpec> {
+    /// Collect all NVIDIA devices that should be passed to containers
+    fn get_nvidia_devices(nvml: &Nvml) -> Vec<DeviceSpec> {
         let mut devices = Vec::new();
 
         // add control device
@@ -205,17 +249,15 @@ impl DevicePluginService {
             permissions: "rwm".to_string(),
         });
 
-        // add all GPU devices (nvidia0 to nvidia255)
-        // we expose all possible GPUs, kubelet will handle the filtering
-        for i in 0..=255 {
+        // add GPU devices based on NVML device count
+        let device_count = nvml.device_count().unwrap_or(0);
+        for i in 0..device_count {
             let device_path = format!("/dev/nvidia{i}");
-            if std::path::Path::new(&device_path).exists() {
-                devices.push(DeviceSpec {
-                    container_path: device_path.clone(),
-                    host_path: device_path,
-                    permissions: "rwm".to_string(),
-                });
-            }
+            devices.push(DeviceSpec {
+                container_path: device_path.clone(),
+                host_path: device_path,
+                permissions: "rwm".to_string(),
+            });
         }
 
         devices
@@ -224,20 +266,17 @@ impl DevicePluginService {
 
 #[tonic::async_trait]
 impl DevicePlugin for DevicePluginService {
-    /// get device plugin options
     async fn get_device_plugin_options(
         &self,
         _request: Request<Empty>,
     ) -> TonicResult<Response<DevicePluginOptions>> {
         debug!("getting device plugin options");
-
         Ok(Response::new(self.device_plugin.options))
     }
 
     type ListAndWatchStream =
         Pin<Box<dyn Stream<Item = Result<ListAndWatchResponse, Status>> + Send>>;
 
-    /// list and watch device state changes
     async fn list_and_watch(
         &self,
         _request: Request<Empty>,
@@ -247,7 +286,6 @@ impl DevicePlugin for DevicePluginService {
         let (tx, rx) = mpsc::unbounded_channel();
         let cancellation_token = self.cancellation_token.clone();
 
-        // start device watch task
         tokio::spawn(async move {
             // create devices with IDs from 0 to 255
             let devices: Vec<api::Device> = (0..=255)
@@ -262,7 +300,7 @@ impl DevicePlugin for DevicePluginService {
             let initial_response = ListAndWatchResponse { devices };
 
             if let Err(e) = tx.send(Ok(initial_response)) {
-                error!("failed to send initial device list: {}", e);
+                error!("failed to send initial device list: {e}");
                 return;
             }
             // listen for cancellation signal
@@ -274,7 +312,6 @@ impl DevicePlugin for DevicePluginService {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    /// get preferred device allocation
     async fn get_preferred_allocation(
         &self,
         request: Request<PreferredAllocationRequest>,
@@ -287,13 +324,21 @@ impl DevicePlugin for DevicePluginService {
         Ok(Response::new(response))
     }
 
-    /// allocate devices to container
     async fn allocate(
         &self,
         request: Request<AllocateRequest>,
     ) -> TonicResult<Response<AllocateResponse>> {
         let req = request.into_inner();
         info!("allocating devices to container: {:?}", req);
+
+        // initialize NVML for device discovery
+        let nvml = match init_nvml() {
+            Ok(nvml) => nvml,
+            Err(e) => {
+                error!("failed to initialize NVML: {e}");
+                return Err(Status::internal(format!("failed to initialize NVML: {e}")));
+            }
+        };
 
         let mut container_responses = Vec::new();
 
@@ -304,11 +349,10 @@ impl DevicePlugin for DevicePluginService {
             );
 
             // collect all NVIDIA devices to be passed to the container
-            let devices = Self::get_nvidia_devices();
+            let devices = Self::get_nvidia_devices(&nvml);
 
-            let envs = HashMap::new();
             let container_response = ContainerAllocateResponse {
-                envs,
+                envs: HashMap::new(),
                 mounts: Vec::new(),
                 devices,
                 annotations: HashMap::new(),
@@ -333,27 +377,12 @@ impl DevicePlugin for DevicePluginService {
         Ok(Response::new(response))
     }
 
-    /// pre-start container
     async fn pre_start_container(
         &self,
-        request: Request<PreStartContainerRequest>,
+        _request: Request<PreStartContainerRequest>,
     ) -> TonicResult<Response<PreStartContainerResponse>> {
-        let req = request.into_inner();
-        debug!("pre-start container processing: {:?}", req);
-
-        // simple pre-start processing, ensure host path exists
-        if !std::path::Path::new(&self.device_plugin.host_path).exists() {
-            error!("host path does not exist: {}", self.device_plugin.host_path);
-            return Err(Status::internal(format!(
-                "host path does not exist: {}",
-                self.device_plugin.host_path
-            )));
-        }
-
-        info!(
-            "pre-start check completed, host path exists: {}",
-            self.device_plugin.host_path
-        );
+        // pre_start_required is set to false, this should not be called
+        // but we need to implement it for the trait
         Ok(Response::new(PreStartContainerResponse {}))
     }
 }

@@ -47,12 +47,12 @@ impl ApplicationBuilder {
         // Create pod manager (special handling for callback functions)
         let pod_manager = self.create_pod_manager(&components, &gpu_system).await?;
 
-        // Create device plugin if enabled
-        let device_plugin = if self.daemon_args.enable_device_plugin {
-            Some(self.create_device_plugin())
-        } else {
-            None
-        };
+        // Create device plugin if path is configured
+        let device_plugin = self
+            .daemon_args
+            .device_plugin_path
+            .as_ref()
+            .map(|_| self.create_device_plugin());
 
         // Build application services with all components
         let services = ApplicationServices {
@@ -171,19 +171,8 @@ impl ApplicationBuilder {
     fn create_device_plugin(&self) -> Arc<GpuDevicePlugin> {
         let endpoint = "tensor-fusion.sock".to_string();
         let resource_name = self.daemon_args.device_plugin_resource_name.clone();
-        let host_path = self
-            .daemon_args
-            .shared_memory_base_path
-            .to_string_lossy()
-            .to_string();
 
-        GpuDevicePlugin::new(
-            endpoint,
-            resource_name,
-            host_path,
-            false, // pre_start_required
-            false, // get_preferred_allocation_available
-        )
+        GpuDevicePlugin::new(endpoint, resource_name)
     }
 }
 

@@ -30,7 +30,11 @@ pub async fn initialize_gpu_system(daemon_args: &DaemonArgs) -> Result<GpuSystem
     Ok(GpuSystem { nvml, device_count })
 }
 
-fn init_nvml() -> Result<Nvml> {
+/// Initialize NVML with fallback to explicit library path
+///
+/// First attempts standard initialization, then falls back to explicit library path
+/// if standard init fails.
+pub fn init_nvml() -> Result<Nvml> {
     match Nvml::init() {
         Ok(nvml) => {
             tracing::info!("NVML initialized successfully");

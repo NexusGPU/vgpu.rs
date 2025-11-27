@@ -79,8 +79,8 @@ impl Tasks {
         let pod_manager_cleanup_loop_task = self.spawn_pod_manager_cleanup_loop_task(app);
         self.tasks.push(pod_manager_cleanup_loop_task);
 
-        // start device plugin if enabled
-        if cli.enable_device_plugin {
+        // start device plugin if path is configured
+        if cli.device_plugin_path.is_some() {
             let device_plugin_task = self.spawn_device_plugin_task(app);
             self.tasks.push(device_plugin_task);
         }
@@ -288,7 +288,10 @@ impl Tasks {
     fn spawn_device_plugin_task(&self, app: &Application) -> JoinHandle<()> {
         let cli = app.daemon_args();
         let device_plugin = app.services().device_plugin.clone();
-        let device_plugin_path = cli.device_plugin_path.clone();
+        let device_plugin_path = cli
+            .device_plugin_path
+            .clone()
+            .expect("should have device_plugin_path when spawning device plugin task");
         let token = self.cancellation_token.clone();
 
         tokio::spawn(async move {
@@ -300,25 +303,26 @@ impl Tasks {
             tracing::info!("Starting device plugin task");
 
             let socket_path = device_plugin_path.join("tensor-fusion.sock");
-            let socket_path_str = socket_path.to_string_lossy().to_string();
 
-            // start device plugin server
-            if let Err(e) = device_plugin.start(&socket_path_str, token.clone()).await {
-                tracing::error!("Failed to start device plugin server: {e}");
+            // start device plugin server and wait for it to be ready
+            let ready_rx = match device_plugin.start(&socket_path, token.clone()).await {
+                Ok(rx) => rx,
+                Err(e) => {
+                    tracing::error!("Failed to start device plugin server: {e}");
+                    return;
+                }
+            };
+
+            // wait for server to be ready
+            if ready_rx.await.is_err() {
+                tracing::error!("Failed to receive ready signal from device plugin server");
                 return;
             }
 
-            // wait a moment for the server to start
-            tokio::time::sleep(Duration::from_millis(100)).await;
-
             // register with kubelet
             let kubelet_socket = device_plugin_path.join("kubelet.sock");
-            let kubelet_socket_str = kubelet_socket.to_string_lossy().to_string();
 
-            if let Err(e) = device_plugin
-                .register_with_kubelet(&kubelet_socket_str)
-                .await
-            {
+            if let Err(e) = device_plugin.register_with_kubelet(&kubelet_socket).await {
                 tracing::error!("Failed to register device plugin with kubelet: {e}");
                 return;
             }
