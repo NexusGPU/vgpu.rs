@@ -298,8 +298,10 @@ where
         };
 
         // Fast path: check if already registered with matching configuration (lock-free)
-        if let Some(existing_state) = self.pod_state_store.get_pod(&pod_identifier) {
-            if Self::check_pod_config_match(&existing_state, &pod_info.0, &device_configs) {
+        if let Some(matches) = self.pod_state_store.with_pod(&pod_identifier, |state| {
+            Self::check_pod_config_match(state, &pod_info.0, &device_configs)
+        }) {
+            if matches {
                 return Ok(());
             }
             debug!(
@@ -312,8 +314,10 @@ where
         let _guard = self.registration_locks.lock(&pod_identifier).await;
 
         // Double-check after acquiring lock
-        if let Some(existing_state) = self.pod_state_store.get_pod(&pod_identifier) {
-            if Self::check_pod_config_match(&existing_state, &pod_info.0, &device_configs) {
+        if let Some(matches) = self.pod_state_store.with_pod(&pod_identifier, |state| {
+            Self::check_pod_config_match(state, &pod_info.0, &device_configs)
+        }) {
+            if matches {
                 return Ok(());
             }
         }
