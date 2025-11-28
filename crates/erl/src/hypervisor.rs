@@ -1,7 +1,6 @@
-use crate::ErlError;
 use crate::backend::DeviceBackend;
-use error_stack::{IntoReport, Report};
-pub type Result<T, C> = core::result::Result<T, Report<C>>;
+use crate::{ErlError, Result};
+use error_stack::IntoReport;
 
 /// Configuration for the PID-based device controller.
 #[derive(Debug, Clone)]

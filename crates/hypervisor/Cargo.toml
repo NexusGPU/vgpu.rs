@@ -56,7 +56,7 @@ tonic-prost-build = "0.14"
 
 [[bin]]
 name = "hypervisor"
-path = "src/hyper.rs"
+path = "src/main.rs"
 
 [dev-dependencies]
 similar-asserts = { workspace = true }

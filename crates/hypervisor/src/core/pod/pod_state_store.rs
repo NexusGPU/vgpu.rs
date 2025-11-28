@@ -74,15 +74,23 @@ impl PodStateStore {
         // Use entry API to atomically check and update, avoiding nested locks
         let was_overwritten = match self.pods.entry(pod_identifier.clone()) {
             Entry::Occupied(mut entry) => {
-                let existing = entry.get();
-                let mut pod_state = PodState::new(info, device_configs.clone());
-                pod_state.processes = existing.processes.clone();
-                pod_state.shared_memory_handle = existing.shared_memory_handle.clone();
+                // Preserve existing runtime state when updating pod config
+                let (processes, shm_handle) = {
+                    let existing = entry.get();
+                    (
+                        existing.processes.clone(),
+                        existing.shared_memory_handle.clone(),
+                    )
+                };
+
+                let mut pod_state = PodState::new(info, device_configs);
+                pod_state.processes = processes;
+                pod_state.shared_memory_handle = shm_handle;
 
                 debug!(
                     namespace = %pod_identifier.namespace,
                     pod_name = %pod_identifier.name,
-                    existing_processes = existing.processes.len(),
+                    existing_processes = pod_state.processes.len(),
                     "Overwriting existing pod registration"
                 );
 
@@ -186,6 +194,16 @@ impl PodStateStore {
     /// Get pod state by identifier
     pub fn get_pod(&self, pod_identifier: &PodIdentifier) -> Option<PodState> {
         self.pods.get(pod_identifier).map(|entry| entry.clone())
+    }
+
+    /// Access pod state with a closure without cloning
+    ///
+    /// This is more efficient than `get_pod()` when you only need to read fields.
+    pub fn with_pod<F, R>(&self, pod_identifier: &PodIdentifier, f: F) -> Option<R>
+    where
+        F: FnOnce(&PodState) -> R,
+    {
+        self.pods.get(pod_identifier).map(|entry| f(&entry))
     }
 
     /// Get pod info by identifier without cloning entire state
