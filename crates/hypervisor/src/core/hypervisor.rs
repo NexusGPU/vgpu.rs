@@ -7,17 +7,17 @@ use tokio_util::sync::CancellationToken;
 
 use crate::core::process::{GpuProcess, Worker};
 use crate::core::scheduler::{GpuScheduler, Scheduler, SchedulingDecision};
-use trap::{TrapFrame, TrapHandler, Waker};
+use trap::{TrapAction, TrapError, TrapFrame, TrapHandler, Waker};
 
 pub type HypervisorType = Hypervisor<Worker, Scheduler>;
 
-pub struct Hypervisor<Proc: GpuProcess, Sched: GpuScheduler<Proc>> {
+pub struct Hypervisor<Proc: GpuProcess + Clone, Sched: GpuScheduler<Proc>> {
     scheduler: Arc<Mutex<Sched>>,
     scheduling_interval: Duration,
     _marker: PhantomData<Proc>,
 }
 
-impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
+impl<Proc: GpuProcess + Clone, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
     pub fn new(scheduler: Sched, scheduling_interval: Duration) -> Self {
         Self {
             scheduler: Arc::new(Mutex::new(scheduler)),
@@ -46,54 +46,74 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
     }
 
     pub(crate) async fn schedule_once(&self) {
-        let mut scheduler = self.scheduler.lock().await;
-        // Execute scheduling decisions
-        let decisions = match scheduler.schedule().await {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::error!("scheduling error: {}", e);
-                return;
-            }
+        let scheduled_actions = {
+            let mut scheduler = self.scheduler.lock().await;
+            let decisions = match scheduler.schedule().await {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::error!("scheduling error: {}", e);
+                    return;
+                }
+            };
+
+            decisions
+                .into_iter()
+                .map(|decision| {
+                    let process = match &decision {
+                        SchedulingDecision::Pause(pid)
+                        | SchedulingDecision::Release(pid)
+                        | SchedulingDecision::Resume(pid) => scheduler.get_process(*pid).cloned(),
+                        SchedulingDecision::Wake(_, _, _) => None,
+                    };
+
+                    let done_decision = match &decision {
+                        SchedulingDecision::Pause(pid) => SchedulingDecision::Pause(*pid),
+                        SchedulingDecision::Release(pid) => SchedulingDecision::Release(*pid),
+                        SchedulingDecision::Resume(pid) => SchedulingDecision::Resume(*pid),
+                        SchedulingDecision::Wake(_, trap_id, action) => {
+                            SchedulingDecision::Wake(Box::new(NoopWaker), *trap_id, action.clone())
+                        }
+                    };
+
+                    (decision, done_decision, process)
+                })
+                .collect::<Vec<_>>()
         };
 
-        // Apply scheduling decisions
-        for decision in decisions.iter() {
-            match decision {
-                SchedulingDecision::Pause(id) => {
+        for (decision, done_decision, process) in scheduled_actions {
+            match (decision, process) {
+                (SchedulingDecision::Pause(id), Some(proc)) => {
                     tracing::info!("pausing process {}", id);
-                    if let Some(process) = scheduler.get_process(*id) {
-                        if let Err(e) = process.pause().await {
-                            tracing::warn!("failed to pause process {}: {}", id, e);
-                            continue;
-                        }
+                    if let Err(e) = proc.pause().await {
+                        tracing::warn!("failed to pause process {}: {}", id, e);
                     }
                 }
-                SchedulingDecision::Release(id) => {
+                (SchedulingDecision::Release(id), Some(proc)) => {
                     tracing::info!("releasing process {}", id);
-                    if let Some(process) = scheduler.get_process(*id) {
-                        if let Err(e) = process.release().await {
-                            tracing::warn!("failed to release process {}: {}", id, e);
-                            continue;
-                        }
+                    if let Err(e) = proc.release().await {
+                        tracing::warn!("failed to release process {}: {}", id, e);
                     }
                 }
-                SchedulingDecision::Resume(id) => {
+                (SchedulingDecision::Resume(id), Some(proc)) => {
                     tracing::info!("resuming process {}", id);
-                    if let Some(process) = scheduler.get_process(*id) {
-                        if let Err(e) = process.resume().await {
-                            tracing::warn!("failed to resume process {}: {}", id, e);
-                            continue;
-                        }
+                    if let Err(e) = proc.resume().await {
+                        tracing::warn!("failed to resume process {}: {}", id, e);
                     }
                 }
-                SchedulingDecision::Wake(waker, trap_id, arg) => {
+                (SchedulingDecision::Pause(id), None)
+                | (SchedulingDecision::Release(id), None)
+                | (SchedulingDecision::Resume(id), None) => {
+                    tracing::warn!("scheduler decision references unknown process {}", id);
+                }
+                (SchedulingDecision::Wake(waker, trap_id, action), _) => {
                     tracing::info!("waking up trapped process");
-                    if let Err(e) = waker.send(*trap_id, arg.clone()).await {
+                    if let Err(e) = waker.send(trap_id, action).await {
                         tracing::warn!("failed to wake trapped process: {}", e);
                     }
                 }
             }
-            scheduler.done_decision(decision);
+
+            self.scheduler.lock().await.done_decision(&done_decision);
         }
     }
 
@@ -120,7 +140,7 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched> {
 }
 
 #[async_trait::async_trait]
-impl<Proc: GpuProcess, Sched: GpuScheduler<Proc> + Send + 'static> TrapHandler
+impl<Proc: GpuProcess + Clone, Sched: GpuScheduler<Proc> + Send + 'static> TrapHandler
     for Hypervisor<Proc, Sched>
 {
     async fn handle_trap(&self, pid: u32, trap_id: u64, frame: &TrapFrame, waker: Box<dyn Waker>) {
@@ -133,5 +153,14 @@ impl<Proc: GpuProcess, Sched: GpuScheduler<Proc> + Send + 'static> TrapHandler
             .await
             .on_trap(pid, trap_id, frame_arc, waker)
             .await;
+    }
+}
+
+struct NoopWaker;
+
+#[async_trait::async_trait]
+impl Waker for NoopWaker {
+    async fn send(&self, _: u64, _: TrapAction) -> Result<(), TrapError> {
+        Ok(())
     }
 }

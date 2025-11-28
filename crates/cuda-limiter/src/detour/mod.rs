@@ -21,7 +21,10 @@ macro_rules! with_device {
                     Ok(device_index) => Ok($expr(limiter, device_index)),
                     Err(e) => Err(e),
                 },
-                None => Err($crate::limiter::Error::LimiterNotInitialized),
+                None => {
+                    $crate::report_limiter_not_initialized();
+                    Err($crate::limiter::Error::LimiterNotInitialized)
+                }
             }
         }
     }};

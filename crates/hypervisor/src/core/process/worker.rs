@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use api_types::QosLevel;
 
 use super::GpuProcess;
@@ -58,44 +58,17 @@ impl TensorFusionWorker {
     }
 
     /// Send command to limiter using CommandDispatcher
-    fn send_command(&self, command_type: LimiterCommandType) -> Result<()> {
+    async fn send_command(&self, command_type: LimiterCommandType) -> Result<()> {
         let limiter_id = self.get_limiter_id();
-        let command_dispatcher = Arc::clone(&self.command_dispatcher);
-        let process_id = self.id;
 
-        // Clone values for use in the async closure
-        let limiter_id_clone = limiter_id.clone();
-        let command_type_clone = command_type.clone();
+        self.command_dispatcher
+            .enqueue_command(&limiter_id, command_type.clone())
+            .await
+            .map(|_| ())
+            .map_err(|err| anyhow!(err))?;
 
-        // Spawn a task to send the command asynchronously without blocking
-        tokio::spawn(async move {
-            match command_dispatcher
-                .enqueue_command(&limiter_id_clone, command_type_clone.clone())
-                .await
-            {
-                Ok(_command_id) => {
-                    tracing::info!(
-                        "Command {:?} sent successfully to limiter {} for process {}",
-                        command_type_clone,
-                        limiter_id_clone,
-                        process_id
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to send command {:?} to limiter {} for process {}: {}",
-                        command_type_clone,
-                        limiter_id_clone,
-                        process_id,
-                        e
-                    );
-                }
-            }
-        });
-
-        // Return immediately - the command will be sent asynchronously
         tracing::info!(
-            "Queued command {:?} for limiter {} for process {}",
+            "Command {:?} sent successfully to limiter {} for process {}",
             command_type,
             limiter_id,
             self.id
@@ -129,45 +102,33 @@ impl GpuProcess for TensorFusionWorker {
     }
 
     async fn pause(&self) -> Result<()> {
-        match self.send_command(LimiterCommandType::TfSuspend) {
-            Ok(()) => {
-                *self.state.write().await = ProcessState::Paused;
-                tracing::info!("Process {} paused successfully", self.id);
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Failed to pause process {}: {}", self.id, e);
-                Err(e)
-            }
+        if let Err(error) = self.send_command(LimiterCommandType::Suspend).await {
+            tracing::error!("Failed to pause process {}: {}", self.id, error);
+            return Err(error);
         }
+        *self.state.write().await = ProcessState::Paused;
+        tracing::info!("Process {} paused successfully", self.id);
+        Ok(())
     }
 
     async fn release(&self) -> Result<()> {
-        match self.send_command(LimiterCommandType::TfVramReclaim) {
-            Ok(()) => {
-                *self.state.write().await = ProcessState::Released;
-                tracing::info!("Process {} released successfully", self.id);
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Failed to release process {}: {}", self.id, e);
-                Err(e)
-            }
+        if let Err(error) = self.send_command(LimiterCommandType::VramReclaim).await {
+            tracing::error!("Failed to release process {}: {}", self.id, error);
+            return Err(error);
         }
+        *self.state.write().await = ProcessState::Released;
+        tracing::info!("Process {} released successfully", self.id);
+        Ok(())
     }
 
     async fn resume(&self) -> Result<()> {
-        match self.send_command(LimiterCommandType::TfResume) {
-            Ok(()) => {
-                *self.state.write().await = ProcessState::Running;
-                tracing::info!("Process {} resumed successfully", self.id);
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Failed to resume process {}: {}", self.id, e);
-                Err(e)
-            }
+        if let Err(error) = self.send_command(LimiterCommandType::Resume).await {
+            tracing::error!("Failed to resume process {}: {}", self.id, error);
+            return Err(error);
         }
+        *self.state.write().await = ProcessState::Running;
+        tracing::info!("Process {} resumed successfully", self.id);
+        Ok(())
     }
 
     fn qos_level(&self) -> super::QosLevel {

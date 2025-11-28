@@ -148,7 +148,9 @@ impl<T> Deref for HookFn<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.0.get().unwrap()
+        self.0
+            .get()
+            .expect("hook function not initialized before use")
     }
 }
 
@@ -156,6 +158,10 @@ impl<T> HookFn<T> {
     /// Helper function to set the inner [`OnceLock`] `T` of `self`.
     pub fn set(&self, value: T) -> Result<(), T> {
         self.0.set(value)
+    }
+
+    pub fn get(&self) -> Option<&T> {
+        self.0.get()
     }
 
     pub fn is_none(&self) -> bool {

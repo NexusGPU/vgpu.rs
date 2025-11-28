@@ -4,6 +4,7 @@
 //! with the new generic HTTP bidirectional communication library.
 
 use std::ffi::c_int;
+use std::io;
 use std::sync::Arc;
 
 use api_types::LimiterCommand;
@@ -31,37 +32,30 @@ impl TaskProcessor<LimiterCommand, LimiterCommandResponse> for CommandProcessor 
     ) -> Result<LimiterCommandResponse, Box<dyn std::error::Error + Send + Sync>> {
         info!(command_id = task.id, command_type = ?task.kind, "Processing command");
 
-        let (ret, desc) = {
-            unsafe {
-                type TfHealthCheck = unsafe extern "C" fn() -> c_int;
-                type TfSuspend = unsafe extern "C" fn() -> c_int;
-                type TfResume = unsafe extern "C" fn() -> c_int;
-                type TfVramReclaim = unsafe extern "C" fn() -> c_int;
-                let lib = GLOBAL_NGPU_LIBRARY.get().expect("GLOBAL_NGPU_LIBRARY");
-                match task.kind {
-                    LimiterCommandType::TfHealthCheck => {
-                        let symbol: libloading::Symbol<TfHealthCheck> =
-                            lib.get(b"tf_health_check").unwrap();
-                        let result = symbol();
-                        (result, "tf_health_check")
-                    }
-                    LimiterCommandType::TfSuspend => {
-                        let symbol: libloading::Symbol<TfSuspend> = lib.get(b"tf_suspend").unwrap();
-                        let result = symbol();
-                        (result, "tf_suspend")
-                    }
-                    LimiterCommandType::TfResume => {
-                        let symbol: libloading::Symbol<TfResume> = lib.get(b"tf_resume").unwrap();
-                        let result = symbol();
-                        (result, "tf_resume")
-                    }
-                    LimiterCommandType::TfVramReclaim => {
-                        let symbol: libloading::Symbol<TfVramReclaim> =
-                            lib.get(b"tf_vram_reclaim").unwrap();
-                        let result = symbol();
-                        (result, "tf_vram_reclaim")
-                    }
-                }
+        let lib = match GLOBAL_NGPU_LIBRARY.get() {
+            Some(lib) => lib,
+            None => {
+                let err = io::Error::other("nGPU library not initialized");
+                error!(
+                    command_id = task.id,
+                    command_type = ?task.kind,
+                    error = %err,
+                    "Failed to access GPU library"
+                );
+                return Err(Box::new(err));
+            }
+        };
+
+        let (ret, desc) = match Self::invoke_symbol(lib, task.kind.clone()) {
+            Ok(result) => result,
+            Err(err) => {
+                error!(
+                    command_id = task.id,
+                    command_type = ?task.kind,
+                    error = %err,
+                    "Failed to resolve limiter command symbol"
+                );
+                return Err(Box::new(err));
             }
         };
 
@@ -89,6 +83,38 @@ impl TaskProcessor<LimiterCommand, LimiterCommandResponse> for CommandProcessor 
                 success: false,
                 message: Some(format!("{desc} failed with code {ret}")),
             })
+        }
+    }
+}
+
+impl CommandProcessor {
+    fn invoke_symbol(
+        lib: &libloading::Library,
+        kind: LimiterCommandType,
+    ) -> Result<(c_int, &'static str), libloading::Error> {
+        unsafe {
+            type TfHealthCheck = unsafe extern "C" fn() -> c_int;
+            type TfSuspend = unsafe extern "C" fn() -> c_int;
+            type TfResume = unsafe extern "C" fn() -> c_int;
+            type TfVramReclaim = unsafe extern "C" fn() -> c_int;
+            match kind {
+                LimiterCommandType::HealthCheck => {
+                    let symbol: libloading::Symbol<TfHealthCheck> = lib.get(b"tf_health_check")?;
+                    Ok((symbol(), "tf_health_check"))
+                }
+                LimiterCommandType::Suspend => {
+                    let symbol: libloading::Symbol<TfSuspend> = lib.get(b"tf_suspend")?;
+                    Ok((symbol(), "tf_suspend"))
+                }
+                LimiterCommandType::Resume => {
+                    let symbol: libloading::Symbol<TfResume> = lib.get(b"tf_resume")?;
+                    Ok((symbol(), "tf_resume"))
+                }
+                LimiterCommandType::VramReclaim => {
+                    let symbol: libloading::Symbol<TfVramReclaim> = lib.get(b"tf_vram_reclaim")?;
+                    Ok((symbol(), "tf_vram_reclaim"))
+                }
+            }
         }
     }
 }

@@ -124,7 +124,10 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
     }
 }
 
-pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager, is_mapping_idx: bool) {
+pub(crate) unsafe fn enable_hooks(
+    hook_manager: &mut HookManager,
+    is_mapping_idx: bool,
+) -> Result<(), utils::Error> {
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),
@@ -132,7 +135,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager, is_mapping_idx
         nvml_device_get_memory_info_detour,
         FnNvml_device_get_memory_info,
         FN_NVML_DEVICE_GET_MEMORY_INFO
-    );
+    )?;
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),
@@ -140,7 +143,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager, is_mapping_idx
         nvml_device_get_memory_info_v2_detour,
         FnNvml_device_get_memory_info_v2,
         FN_NVML_DEVICE_GET_MEMORY_INFO_V2
-    );
+    )?;
 
     if is_mapping_idx {
         replace_symbol!(
@@ -150,7 +153,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager, is_mapping_idx
             nvml_device_get_count_v2_detour,
             FnNvml_device_get_count_v2,
             FN_NVML_DEVICE_GET_COUNT_V2
-        );
+        )?;
         replace_symbol!(
             hook_manager,
             Some("libnvidia-ml."),
@@ -158,7 +161,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager, is_mapping_idx
             nvml_device_get_count_detour,
             FnNvml_device_get_count,
             FN_NVML_DEVICE_GET_COUNT
-        );
+        )?;
         replace_symbol!(
             hook_manager,
             Some("libnvidia-ml."),
@@ -166,7 +169,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager, is_mapping_idx
             nvml_device_get_handle_by_index_v2_detour,
             FnNvml_device_get_handle_by_index_v2,
             FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2
-        );
+        )?;
 
         replace_symbol!(
             hook_manager,
@@ -175,6 +178,8 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager, is_mapping_idx
             nvml_device_get_persistence_mode_detour,
             FnNvml_device_get_persistence_mode,
             FN_NVML_DEVICE_GET_PERSISTENCE_MODE
-        );
+        )?;
     }
+
+    Ok(())
 }
