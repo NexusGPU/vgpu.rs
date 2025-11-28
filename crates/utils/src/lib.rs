@@ -21,6 +21,9 @@ pub enum Error {
 
     #[error("Frida failed with `{0}`")]
     Frida(FridaError),
+
+    #[error("Hook for `{0}` already initialized")]
+    HookAlreadyInitialized(Cow<'static, str>),
 }
 
 impl From<FridaError> for Error {

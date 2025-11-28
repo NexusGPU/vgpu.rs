@@ -1,6 +1,7 @@
 //! Simplified pod manager that handles worker lifecycle with unified state management.
 
 use std::fs;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -441,18 +442,57 @@ where
             .register_process(&pod_identifier, host_pid)?;
 
         // 2. Register with limiter coordinator
-        // Register process with the limiter coordinator.
-        self.limiter_coordinator
+        let limiter_registration = self
+            .limiter_coordinator
             .register_process(&pod_identifier, host_pid)
             .await
             .map_err(|e| PodManagementError::RegistrationFailed {
                 message: e.to_string(),
-            })?;
+            });
+
+        if let Err(err) = limiter_registration {
+            if let Err(cleanup_err) = self
+                .pod_state_store
+                .unregister_process(&pod_identifier, host_pid)
+            {
+                tracing::error!(
+                    "failed to rollback pod state registration for {}: {}",
+                    pod_identifier,
+                    cleanup_err
+                );
+            }
+            return Err(err);
+        }
 
         // 3. Open shared memory for the pod
-        self.pod_state_store
+        if let Err(err) = self
+            .pod_state_store
             .open_shared_memory(&pod_identifier)
-            .await?;
+            .await
+        {
+            if let Err(cleanup_err) = self
+                .limiter_coordinator
+                .unregister_process(&pod_identifier, host_pid)
+                .await
+            {
+                tracing::error!(
+                    "failed to rollback limiter registration for {}: {}",
+                    pod_identifier,
+                    cleanup_err
+                );
+            }
+            if let Err(cleanup_err) = self
+                .pod_state_store
+                .unregister_process(&pod_identifier, host_pid)
+            {
+                tracing::error!(
+                    "failed to rollback pod state registration for {}: {}",
+                    pod_identifier,
+                    cleanup_err
+                );
+            }
+            return Err(err);
+        }
 
         // 4. Add worker to hypervisor
         if !self.hypervisor.process_exists(host_pid).await {
@@ -466,6 +506,18 @@ where
         );
 
         Ok(())
+    }
+
+    fn is_pid_alive(pid: u32) -> bool {
+        let ret = unsafe { libc::kill(pid as i32, 0) };
+        if ret == 0 {
+            return true;
+        }
+        match io::Error::last_os_error().raw_os_error() {
+            Some(code) if code == libc::EPERM => true,
+            Some(code) if code == libc::ESRCH => false,
+            _ => false,
+        }
     }
 
     /// check_and_cleanup_dead_processes for use in monitoring task
@@ -527,8 +579,7 @@ where
 
         // Check each PID for liveness
         for pid in tracked_pids {
-            let is_alive = unsafe { libc::kill(pid as i32, 0) == 0 };
-            if !is_alive {
+            if !Self::is_pid_alive(pid) {
                 info!("Detected dead process: {}", pid);
                 dead_pids.push(pid);
 

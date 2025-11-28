@@ -440,7 +440,7 @@ pub(crate) unsafe extern "C" fn cu_device_get_detour(
     result
 }
 
-pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
+pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) -> Result<(), utils::Error> {
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
@@ -448,7 +448,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_launch_kernel_ptsz_detour,
         FnCu_launch_kernel_ptsz,
         FN_CU_LAUNCH_KERNEL_PTSZ
-    );
+    )?;
 
     replace_symbol!(
         hook_manager,
@@ -457,7 +457,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_launch_kernel_detour,
         FnCu_launch_kernel,
         FN_CU_LAUNCH_KERNEL
-    );
+    )?;
 
     replace_symbol!(
         hook_manager,
@@ -466,7 +466,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_launch_detour,
         FnCu_launch,
         FN_CU_LAUNCH
-    );
+    )?;
 
     replace_symbol!(
         hook_manager,
@@ -475,7 +475,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_launch_cooperative_kernel_ptsz_detour,
         FnCu_launch_cooperative_kernel_ptsz,
         FN_CU_LAUNCH_COOPERATIVE_KERNEL_PTSZ
-    );
+    )?;
 
     replace_symbol!(
         hook_manager,
@@ -484,7 +484,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_launch_cooperative_kernel_detour,
         FnCu_launch_cooperative_kernel,
         FN_CU_LAUNCH_COOPERATIVE_KERNEL
-    );
+    )?;
 
     replace_symbol!(
         hook_manager,
@@ -493,7 +493,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_launch_grid_detour,
         FnCu_launch_grid,
         FN_CU_LAUNCH_GRID
-    );
+    )?;
 
     replace_symbol!(
         hook_manager,
@@ -502,7 +502,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_launch_grid_async_detour,
         FnCu_launch_grid_async,
         FN_CU_LAUNCH_GRID_ASYNC
-    );
+    )?;
 
     replace_symbol!(
         hook_manager,
@@ -511,7 +511,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_func_set_block_shape_detour,
         FnCu_func_set_block_shape,
         FN_CU_FUNC_SET_BLOCK_SHAPE
-    );
+    )?;
 
     replace_symbol!(
         hook_manager,
@@ -520,7 +520,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_init_detour,
         FnCu_init,
         FN_CU_INIT
-    );
+    )?;
 
     replace_symbol!(
         hook_manager,
@@ -529,5 +529,7 @@ pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) {
         cu_device_get_detour,
         FnCu_device_get,
         FN_CU_DEVICE_GET
-    );
+    )?;
+
+    Ok(())
 }
