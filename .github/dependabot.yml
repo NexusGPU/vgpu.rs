@@ -21,3 +21,9 @@ updates:
       interval: "weekly"
     assignees:
       - "0x5457"
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    assignees:
+      - "0x5457"
