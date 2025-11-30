@@ -3,7 +3,7 @@ use std::fmt;
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::core::process::{GpuProcess, Worker};
+use crate::core::process::{GpuProcess, WorkerHandle};
 
 pub mod weighted;
 
@@ -11,7 +11,7 @@ pub mod weighted;
 pub use weighted::WeightedScheduler;
 
 /// Concrete scheduler type
-pub type Scheduler = WeightedScheduler<Worker>;
+pub type Scheduler = WeightedScheduler<WorkerHandle>;
 
 /// Scheduling decisions
 pub enum SchedulingDecision {
@@ -45,8 +45,8 @@ impl fmt::Debug for SchedulingDecision {
 /// Trait for GPU scheduler
 #[async_trait::async_trait]
 pub trait GpuScheduler<Proc: GpuProcess> {
-    /// Add a new process to the scheduler
-    fn add_process(&mut self, process: Proc);
+    /// Register a new process with the scheduler
+    fn register_process(&mut self, process: Proc);
 
     /// Remove a process from the scheduler
     fn remove_process(&mut self, process_id: u32);

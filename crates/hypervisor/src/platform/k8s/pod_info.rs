@@ -1,18 +1,18 @@
 use std::collections::BTreeMap;
 
+use api_types::PodResourceInfo;
 use api_types::QosLevel;
 use error_stack::Report;
 use error_stack::ResultExt;
 
 use crate::platform::k8s::KubernetesError;
-use api_types::WorkerInfo;
 
 /// Domain prefix for tensor-fusion annotations.
 const TENSOR_FUSION_DOMAIN: &str = "tensor-fusion.ai";
 
 /// Tensor-fusion specific annotations extracted from Kubernetes pods.
 #[derive(Debug, Clone, Default)]
-pub struct TensorFusionPodInfo(pub WorkerInfo);
+pub struct TensorFusionPodInfo(pub PodResourceInfo);
 
 impl TensorFusionPodInfo {
     /// Parse tensor-fusion annotations from a Kubernetes pod's annotations.
@@ -27,7 +27,7 @@ impl TensorFusionPodInfo {
         annotations: &BTreeMap<String, String>,
         labels: &BTreeMap<String, String>,
     ) -> Result<Self, Report<KubernetesError>> {
-        let mut worker_info = WorkerInfo {
+        let mut pod_info = PodResourceInfo {
             labels: labels.clone(),
             workload_name: labels
                 .get(&format!("{TENSOR_FUSION_DOMAIN}/workload"))
@@ -37,27 +37,27 @@ impl TensorFusionPodInfo {
 
         // Parse TFLOPS request
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/tflops-request")) {
-            worker_info.tflops_request = Some(parse_tflops_value(value)?);
+            pod_info.tflops_request = Some(parse_tflops_value(value)?);
         }
 
         // Parse VRAM request
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/vram-request")) {
-            worker_info.vram_request = Some(parse_memory_value(value)?);
+            pod_info.vram_request = Some(parse_memory_value(value)?);
         }
 
         // Parse TFLOPS limit
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/tflops-limit")) {
-            worker_info.tflops_limit = Some(parse_tflops_value(value)?);
+            pod_info.tflops_limit = Some(parse_tflops_value(value)?);
         }
 
         // Parse VRAM limit
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/vram-limit")) {
-            worker_info.vram_limit = Some(parse_memory_value(value)?);
+            pod_info.vram_limit = Some(parse_memory_value(value)?);
         }
 
         // Parse GPU UUIDs
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/gpu-ids")) {
-            worker_info.gpu_uuids = Some(value.split(',').map(|s| s.to_string()).collect());
+            pod_info.gpu_uuids = Some(value.split(',').map(|s| s.to_string()).collect());
         }
 
         // Parse QoS level
@@ -71,22 +71,22 @@ impl TensorFusionPodInfo {
                 _ => QosLevel::Medium,
             };
 
-            worker_info.qos_level = Some(qos_level);
+            pod_info.qos_level = Some(qos_level);
         }
 
         // Parse container names
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/inject-container")) {
-            worker_info.containers = Some(value.split(',').map(|s| s.to_string()).collect());
+            pod_info.containers = Some(value.split(',').map(|s| s.to_string()).collect());
         }
 
         // Parse isolation level
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/isolation")) {
-            worker_info.compute_shard = value == "shard";
+            pod_info.compute_shard = value == "shard";
         } else {
-            worker_info.compute_shard = false;
+            pod_info.compute_shard = false;
         }
 
-        Ok(Self(worker_info))
+        Ok(Self(pod_info))
     }
 
     /// Check if any tensor-fusion annotations are present.

@@ -19,6 +19,6 @@ mod limiter;
 pub type Result<T, C> = core::result::Result<T, Report<C>>;
 
 pub use backend::{DeviceBackend, DeviceQuota, TokenState};
-pub use error::ErlError;
+pub use error::RateLimitError;
 pub use hypervisor::{DeviceController, DeviceControllerConfig, DeviceControllerState};
 pub use limiter::{KernelLimiter, KernelLimiterConfig};

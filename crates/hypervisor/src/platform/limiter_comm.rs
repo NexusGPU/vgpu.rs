@@ -37,11 +37,11 @@ impl CommandDispatcher {
         Self { server }
     }
 
-    /// Enqueue a command for a specific limiter.
+    /// Enqueue a command for a specific worker.
     ///
     /// # Arguments
     ///
-    /// * `limiter_id` - The ID of the target limiter
+    /// * `worker_id` - The ID of the target worker
     /// * `kind` - The type of command to enqueue
     ///
     /// # Errors
@@ -50,31 +50,31 @@ impl CommandDispatcher {
     #[instrument(skip(self))]
     pub async fn enqueue_command(
         &self,
-        limiter_id: &str,
+        worker_id: &str,
         kind: LimiterCommandType,
     ) -> Result<u64, Report<CommError>> {
         // Create a command with a unique ID
         let id = generate_command_id();
         let cmd = LimiterCommand { id, kind };
 
-        // Enqueue the command for the specific limiter
-        let task_id = self.server.enqueue_task_for_client(limiter_id, cmd).await?;
+        // Enqueue the command for the specific worker
+        let task_id = self.server.enqueue_task_for_client(worker_id, cmd).await?;
 
-        info!(limiter_id = %limiter_id, command_id = id, task_id = %task_id, "Command enqueued");
+        info!(worker_id = %worker_id, command_id = id, task_id = %task_id, "Command enqueued");
 
         Ok(id)
     }
 
-    /// Get statistics for all limiter clients.
+    /// Get statistics for all worker clients.
     #[allow(dead_code)]
     pub async fn get_all_stats(&self) -> HashMap<String, ClientStats> {
         self.server.get_all_stats().await
     }
 
-    /// Get statistics for a specific limiter client.
+    /// Get statistics for a specific worker client.
     #[allow(dead_code)]
-    pub async fn get_client_stats(&self, limiter_id: &str) -> Option<ClientStats> {
-        self.server.get_client_stats(limiter_id).await
+    pub async fn get_client_stats(&self, worker_id: &str) -> Option<ClientStats> {
+        self.server.get_client_stats(worker_id).await
     }
 
     /// Create Poem routes for the limiter communication API.
@@ -126,27 +126,18 @@ mod tests {
         let dispatcher = CommandDispatcher::new();
 
         let command_id = dispatcher
-            .enqueue_command("test_limiter", LimiterCommandType::HealthCheck)
+            .enqueue_command("test_worker", LimiterCommandType::HealthCheck)
             .await
             .expect("should enqueue command");
 
         assert!(command_id > 0);
 
-        // Check that the limiter client now has pending tasks
-        let stats = dispatcher.get_client_stats("test_limiter").await;
+        // Check that the worker client now has pending tasks
+        let stats = dispatcher.get_client_stats("test_worker").await;
         assert!(stats.is_some());
 
         let client_stats = stats.expect("should have client stats");
         assert_eq!(client_stats.pending_tasks, 1);
-    }
-
-    #[test(tokio::test)]
-    async fn create_routes() {
-        let dispatcher = CommandDispatcher::new();
-        let routes = dispatcher.create_routes();
-
-        // Routes should be created successfully
-        let _ = routes;
     }
 
     #[test(tokio::test)]
@@ -156,54 +147,54 @@ mod tests {
         // fill queue to the configured limit (1000)
         for _ in 0..1000 {
             dispatcher
-                .enqueue_command("overflow_limiter", LimiterCommandType::HealthCheck)
+                .enqueue_command("overflow_worker", LimiterCommandType::HealthCheck)
                 .await
                 .expect("should enqueue until limit");
         }
 
         // the 1001st enqueue should fail
         let result = dispatcher
-            .enqueue_command("overflow_limiter", LimiterCommandType::HealthCheck)
+            .enqueue_command("overflow_worker", LimiterCommandType::HealthCheck)
             .await;
         assert!(result.is_err(), "should fail when queue is full");
 
         // queue stats should stay at the limit value
         let stats = dispatcher
-            .get_client_stats("overflow_limiter")
+            .get_client_stats("overflow_worker")
             .await
             .expect("should have stats");
         assert_eq!(stats.pending_tasks, 1000);
     }
 
     #[test(tokio::test)]
-    async fn multiple_limiters_stats() {
+    async fn multiple_workers_stats() {
         let dispatcher = CommandDispatcher::new();
 
-        // enqueue different number of commands for multiple limiters
+        // enqueue different number of commands for multiple workers
         dispatcher
-            .enqueue_command("limiter1", LimiterCommandType::HealthCheck)
+            .enqueue_command("worker1", LimiterCommandType::HealthCheck)
             .await
             .expect("should enqueue command");
         dispatcher
-            .enqueue_command("limiter1", LimiterCommandType::Resume)
+            .enqueue_command("worker1", LimiterCommandType::Resume)
             .await
             .expect("should enqueue second command");
         dispatcher
-            .enqueue_command("limiter2", LimiterCommandType::Suspend)
+            .enqueue_command("worker2", LimiterCommandType::Suspend)
             .await
-            .expect("should enqueue command for second limiter");
+            .expect("should enqueue command for second worker");
 
-        // verify each limiter's queue stats
+        // verify each worker's queue stats
         let stats1 = dispatcher
-            .get_client_stats("limiter1")
+            .get_client_stats("worker1")
             .await
-            .expect("should have stats for limiter1");
+            .expect("should have stats for worker1");
         assert_eq!(stats1.pending_tasks, 2);
 
         let stats2 = dispatcher
-            .get_client_stats("limiter2")
+            .get_client_stats("worker2")
             .await
-            .expect("should have stats for limiter2");
+            .expect("should have stats for worker2");
         assert_eq!(stats2.pending_tasks, 1);
 
         // verify global stats

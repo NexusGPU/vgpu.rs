@@ -263,7 +263,7 @@ pub(crate) async fn run_metrics<M, P, D, T>(
                             continue;
                         };
 
-                        let labels = &pod_state.info.labels;
+                        let labels = &pod_state.pod_info.labels;
 
                         let mut memory_bytes = 0;
                         let mut compute_percentage = 0.0;
@@ -275,7 +275,7 @@ pub(crate) async fn run_metrics<M, P, D, T>(
                             compute_tflops += acc.compute_tflops / acc.count as f64;
                             memory_percentage += {
                                 let avg_memory_bytes = acc.memory_bytes as f64 / acc.count as f64;
-                                let vram_limit = pod_state.info.vram_limit.unwrap_or(0) as f64;
+                                  let vram_limit = pod_state.pod_info.vram_limit.unwrap_or(0) as f64;
                                 if vram_limit > 0.0 { avg_memory_bytes / vram_limit * 100.0 } else { 0.0 }
                             }
                         }
@@ -297,13 +297,13 @@ pub(crate) async fn run_metrics<M, P, D, T>(
                             gpu_uuid,
                             node_name,
                             gpu_pool,
-                            pod_name: &pod_state.info.pod_name,
-                            namespace: &pod_state.info.namespace,
-                            workload: pod_state
-                                .info
-                                .workload_name
-                                .as_deref()
-                                .unwrap_or("unknown"),
+                              pod_name: &pod_state.pod_info.pod_name,
+                              namespace: &pod_state.pod_info.namespace,
+                              workload: pod_state
+                                  .pod_info
+                                  .workload_name
+                                  .as_deref()
+                                  .unwrap_or("unknown"),
                             memory_bytes,
                             compute_percentage,
                             compute_tflops,

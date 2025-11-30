@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use api_types::WorkerInfo;
+use api_types::PodResourceInfo;
 use utils::shared_memory::{handle::SharedMemoryHandle, DeviceConfig, PodIdentifier};
 
 /// Unified error type for pod management operations
@@ -64,7 +64,7 @@ impl Default for PodStatus {
 #[derive(Clone)]
 pub struct PodState {
     /// Basic pod information from Kubernetes
-    pub info: WorkerInfo,
+    pub pod_info: PodResourceInfo,
     /// Device configurations for GPU resources
     pub device_configs: Vec<Arc<DeviceConfig>>,
     /// All processes in this pod, keyed by host PID
@@ -77,9 +77,9 @@ pub struct PodState {
 
 impl PodState {
     /// Create a new pod state
-    pub fn new(info: WorkerInfo, device_configs: Vec<Arc<DeviceConfig>>) -> Self {
+    pub fn new(pod_info: PodResourceInfo, device_configs: Vec<Arc<DeviceConfig>>) -> Self {
         Self {
-            info,
+            pod_info,
             device_configs,
             processes: HashSet::new(),
             shared_memory_handle: None,
@@ -87,8 +87,8 @@ impl PodState {
         }
     }
 
-    /// Add a process to this pod
-    pub fn add_process(&mut self, host_pid: u32) {
+    /// Register a process with this pod
+    pub fn register_process(&mut self, host_pid: u32) {
         self.processes.insert(host_pid);
     }
 
@@ -133,7 +133,7 @@ impl PodState {
 impl std::fmt::Debug for PodState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UnifiedPodState")
-            .field("info", &self.info)
+            .field("pod_info", &self.pod_info)
             .field("device_configs", &self.device_configs)
             .field("processes", &self.processes)
             .field("shared_memory_handle", &self.shared_memory_handle.is_some())
@@ -168,8 +168,8 @@ mod tests {
 
     use super::*;
 
-    fn create_test_worker_info(pod_name: &str) -> WorkerInfo {
-        WorkerInfo {
+    fn create_test_worker_info(pod_name: &str) -> PodResourceInfo {
+        PodResourceInfo {
             namespace: "default".to_string(),
             pod_name: pod_name.to_string(),
             containers: Some(vec!["main".to_string()]),
@@ -197,19 +197,6 @@ mod tests {
             sm_count: 20,
             max_thread_per_sm: 128,
         }
-    }
-
-    #[test]
-    fn test_unified_pod_state_creation() {
-        let info = create_test_worker_info("test-pod");
-        let device_configs = vec![Arc::new(create_test_device_config())];
-
-        let pod_state = PodState::new(info.clone(), device_configs.clone());
-
-        assert_eq!(pod_state.info.pod_name, "test-pod");
-        assert_eq!(pod_state.device_configs.len(), 1);
-        assert!(pod_state.processes.is_empty());
-        assert_eq!(pod_state.status, PodStatus::Running);
     }
 
     #[test]

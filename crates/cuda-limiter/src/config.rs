@@ -2,7 +2,7 @@ use core::time::Duration;
 use std::env;
 use std::fs;
 
-use api_types::{PodInfoResponse, ProcessInitResponse};
+use api_types::{AutoFreezeConfig, PodInfoResponse, ProcessInitResponse};
 use error_stack::{Report, ResultExt};
 use reqwest::blocking::Client;
 
@@ -13,7 +13,7 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct PodConfig {
     pub gpu_uuids: Vec<String>,
     pub compute_shard: bool,
-    pub auto_freeze: Option<api_types::AutoFreezeInfo>,
+    pub auto_freeze: Option<AutoFreezeConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +108,7 @@ fn request_pod_info(
     }
 
     let pod_info = pod_response
-        .data
+        .pod_info
         .ok_or_else(|| Report::new(ConfigError::MissingData).attach("No pod data in response"))?;
 
     let request_duration = request_start.elapsed();
@@ -175,7 +175,7 @@ fn request_process_init(
         )));
     }
 
-    let process_info = process_response.data.ok_or_else(|| {
+    let process_info = process_response.process_info.ok_or_else(|| {
         Report::new(ConfigError::MissingData).attach("No process data in response")
     })?;
 

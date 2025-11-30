@@ -5,7 +5,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use api_types::{QosLevel, WorkerInfo};
+use api_types::{PodResourceInfo, QosLevel};
 use nvml_wrapper::Nvml;
 use tracing::{debug, info, warn};
 use utils::shared_memory::traits::SharedMemoryAccess;
@@ -14,7 +14,7 @@ use utils::shared_memory::{DeviceConfig, PodIdentifier};
 use crate::core::hypervisor::HypervisorType;
 use crate::core::pod::coordinator::LimiterCoordinator;
 use crate::core::pod::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
-use crate::core::process::worker::TensorFusionWorker;
+use crate::core::process::worker::Worker;
 use crate::core::process::GpuProcess;
 use crate::platform::host_pid_probe::{HostPidProbe, PodProcessInfo, SubscriptionRequest};
 use crate::platform::k8s::pod_info_cache::PodInfoCache;
@@ -23,7 +23,7 @@ use crate::platform::nvml::gpu_observer::GpuObserver;
 use tokio_util::sync::CancellationToken;
 use utils::keyed_lock::KeyedAsyncLock;
 
-use super::device_info::create_device_configs_from_worker_info;
+use super::device_info::create_device_configs_from_pod_resource_info;
 use super::pod_state_store::PodStateStore;
 use super::types::{PodManagementError, PodState, Result};
 
@@ -149,7 +149,7 @@ where
         &self,
         namespace: &str,
         pod_name: &str,
-    ) -> Result<Option<WorkerInfo>> {
+    ) -> Result<Option<PodResourceInfo>> {
         let pod_identifier = PodIdentifier::new(namespace, pod_name);
 
         // Check local state first
@@ -238,10 +238,10 @@ where
     /// Check if existing pod configuration matches the new configuration
     fn check_pod_config_match(
         existing_state: &PodState,
-        new_info: &WorkerInfo,
+        new_info: &PodResourceInfo,
         new_device_configs: &[DeviceConfig],
     ) -> bool {
-        if existing_state.info != *new_info {
+        if existing_state.pod_info != *new_info {
             return false;
         }
 
@@ -284,7 +284,7 @@ where
         // Create device configs if GPU resources are specified
         let device_configs = if let Some(gpu_uuids) = &pod_info.0.gpu_uuids {
             if !gpu_uuids.is_empty() {
-                let configs = create_device_configs_from_worker_info(&pod_info.0, &self.nvml)
+                let configs = create_device_configs_from_pod_resource_info(&pod_info.0, &self.nvml)
                     .await
                     .map_err(|e| PodManagementError::DeviceError {
                         message: e.to_string(),
@@ -420,18 +420,18 @@ where
                 pod_identifier: pod_identifier.clone(),
             })?;
 
-        let WorkerInfo {
+        let PodResourceInfo {
             namespace: info_namespace,
             pod_name: info_pod_name,
             gpu_uuids,
             qos_level,
             ..
-        } = &pod_state.info;
+        } = &pod_state.pod_info;
 
         let gpu_uuids_vec = gpu_uuids.clone().unwrap_or_default();
         let qos = qos_level.unwrap_or(QosLevel::Medium);
 
-        let worker = Arc::new(TensorFusionWorker::new(
+        let worker = Arc::new(Worker::new(
             host_pid,
             qos,
             gpu_uuids_vec,
@@ -501,7 +501,7 @@ where
         // 4. Add worker to hypervisor
         if !self.hypervisor.process_exists(host_pid).await {
             info!("Adding new worker to hypervisor: {}", worker.name());
-            self.hypervisor.add_process(worker.clone()).await;
+            self.hypervisor.register_process(worker.clone()).await;
         }
 
         info!(
@@ -669,8 +669,8 @@ mod tests {
         PodIdentifier::new("test-namespace", name)
     }
 
-    fn create_test_worker_info() -> WorkerInfo {
-        WorkerInfo {
+    fn create_test_pod_resource_info() -> PodResourceInfo {
+        PodResourceInfo {
             namespace: "test-namespace".to_string(),
             pod_name: "test-pod".to_string(),
             containers: Some(vec!["test-container".to_string()]),
@@ -769,7 +769,7 @@ mod tests {
     #[tokio::test]
     async fn test_pod_state_store_operations() {
         let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
-        let worker_info = create_test_worker_info();
+        let worker_info = create_test_pod_resource_info();
         let device_configs = vec![create_test_device_config()];
         let pod_identifier = create_test_pod_identifier("test-pod");
 
@@ -804,7 +804,7 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_processes_lifecycle() {
         let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
-        let worker_info = create_test_worker_info();
+        let worker_info = create_test_pod_resource_info();
         let device_configs = vec![create_test_device_config()];
         let pod_identifier = create_test_pod_identifier("test-pod");
 
@@ -887,7 +887,7 @@ mod tests {
     #[test]
     fn test_device_queries() {
         let pod_state_store = Arc::new(PodStateStore::new("/tmp/test_shm".into()));
-        let worker_info = create_test_worker_info();
+        let worker_info = create_test_pod_resource_info();
         let pod1_id = create_test_pod_identifier("pod1");
         let pod2_id = create_test_pod_identifier("pod2");
 
@@ -963,7 +963,7 @@ mod tests {
         for i in 0..50 {
             let store = pod_state_store.clone();
             join_set.spawn(async move {
-                let worker_info = create_test_worker_info();
+                let worker_info = create_test_pod_resource_info();
                 let device_configs = vec![create_test_device_config()];
                 let pod_id = PodIdentifier::new("test-namespace", format!("pod-{i}"));
 
@@ -1017,7 +1017,7 @@ mod tests {
 
         // Register all pods and processes
         for pod_idx in 0..num_pods {
-            let worker_info = create_test_worker_info();
+            let worker_info = create_test_pod_resource_info();
             let device_configs = vec![create_test_device_config()];
             let pod_id = PodIdentifier::new("test-namespace", format!("stress-pod-{pod_idx:03}"));
 

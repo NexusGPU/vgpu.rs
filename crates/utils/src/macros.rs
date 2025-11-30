@@ -4,7 +4,7 @@ macro_rules! replace_symbol {
         let intercept = |hook_manager: &mut $crate::hooks::HookManager,
                          symbol_name,
                          detour: $detour_type|
-         -> Result<$detour_type, $crate::Error> {
+         -> Result<$detour_type, $crate::HookError> {
             let replaced = hook_manager
                 .hook_export($mod, symbol_name, detour as *mut std::ffi::c_void)?
                 .0;
@@ -14,10 +14,10 @@ macro_rules! replace_symbol {
             Ok(original_fn)
         };
 
-        (|| -> Result<(), $crate::Error> {
+        (|| -> Result<(), $crate::HookError> {
             let hooked = intercept($hook_manager, $func, $detour_function)?;
             $hook_fn.set(hooked).map_err(|_| {
-                $crate::Error::HookAlreadyInitialized(std::borrow::Cow::Borrowed($func))
+                $crate::HookError::HookAlreadyInitialized(std::borrow::Cow::Borrowed($func))
             })?;
             Ok(())
         })()

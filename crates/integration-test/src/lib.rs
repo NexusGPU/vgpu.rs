@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 
-use api_types::WorkerInfo;
+use api_types::PodResourceInfo;
 use error_stack::{Report, ResultExt};
 use hypervisor::pod_management::coordinator::{CoordinatorConfig, LimiterCoordinator};
 use hypervisor::pod_management::device_info::calculate_device_limits_from_gpu_info;
@@ -447,7 +447,7 @@ impl TestCoordinatorManager {
             .pod_state
             .register_pod(
                 &pod_identifier,
-                WorkerInfo::default(),
+                PodResourceInfo::default(),
                 vec![device_config.clone()],
             )
             .map_err(|e| {

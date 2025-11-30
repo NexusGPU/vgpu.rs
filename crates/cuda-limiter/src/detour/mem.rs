@@ -378,7 +378,7 @@ pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> 
 }
 
 /// Enables hooks for CUDA memory management functions.
-pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) -> Result<(), utils::Error> {
+pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) -> Result<(), utils::HookError> {
     replace_symbol!(
         hook_manager,
         Some("libcuda."),
