@@ -13,7 +13,7 @@ use frida_gum::Module;
 use frida_gum::ModuleMap;
 pub use frida_gum::NativePointer;
 
-use crate::Error;
+use crate::HookError;
 
 static GUM: LazyLock<Gum> = LazyLock::new(Gum::obtain);
 
@@ -26,13 +26,13 @@ impl Hooker<'_> {
         &mut self,
         symbol: &str,
         detour: *mut c_void,
-    ) -> Result<NativePointer, Error> {
+    ) -> Result<NativePointer, HookError> {
         let function = if let Some(module_name) = self.module {
             Module::load(&GUM, module_name).find_export_by_name(symbol)
         } else {
             Module::find_global_export_by_name(symbol)
         }
-        .ok_or_else(|| Error::NoSymbolName(Cow::Owned(symbol.to_string())))?;
+        .ok_or_else(|| HookError::NoSymbolName(Cow::Owned(symbol.to_string())))?;
 
         tracing::debug!(
             "Found function at {:p} for symbol {}, calling interceptor.replace",
@@ -82,12 +82,16 @@ impl HookManager {
             .sort_by_key(|b| std::cmp::Reverse(b.len()));
     }
 
-    pub fn hooker<'a>(&'a mut self, module: Option<&'a str>) -> Result<Hooker<'a>, Error> {
+    pub fn hooker<'a>(&'a mut self, module: Option<&'a str>) -> Result<Hooker<'a>, HookError> {
         let found_module =
             module.map(|m: &str| self.module_names.iter().find(|x| x.starts_with(m)));
 
         let module = match found_module {
-            Some(None) => return Err(Error::NoModuleName(Cow::Owned(module.unwrap().to_string()))),
+            Some(None) => {
+                return Err(HookError::NoModuleName(Cow::Owned(
+                    module.unwrap().to_string(),
+                )))
+            }
             Some(m) => m.map(|s| s.as_str()),
             None => None,
         };
@@ -105,7 +109,7 @@ impl HookManager {
         module: Option<&str>,
         symbol: &str,
         detour: *mut c_void,
-    ) -> Result<NativePointer, Error> {
+    ) -> Result<NativePointer, HookError> {
         self.hooker(module)?.hook_export(symbol, detour)
     }
 
@@ -113,7 +117,7 @@ impl HookManager {
         &mut self,
         function: NativePointer,
         listener: &mut I,
-    ) -> Result<Listener, Error> {
+    ) -> Result<Listener, HookError> {
         self.interceptor
             .attach(function, listener)
             .map_err(Into::into)

@@ -69,7 +69,7 @@ impl<Proc: GpuProcess> WeightedScheduler<Proc> {
 
 #[async_trait::async_trait]
 impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
-    fn add_process(&mut self, process: Proc) {
+    fn register_process(&mut self, process: Proc) {
         let pid = process.pid();
         let qos = process.qos_level();
         let wrapped_process = WithTraps {
@@ -84,7 +84,7 @@ impl<Proc: GpuProcess> GpuScheduler<Proc> for WeightedScheduler<Proc> {
         // Log metrics
         let lp = LineProtocolBuilder::new()
             .measurement("tf_scheduler_event")
-            .tag("event_type", "add_process")
+            .tag("event_type", "register_process")
             .tag("pid", &pid.to_string())
             .tag("qos", &qos.to_string())
             .field("weight", weight as i64)

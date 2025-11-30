@@ -19,7 +19,7 @@ use super::ProcessInitResponse;
 use crate::config::AutoFreezeAndResume;
 use crate::core::pod::traits::{DeviceSnapshotProvider, PodStateRepository, TimeSource};
 use crate::core::pod::PodManager;
-use api_types::AutoFreezeInfo;
+use api_types::AutoFreezeConfig;
 use utils::shared_memory::traits::SharedMemoryAccess;
 
 /// Query parameters for process initialization
@@ -62,7 +62,7 @@ where
             );
             return Ok(poem::web::Json(PodInfoResponse {
                 success: false,
-                data: None,
+                pod_info: None,
                 message: format!("Pod {pod_name} not found in namespace {namespace}"),
             }));
         }
@@ -70,7 +70,7 @@ where
             warn!(error = %e, "Failed to find pod in registry");
             return Ok(poem::web::Json(PodInfoResponse {
                 success: false,
-                data: None,
+                pod_info: None,
                 message: format!("Failed to find pod in registry: {e}"),
             }));
         }
@@ -81,7 +81,7 @@ where
             .auto_freeze
             .iter()
             .find(|config| config.qos == qos)
-            .map(|config| AutoFreezeInfo {
+            .map(|config| AutoFreezeConfig {
                 freeze_to_mem_ttl: config.freeze_to_mem_ttl.clone(),
                 freeze_to_disk_ttl: config.freeze_to_disk_ttl.clone(),
                 enable: config.enable.unwrap_or(false),
@@ -116,7 +116,7 @@ where
 
     Ok(poem::web::Json(PodInfoResponse {
         success: true,
-        data: Some(pod_info),
+        pod_info: Some(pod_info),
         message: format!("Pod {pod_name} information retrieved successfully"),
     }))
 }
@@ -184,7 +184,7 @@ where
             warn!(error = %e, "Failed to initialize process");
             return Ok(poem::web::Json(ProcessInitResponse {
                 success: false,
-                data: None,
+                process_info: None,
                 message: format!("Failed to initialize process: {e}"),
             }));
         }
@@ -195,7 +195,7 @@ where
             );
             return Ok(poem::web::Json(ProcessInitResponse {
                 success: false,
-                data: None,
+                process_info: None,
                 message: format!(
                     "Process initialization timed out after {} seconds",
                     discovery_timeout.as_secs()
@@ -206,7 +206,7 @@ where
 
     Ok(poem::web::Json(ProcessInitResponse {
         success: true,
-        data: Some(process_result),
+        process_info: Some(process_result),
         message: "Process initialized successfully".to_string(),
     }))
 }

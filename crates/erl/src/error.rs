@@ -2,7 +2,7 @@ use derive_more::Display;
 
 /// Error type shared by limiter and hypervisor components.
 #[derive(Debug, Display)]
-pub enum ErlError {
+pub enum RateLimitError {
     /// Underlying shared storage failed.
     #[display("storage access failed: {reason}")]
     StorageFailure { reason: String },
@@ -11,10 +11,10 @@ pub enum ErlError {
     InvalidConfiguration { reason: String },
 }
 
-impl core::error::Error for ErlError {}
+impl core::error::Error for RateLimitError {}
 
-impl ErlError {
-    pub fn storage(reason: impl Into<String>) -> Self {
+impl RateLimitError {
+    pub fn storage_failure(reason: impl Into<String>) -> Self {
         Self::StorageFailure {
             reason: reason.into(),
         }

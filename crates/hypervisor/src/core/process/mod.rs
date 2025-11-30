@@ -7,10 +7,10 @@ use api_types::QosLevel;
 pub mod worker;
 
 // Re-export worker type
-pub use worker::TensorFusionWorker;
+pub use worker::Worker;
 
-/// Concrete worker type
-pub type Worker = Arc<TensorFusionWorker>;
+/// Concrete worker handle type
+pub type WorkerHandle = Arc<Worker>;
 
 // Public exports - remove self-references as types are already public
 

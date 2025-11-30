@@ -2,7 +2,7 @@
 
 use crate::config::GPU_CAPACITY_MAP;
 use anyhow::Result;
-use api_types::WorkerInfo;
+use api_types::PodResourceInfo;
 use cudarc::driver::sys::CUdevice_attribute;
 use cudarc::driver::CudaContext;
 use nvml_wrapper::Nvml;
@@ -13,22 +13,22 @@ use utils::shared_memory::DeviceConfig;
 /// Formula: total_cuda_cores = sm_count * max_thread_per_sm * FACTOR
 const FACTOR: u32 = 64;
 
-/// Creates device configs from WorkerInfo (pod metadata) for pod-level registration
-#[tracing::instrument(skip(nvml), fields(pod = %worker_info.pod_name, namespace = %worker_info.namespace, gpu_count = worker_info.gpu_uuids.as_ref().map(|v| v.len()).unwrap_or(0)))]
-pub async fn create_device_configs_from_worker_info(
-    worker_info: &WorkerInfo,
+/// Creates device configs from PodResourceInfo (pod metadata) for pod-level registration
+#[tracing::instrument(skip(nvml), fields(pod = %pod_info.pod_name, namespace = %pod_info.namespace, gpu_count = pod_info.gpu_uuids.as_ref().map(|v| v.len()).unwrap_or(0)))]
+pub async fn create_device_configs_from_pod_resource_info(
+    pod_info: &PodResourceInfo,
     nvml: &Nvml,
 ) -> Result<Vec<DeviceConfig>> {
-    let gpu_uuids = worker_info.gpu_uuids.as_deref().unwrap_or(&[]);
+    let gpu_uuids = pod_info.gpu_uuids.as_deref().unwrap_or(&[]);
     let mut device_configs = Vec::new();
 
     tracing::info!(
-        pod_name = %worker_info.pod_name,
-        namespace = %worker_info.namespace,
-        tflops_limit = ?worker_info.tflops_limit,
-        vram_limit = ?worker_info.vram_limit,
+        pod_name = %pod_info.pod_name,
+        namespace = %pod_info.namespace,
+        tflops_limit = ?pod_info.tflops_limit,
+        vram_limit = ?pod_info.vram_limit,
         gpu_uuids = ?gpu_uuids,
-        "Creating device configs from WorkerInfo"
+        "Creating device configs from PodResourceInfo"
     );
 
     for gpu_uuid in gpu_uuids {
@@ -59,8 +59,8 @@ pub async fn create_device_configs_from_worker_info(
             calculate_device_limits_from_gpu_info(
                 nvml,
                 device_idx,
-                worker_info.tflops_limit,
-                worker_info.vram_limit,
+                pod_info.tflops_limit,
+                pod_info.vram_limit,
                 if tflops_capacity > 0.0 {
                     Some(tflops_capacity)
                 } else {
@@ -156,11 +156,11 @@ pub fn calculate_device_limits_from_gpu_info(
 
 #[cfg(test)]
 mod tests {
-    use api_types::WorkerInfo;
+    use api_types::PodResourceInfo;
     use std::collections::BTreeMap;
 
-    fn create_test_worker_info(gpu_uuids: Option<Vec<String>>) -> WorkerInfo {
-        WorkerInfo {
+    fn create_test_pod_resource_info(gpu_uuids: Option<Vec<String>>) -> PodResourceInfo {
+        PodResourceInfo {
             namespace: "test-namespace".to_string(),
             pod_name: "test-pod".to_string(),
             containers: Some(vec!["test-container".to_string()]),
@@ -309,22 +309,22 @@ mod tests {
     }
 
     #[test]
-    fn test_comprehensive_worker_info_edge_cases() {
-        // Test worker info with various edge case combinations
+    fn test_comprehensive_pod_resource_info_edge_cases() {
+        // Test pod resource info with various edge case combinations
         let edge_cases = vec![
             // Very long strings
-            create_test_worker_info(Some(vec![format!("GPU-{}", "x".repeat(1000))])),
+            create_test_pod_resource_info(Some(vec![format!("GPU-{}", "x".repeat(1000))])),
             // Special characters in UUID
-            create_test_worker_info(Some(vec!["GPU-123!@#$%^&*()".to_string()])),
+            create_test_pod_resource_info(Some(vec!["GPU-123!@#$%^&*()".to_string()])),
             // Empty string UUID
-            create_test_worker_info(Some(vec!["".to_string()])),
+            create_test_pod_resource_info(Some(vec!["".to_string()])),
             // Many UUIDs
-            create_test_worker_info(Some((0..100).map(|i| format!("GPU-{i:03}")).collect())),
+            create_test_pod_resource_info(Some((0..100).map(|i| format!("GPU-{i:03}")).collect())),
         ];
 
-        for worker_info in edge_cases {
+        for pod_info in edge_cases {
             // These should not panic even with edge case data
-            let gpu_uuids = worker_info.gpu_uuids.as_deref().unwrap_or(&[]);
+            let gpu_uuids = pod_info.gpu_uuids.as_deref().unwrap_or(&[]);
 
             // Basic validation - should handle all edge cases gracefully
             assert!(gpu_uuids.len() <= 100, "Too many GPUs: {}", gpu_uuids.len());

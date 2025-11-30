@@ -6,14 +6,14 @@ use syn::Ident;
 use syn::ItemFn;
 use syn::Type;
 
-/// `#[hook_fn]` annotates the C ffi functions (mirrord's `_detour`s), and is used to generate the
+/// `#[hook_fn]` annotates the C ffi functions (mirrored's `_detour`s), and is used to generate the
 /// following boilerplate (using `close_detour` as an example):
 ///
 /// 1. `type FnClose = unsafe extern "C" fn(c_int) -> c_int`;
 /// 2. `static FN_CLOSE: HookFn<FnClose> = HookFn(OnceLock::new())`;
 ///
 /// Where (1) is the type alias of the ffi function, and (2) is where we'll store the original
-/// function after calling replace with frida. `HookFn` is defined in `mirrord-layer` as a newtype
+/// function after calling replace with frida. `HookFn` is defined in `mirrored-layer` as a newtype
 /// wrapper around `std::sync::Oncelock`.
 ///
 ///

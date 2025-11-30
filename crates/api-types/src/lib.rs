@@ -24,9 +24,9 @@ impl std::fmt::Display for QosLevel {
     }
 }
 
-/// Worker resource information including requests and limits
+/// Pod resource information including requests and limits
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct WorkerInfo {
+pub struct PodResourceInfo {
     /// Pod name
     pub pod_name: String,
     /// Pod namespace
@@ -63,7 +63,8 @@ pub struct WorkerResponse {
     /// Whether the request was successful
     pub success: bool,
     /// Pod resource information data (present when successful)
-    pub data: Option<WorkerInfo>,
+    #[serde(rename = "data")]
+    pub pod_info: Option<PodResourceInfo>,
     /// Response message
     pub message: String,
 }
@@ -74,14 +75,15 @@ pub struct PodInfoResponse {
     /// Whether the request was successful
     pub success: bool,
     /// Pod information data (present when successful)
-    pub data: Option<PodInfo>,
+    #[serde(rename = "data")]
+    pub pod_info: Option<PodInfo>,
     /// Response message
     pub message: String,
 }
 
 /// Auto-freeze configuration information
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AutoFreezeInfo {
+pub struct AutoFreezeConfig {
     /// Time-to-live for freezing to memory (duration string, e.g., "5m", "1h")
     pub freeze_to_mem_ttl: Option<String>,
     /// Time-to-live for freezing to disk (duration string, e.g., "30m", "2h")
@@ -109,7 +111,7 @@ pub struct PodInfo {
     pub compute_shard: bool,
     /// Auto-freeze configuration based on QoS level
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auto_freeze: Option<AutoFreezeInfo>,
+    pub auto_freeze: Option<AutoFreezeConfig>,
 }
 
 /// Response for process initialization
@@ -118,7 +120,8 @@ pub struct ProcessInitResponse {
     /// Whether the request was successful
     pub success: bool,
     /// Process information data (present when successful)
-    pub data: Option<ProcessInfo>,
+    #[serde(rename = "data")]
+    pub process_info: Option<ProcessInfo>,
     /// Response message
     pub message: String,
 }

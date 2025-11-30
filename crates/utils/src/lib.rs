@@ -12,7 +12,7 @@ use frida_gum::Error as FridaError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum Error {
+pub enum HookError {
     #[error("Failed to find module for name `{0}`")]
     NoModuleName(Cow<'static, str>),
 
@@ -26,8 +26,8 @@ pub enum Error {
     HookAlreadyInitialized(Cow<'static, str>),
 }
 
-impl From<FridaError> for Error {
+impl From<FridaError> for HookError {
     fn from(err: FridaError) -> Self {
-        Error::Frida(err)
+        HookError::Frida(err)
     }
 }
