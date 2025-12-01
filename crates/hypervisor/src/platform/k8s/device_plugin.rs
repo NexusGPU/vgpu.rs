@@ -287,8 +287,8 @@ impl DevicePlugin for DevicePluginService {
         let cancellation_token = self.cancellation_token.clone();
 
         tokio::spawn(async move {
-            // create devices with IDs from 0 to 255
-            let devices: Vec<api::Device> = (0..=255)
+            // create devices with IDs from 0 to 512
+            let devices: Vec<api::Device> = (0..512)
                 .map(|i| api::Device {
                     id: i.to_string(),
                     health: "Healthy".to_string(),
