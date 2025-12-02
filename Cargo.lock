@@ -247,9 +247,9 @@ dependencies = [
 
 [[package]]
 name = "bindgen"
-version = "0.71.1"
+version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
+checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
 dependencies = [
  "bitflags 2.10.0",
  "cexpr",
@@ -985,7 +985,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1082,9 +1082,9 @@ dependencies = [
 
 [[package]]
 name = "frida-build"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1130977e34153e6f9d12af60978e885ac05138f4099cda56e007fa503a277890"
+checksum = "d9b2bfd0477ee2547fc2d570093195c296a450d14af4e425b8fda3bec16ab45e"
 dependencies = [
  "reqwest",
  "tar",
@@ -1093,10 +1093,11 @@ dependencies = [
 
 [[package]]
 name = "frida-gum"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ffc9e7bc0924305e3b79ef5082db154f0d675c0a43b977c3180faf3e023f16d"
+checksum = "cd5efd85d460937270f47accc16c632b414e1b670d5172dbdafc837b9bcd589a"
 dependencies = [
+ "bitflags 2.10.0",
  "cstr_core",
  "frida-gum-sys",
  "num",
@@ -1108,9 +1109,9 @@ dependencies = [
 
 [[package]]
 name = "frida-gum-sys"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "722f070f55fc4f826c1e8679e082600d9dd13e79e4873bd58338694a1217d168"
+checksum = "0d5f936b2f6290bede23c6424b69bff7b8adc949101aba7c57b95754d198e526"
 dependencies = [
  "bindgen",
  "cc",
@@ -2869,7 +2870,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3098,7 +3099,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3664,7 +3665,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.2",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4488,7 +4489,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
