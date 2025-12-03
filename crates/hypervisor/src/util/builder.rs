@@ -171,8 +171,9 @@ impl ApplicationBuilder {
     fn create_device_plugin(&self) -> Arc<GpuDevicePlugin> {
         let endpoint = "tensor-fusion.sock".to_string();
         let resource_name = self.daemon_args.device_plugin_resource_name.clone();
+        let nvidia_dev_root = self.daemon_args.nvidia_dev_root.clone();
 
-        GpuDevicePlugin::new(endpoint, resource_name)
+        GpuDevicePlugin::new(endpoint, resource_name, nvidia_dev_root)
     }
 }
 

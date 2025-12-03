@@ -260,6 +260,14 @@ pub struct DaemonArgs {
         env = "DEVICE_PLUGIN_RESOURCE_NAME"
     )]
     pub device_plugin_resource_name: String,
+
+    #[arg(
+        long,
+        help = "NVIDIA device root path prefix for host_path (e.g., /run/nvidia/driver). When set, host_path will be nvidia_dev_root joined with /dev/nvidia*",
+        env = "NVIDIA_DEV_ROOT",
+        value_hint = clap::ValueHint::DirPath
+    )]
+    pub nvidia_dev_root: Option<PathBuf>,
 }
 
 /// Parse JSON string into HypervisorScheduling configuration
