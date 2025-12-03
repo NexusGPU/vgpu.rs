@@ -10,6 +10,26 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
+pub enum QosLevelPascalCase {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl From<QosLevel> for QosLevelPascalCase {
+    fn from(qos_level: QosLevel) -> Self {
+        match qos_level {
+            QosLevel::Low => QosLevelPascalCase::Low,
+            QosLevel::Medium => QosLevelPascalCase::Medium,
+            QosLevel::High => QosLevelPascalCase::High,
+            QosLevel::Critical => QosLevelPascalCase::Critical,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum QosLevel {
     Low,
     Medium,
@@ -105,7 +125,7 @@ pub struct PodInfo {
     /// VRAM limit for the pod in bytes
     pub vram_limit: Option<u64>,
     /// QoS level for the workload
-    pub qos_level: Option<QosLevel>,
+    pub qos_level: Option<QosLevelPascalCase>,
     /// Whether the workload is a compute shard
     pub compute_shard: bool,
     /// Auto-freeze configuration based on QoS level

@@ -102,7 +102,7 @@ where
             .unwrap_or_default(),
         tflops_limit: pod_entry.tflops_limit,
         vram_limit: pod_entry.vram_limit,
-        qos_level: pod_entry.qos_level,
+        qos_level: pod_entry.qos_level.map(|qos| qos.into()),
         compute_shard: pod_entry.compute_shard,
         auto_freeze,
     };
