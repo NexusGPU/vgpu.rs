@@ -44,20 +44,15 @@ pub enum PodManagementError {
 pub type Result<T> = std::result::Result<T, PodManagementError>;
 
 /// Pod status enumeration
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum PodStatus {
     /// Pod is running normally
+    #[default]
     Running,
     /// Pod is being terminated
     Terminating,
     /// Pod has been terminated
     Terminated,
-}
-
-impl Default for PodStatus {
-    fn default() -> Self {
-        Self::Running
-    }
 }
 
 /// Unified state for a single pod containing all related information

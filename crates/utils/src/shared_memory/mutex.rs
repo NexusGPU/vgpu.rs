@@ -105,7 +105,7 @@ impl<T> ShmMutex<T> {
         }
     }
 
-    pub fn lock(&self) -> ShmMutexGuard<T> {
+    pub fn lock(&self) -> ShmMutexGuard<'_, T> {
         loop {
             // First try to acquire the lock normally
             if self

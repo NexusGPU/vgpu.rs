@@ -105,6 +105,13 @@ pub trait CheckpointApi: Send + Sync {
     fn pid(&self) -> u32;
 }
 
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "Only used in non-test builds via init_checkpoint_api"
+    )
+)]
 pub struct CudaCheckpointApi {
     _lib: &'static Library,
     pid: ffi::c_int,

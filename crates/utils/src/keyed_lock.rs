@@ -539,7 +539,7 @@ mod tests {
                 success_count.fetch_add(1, Ordering::SeqCst);
 
                 // Variable delay based on task_id
-                if task_id % 3 == 0 {
+                if task_id.is_multiple_of(3) {
                     sleep(Duration::from_micros(50)).await;
                 }
             }));
