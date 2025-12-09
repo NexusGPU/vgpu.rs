@@ -171,6 +171,9 @@ impl AutoFreezeManager {
                     .unwrap_or(false);
 
                 if is_currently_frozen {
+                    // Reset activity timer when frozen to avoid accumulating idle time
+                    *last_guard = Instant::now();
+
                     let (guard, _timeout_result) = activity_notifier
                         .wait_timeout(last_guard, Duration::from_secs(1))
                         .expect("should wait on condvar");
@@ -182,6 +185,24 @@ impl AutoFreezeManager {
 
                 if elapsed >= idle_timeout {
                     let idle_secs = elapsed.as_secs();
+                    drop(last_guard);
+
+                    // Re-verify timeout after releasing lock to avoid race with concurrent restore
+                    last_guard = last_activity
+                        .lock()
+                        .expect("should acquire last_activity lock");
+                    let verified_elapsed = last_guard.elapsed();
+
+                    if verified_elapsed < idle_timeout {
+                        // Activity occurred between check and lock re-acquisition
+                        let remaining = idle_timeout - verified_elapsed;
+                        let (guard, _) = activity_notifier
+                            .wait_timeout(last_guard, remaining)
+                            .expect("should wait on condvar");
+                        last_guard = guard;
+                        continue;
+                    }
+
                     drop(last_guard);
 
                     tracing::info!(idle_secs, "Idle timeout reached, freezing process");
