@@ -24,7 +24,7 @@ http-bidir-comm = { path = "crates/http-bidir-comm" }
 erl = { path = "crates/erl" }
 tracing = "0.1"
 thiserror = "2.0"
-derive_more = "2.0"
+derive_more = "2.1"
 base64 = "0.22"
 tracing-subscriber = "0.3"
 ctor = "0.6"
