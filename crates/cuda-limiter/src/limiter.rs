@@ -344,14 +344,14 @@ impl Limiter {
                     wait_times += 1;
 
                     // Periodic health check
-                    if wait_times % RATE_LIMITER_HEALTH_CHECK_INTERVAL == 0 {
+                    if wait_times.is_multiple_of(RATE_LIMITER_HEALTH_CHECK_INTERVAL) {
                         let handle = self.get_or_init_shared_memory()?;
                         let state = handle.get_state();
                         self.check_device_health(state, raw_device_index)?;
                     }
 
                     // Periodic logging when waiting too long
-                    if wait_times % RATE_LIMITER_LOG_INTERVAL == 0 {
+                    if wait_times.is_multiple_of(RATE_LIMITER_LOG_INTERVAL) {
                         tracing::warn!(
                             device_idx = raw_device_index,
                             wait_times,

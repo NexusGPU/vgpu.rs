@@ -456,7 +456,7 @@ impl TestCoordinatorManager {
             })?;
 
         self.coordinator
-            .ensure_pod_registered(&pod_identifier, &[device_config.clone()])
+            .ensure_pod_registered(&pod_identifier, core::slice::from_ref(&device_config))
             .await
             .map_err(|e| {
                 Report::new(IntegrationTestError::ProcessSpawnFailed)
