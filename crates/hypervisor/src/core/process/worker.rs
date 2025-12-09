@@ -13,13 +13,13 @@ use crate::controller::LimiterCommandType;
 use crate::platform::limiter_comm::CommandDispatcher;
 use crate::platform::nvml::gpu_observer::GpuObserver;
 
-pub struct TensorFusionWorker {
+pub struct Worker {
     id: u32,
     state: RwLock<ProcessState>,
     gpu_uuids: Vec<String>,
     gpu_observer: Arc<GpuObserver>,
     qos_level: QosLevel,
-    /// Worker name, formatted as "namespace/pod_name"
+    /// Worker name, formatted as "namespace-pod_name"
     pub(crate) name: String,
     /// Kubernetes pod name
     pub(crate) pod_name: String,
@@ -29,7 +29,7 @@ pub struct TensorFusionWorker {
     command_dispatcher: Arc<CommandDispatcher>,
 }
 
-impl TensorFusionWorker {
+impl Worker {
     pub(crate) fn new(
         id: u32,
         qos_level: QosLevel,
@@ -38,7 +38,7 @@ impl TensorFusionWorker {
         namespace: String,
         pod_name: String,
         command_dispatcher: Arc<CommandDispatcher>,
-    ) -> TensorFusionWorker {
+    ) -> Worker {
         Self {
             id,
             qos_level,
@@ -52,25 +52,25 @@ impl TensorFusionWorker {
         }
     }
 
-    /// Generate limiter ID based on worker information
-    fn get_limiter_id(&self) -> String {
-        format!("limiter_{}", self.id)
+    /// Generate worker ID based on worker information
+    fn worker_id(&self) -> String {
+        format!("worker_{}", self.id)
     }
 
     /// Send command to limiter using CommandDispatcher
     async fn send_command(&self, command_type: LimiterCommandType) -> Result<()> {
-        let limiter_id = self.get_limiter_id();
+        let worker_id = self.worker_id();
 
         self.command_dispatcher
-            .enqueue_command(&limiter_id, command_type.clone())
+            .enqueue_command(&worker_id, command_type.clone())
             .await
             .map(|_| ())
             .map_err(|err| anyhow!(err))?;
 
         tracing::info!(
-            "Command {:?} sent successfully to limiter {} for process {}",
+            "Command {:?} sent successfully to worker {} for process {}",
             command_type,
-            limiter_id,
+            worker_id,
             self.id
         );
         Ok(())
@@ -78,7 +78,7 @@ impl TensorFusionWorker {
 }
 
 #[async_trait::async_trait]
-impl GpuProcess for TensorFusionWorker {
+impl GpuProcess for Worker {
     fn pid(&self) -> u32 {
         self.id
     }
@@ -137,10 +137,10 @@ impl GpuProcess for TensorFusionWorker {
 }
 
 // Manual Debug implementation to avoid issues with non-Debug fields
-impl std::fmt::Debug for TensorFusionWorker {
+impl std::fmt::Debug for Worker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // For Debug, we can't use async, so we show a placeholder for state
-        f.debug_struct("TensorFusionWorker")
+        f.debug_struct("Worker")
             .field("id", &self.id)
             .field("gpu_uuids", &self.gpu_uuids)
             .field("qos_level", &self.qos_level)

@@ -1,7 +1,6 @@
-use crate::ErlError;
 use crate::backend::DeviceBackend;
-use error_stack::{IntoReport, Report};
-pub type Result<T, C> = core::result::Result<T, Report<C>>;
+use crate::{RateLimitError, Result};
+use error_stack::IntoReport;
 
 /// Configuration for the PID-based device controller.
 #[derive(Debug, Clone)]
@@ -111,25 +110,29 @@ pub struct DeviceController<B: DeviceBackend> {
 }
 
 impl<B: DeviceBackend> DeviceController<B> {
-    pub fn new(backend: B, device: usize, cfg: DeviceControllerConfig) -> Result<Self, ErlError> {
+    pub fn new(
+        backend: B,
+        device: usize,
+        cfg: DeviceControllerConfig,
+    ) -> Result<Self, RateLimitError> {
         // Validate configuration
         if !(0.0..=1.0).contains(&cfg.target_utilization) {
-            return Err(IntoReport::into_report(ErlError::invalid_config(
+            return Err(IntoReport::into_report(RateLimitError::invalid_config(
                 "target_utilization must be in [0, 1]",
             )));
         }
         if cfg.rate_min <= 0.0 || cfg.rate_max <= cfg.rate_min {
-            return Err(IntoReport::into_report(ErlError::invalid_config(
+            return Err(IntoReport::into_report(RateLimitError::invalid_config(
                 "rate_max must be greater than rate_min > 0",
             )));
         }
         if !(0.0..=1.0).contains(&cfg.filter_alpha) {
-            return Err(IntoReport::into_report(ErlError::invalid_config(
+            return Err(IntoReport::into_report(RateLimitError::invalid_config(
                 "filter_alpha must be in [0, 1]",
             )));
         }
         if !(0.0..=1.0).contains(&cfg.integral_decay_factor) {
-            return Err(IntoReport::into_report(ErlError::invalid_config(
+            return Err(IntoReport::into_report(RateLimitError::invalid_config(
                 "integral_decay_factor must be in [0, 1]",
             )));
         }
@@ -184,7 +187,7 @@ impl<B: DeviceBackend> DeviceController<B> {
         &mut self,
         measured_util: f64,
         delta_time: f64,
-    ) -> Result<DeviceControllerState, ErlError> {
+    ) -> Result<DeviceControllerState, RateLimitError> {
         let measured = measured_util.clamp(0.0, 1.0);
 
         // Step 1: Low-pass filter to smooth NVML noise
@@ -254,7 +257,7 @@ impl<B: DeviceBackend> DeviceController<B> {
     }
 
     /// Estimate token drain rate from bucket level changes.
-    fn estimate_drain_rate(&mut self, delta_time: f64) -> Result<f64, ErlError> {
+    fn estimate_drain_rate(&mut self, delta_time: f64) -> Result<f64, RateLimitError> {
         let current_tokens = self.backend.read_token_state(self.device)?.tokens;
 
         // Expected tokens = last level + refill during delta_time
@@ -309,7 +312,7 @@ impl<B: DeviceBackend> DeviceController<B> {
     }
 
     /// Clamp tokens to capacity if they exceed it.
-    fn clamp_tokens_to_capacity(&self, capacity: f64) -> Result<(), ErlError> {
+    fn clamp_tokens_to_capacity(&self, capacity: f64) -> Result<(), RateLimitError> {
         let mut state = self.backend.read_token_state(self.device)?;
         if state.tokens > capacity {
             state.tokens = capacity;
@@ -323,7 +326,7 @@ impl<B: DeviceBackend> DeviceController<B> {
         &mut self,
         utilization: f64,
         delta_time: f64,
-    ) -> Result<DeviceControllerState, ErlError> {
+    ) -> Result<DeviceControllerState, RateLimitError> {
         if delta_time < self.cfg.min_delta_time {
             return Ok(self.state());
         }
@@ -335,7 +338,7 @@ impl<B: DeviceBackend> DeviceController<B> {
         &mut self,
         utilization: f64,
         timestamp_micros: u64,
-    ) -> Result<DeviceControllerState, ErlError> {
+    ) -> Result<DeviceControllerState, RateLimitError> {
         let seconds = timestamp_micros as f64 / 1_000_000.0;
         let delta = if let Some(prev) = self.last_timestamp {
             let raw_delta = seconds - prev;
@@ -377,40 +380,48 @@ mod tests {
     }
 
     impl DeviceBackend for MockBackend {
-        fn read_token_state(&self, _device: usize) -> Result<TokenState, ErlError> {
+        fn read_token_state(&self, _device: usize) -> Result<TokenState, RateLimitError> {
             Ok(TokenState::new(
                 f64::from_bits(self.tokens.load(Ordering::Relaxed)),
                 f64::from_bits(self.last_update.load(Ordering::Relaxed)),
             ))
         }
 
-        fn write_token_state(&self, _device: usize, state: TokenState) -> Result<(), ErlError> {
+        fn write_token_state(
+            &self,
+            _device: usize,
+            state: TokenState,
+        ) -> Result<(), RateLimitError> {
             self.tokens.store(state.tokens.to_bits(), Ordering::Relaxed);
             self.last_update
                 .store(state.last_update.to_bits(), Ordering::Relaxed);
             Ok(())
         }
 
-        fn read_quota(&self, _device: usize) -> Result<DeviceQuota, ErlError> {
+        fn read_quota(&self, _device: usize) -> Result<DeviceQuota, RateLimitError> {
             Ok(DeviceQuota::new(
                 f64::from_bits(self.quota_capacity.load(Ordering::Relaxed)),
                 f64::from_bits(self.quota_refill_rate.load(Ordering::Relaxed)),
             ))
         }
 
-        fn write_refill_rate(&self, _device: usize, refill_rate: f64) -> Result<(), ErlError> {
+        fn write_refill_rate(
+            &self,
+            _device: usize,
+            refill_rate: f64,
+        ) -> Result<(), RateLimitError> {
             self.quota_refill_rate
                 .store(refill_rate.to_bits(), Ordering::Relaxed);
             Ok(())
         }
 
-        fn write_capacity(&self, _device: usize, capacity: f64) -> Result<(), ErlError> {
+        fn write_capacity(&self, _device: usize, capacity: f64) -> Result<(), RateLimitError> {
             self.quota_capacity
                 .store(capacity.to_bits(), Ordering::Relaxed);
             Ok(())
         }
 
-        fn fetch_sub_tokens(&self, _device: usize, cost: f64) -> Result<f64, ErlError> {
+        fn fetch_sub_tokens(&self, _device: usize, cost: f64) -> Result<f64, RateLimitError> {
             let capacity = f64::from_bits(self.quota_capacity.load(Ordering::Relaxed));
             loop {
                 let current_bits = self.tokens.load(Ordering::Relaxed);
@@ -434,7 +445,7 @@ mod tests {
             }
         }
 
-        fn fetch_add_tokens(&self, _device: usize, amount: f64) -> Result<f64, ErlError> {
+        fn fetch_add_tokens(&self, _device: usize, amount: f64) -> Result<f64, RateLimitError> {
             let capacity = f64::from_bits(self.quota_capacity.load(Ordering::Relaxed));
             loop {
                 let current_bits = self.tokens.load(Ordering::Relaxed);

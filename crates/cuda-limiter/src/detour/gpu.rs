@@ -440,7 +440,7 @@ pub(crate) unsafe extern "C" fn cu_device_get_detour(
     result
 }
 
-pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) -> Result<(), utils::Error> {
+pub(crate) unsafe fn enable_hooks(hook_manager: &mut HookManager) -> Result<(), utils::HookError> {
     replace_symbol!(
         hook_manager,
         Some("libcuda."),

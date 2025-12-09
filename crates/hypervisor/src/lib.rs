@@ -26,6 +26,7 @@ pub use controller::{JwtAuthConfig, PodInfo, PodInfoResponse, ProcessInfo};
 pub use core::{GpuProcess, GpuResources, ProcessState, Worker};
 pub use core::{GpuScheduler, Hypervisor, HypervisorType, Scheduler, SchedulingDecision};
 pub use core::{PodManager, PodState, PodStatus};
+pub use process::WorkerHandle;
 
 // Application builder for backward compatibility
 pub mod app {

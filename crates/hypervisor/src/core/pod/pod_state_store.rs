@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use api_types::WorkerInfo;
+use api_types::PodResourceInfo;
 use dashmap::DashMap;
 use tracing::debug;
 use tracing::info;
@@ -62,7 +62,7 @@ impl PodStateStore {
     pub fn register_pod(
         &self,
         pod_identifier: &PodIdentifier,
-        info: WorkerInfo,
+        pod_info: PodResourceInfo,
         device_configs: Vec<DeviceConfig>,
     ) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
@@ -74,15 +74,23 @@ impl PodStateStore {
         // Use entry API to atomically check and update, avoiding nested locks
         let was_overwritten = match self.pods.entry(pod_identifier.clone()) {
             Entry::Occupied(mut entry) => {
-                let existing = entry.get();
-                let mut pod_state = PodState::new(info, device_configs.clone());
-                pod_state.processes = existing.processes.clone();
-                pod_state.shared_memory_handle = existing.shared_memory_handle.clone();
+                // Preserve existing runtime state when updating pod config
+                let (processes, shm_handle) = {
+                    let existing = entry.get();
+                    (
+                        existing.processes.clone(),
+                        existing.shared_memory_handle.clone(),
+                    )
+                };
+
+                let mut pod_state = PodState::new(pod_info, device_configs);
+                pod_state.processes = processes;
+                pod_state.shared_memory_handle = shm_handle;
 
                 debug!(
                     namespace = %pod_identifier.namespace,
                     pod_name = %pod_identifier.name,
-                    existing_processes = existing.processes.len(),
+                    existing_processes = pod_state.processes.len(),
                     "Overwriting existing pod registration"
                 );
 
@@ -90,7 +98,7 @@ impl PodStateStore {
                 true
             }
             Entry::Vacant(entry) => {
-                let pod_state = PodState::new(info, device_configs);
+                let pod_state = PodState::new(pod_info, device_configs);
                 entry.insert(pod_state);
                 false
             }
@@ -141,7 +149,7 @@ impl PodStateStore {
             }
         })?;
 
-        pod_ref.add_process(host_pid);
+        pod_ref.register_process(host_pid);
         self.pid_to_pod.insert(host_pid, pod_identifier.clone());
 
         info!(
@@ -188,11 +196,21 @@ impl PodStateStore {
         self.pods.get(pod_identifier).map(|entry| entry.clone())
     }
 
+    /// Access pod state with a closure without cloning
+    ///
+    /// This is more efficient than `get_pod()` when you only need to read fields.
+    pub fn with_pod<F, R>(&self, pod_identifier: &PodIdentifier, f: F) -> Option<R>
+    where
+        F: FnOnce(&PodState) -> R,
+    {
+        self.pods.get(pod_identifier).map(|entry| f(&entry))
+    }
+
     /// Get pod info by identifier without cloning entire state
-    pub fn get_pod_info(&self, pod_identifier: &PodIdentifier) -> Option<WorkerInfo> {
+    pub fn get_pod_info(&self, pod_identifier: &PodIdentifier) -> Option<PodResourceInfo> {
         self.pods
             .get(pod_identifier)
-            .map(|entry| entry.info.clone())
+            .map(|entry| entry.pod_info.clone())
     }
 
     /// Get pod path by process PID
@@ -324,7 +342,7 @@ impl PodStateStore {
 
 #[cfg(test)]
 impl PodStateStore {
-    /// Simple pod registration for testing (without WorkerInfo complexity)
+    /// Simple pod registration for testing (without PodResourceInfo complexity)
     pub fn register_test_pod(
         &self,
         pod_identifier: &str,
@@ -333,8 +351,8 @@ impl PodStateStore {
     ) -> Result<()> {
         use std::collections::BTreeMap;
 
-        // Create minimal WorkerInfo for testing
-        let test_info = WorkerInfo {
+        // Create minimal PodResourceInfo for testing
+        let test_info = PodResourceInfo {
             namespace: "test".to_string(),
             pod_name: pod_identifier.to_string(),
             containers: Some(vec!["test-container".to_string()]),
@@ -414,8 +432,8 @@ mod tests {
         PodIdentifier::new("default", name)
     }
 
-    fn create_test_worker_info(pod_name: &str) -> WorkerInfo {
-        WorkerInfo {
+    fn create_test_worker_info(pod_name: &str) -> PodResourceInfo {
+        PodResourceInfo {
             namespace: "default".to_string(),
             pod_name: pod_name.to_string(),
             containers: Some(vec!["main".to_string()]),
@@ -459,7 +477,10 @@ mod tests {
         assert!(!was_overwritten, "First registration should not overwrite");
 
         assert!(store.contains_pod(&pod_id));
-        assert_eq!(store.get_pod(&pod_id).unwrap().info.pod_name, "test-pod");
+        assert_eq!(
+            store.get_pod(&pod_id).unwrap().pod_info.pod_name,
+            "test-pod"
+        );
 
         store.register_process(&pod_id, 1234).unwrap();
 
@@ -478,7 +499,7 @@ mod tests {
     #[test]
     fn test_simplified_registration_for_testing() {
         let store = PodStateStore::new("/tmp/test_shm".into());
-        // Note: register_test_pod creates WorkerInfo with namespace "test"
+        // Note: register_test_pod creates PodResourceInfo with namespace "test"
         let pod_id = PodIdentifier::new("test", "test-pod");
         let device_configs = vec![create_test_device_config()];
 

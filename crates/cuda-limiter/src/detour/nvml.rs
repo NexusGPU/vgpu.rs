@@ -127,7 +127,7 @@ pub(crate) unsafe fn nvml_device_get_handle_by_index_v2_detour(
 pub(crate) unsafe fn enable_hooks(
     hook_manager: &mut HookManager,
     is_mapping_idx: bool,
-) -> Result<(), utils::Error> {
+) -> Result<(), utils::HookError> {
     replace_symbol!(
         hook_manager,
         Some("libnvidia-ml."),

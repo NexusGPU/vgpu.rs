@@ -5,7 +5,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use erl::{DeviceBackend, DeviceQuota, ErlError, TokenState};
+use erl::{DeviceBackend, DeviceQuota, RateLimitError, TokenState};
 use error_stack::Report;
 pub type Result<T, C> = core::result::Result<T, Report<C>>;
 
@@ -43,7 +43,7 @@ impl<H: SharedMemoryAccess> ErlSharedMemoryAdapter<H> {
 }
 
 impl<H: SharedMemoryAccess> DeviceBackend for ErlSharedMemoryAdapter<H> {
-    fn read_token_state(&self, device: usize) -> Result<TokenState, ErlError> {
+    fn read_token_state(&self, device: usize) -> Result<TokenState, RateLimitError> {
         self.handle
             .get_handle()
             .get_state()
@@ -52,13 +52,13 @@ impl<H: SharedMemoryAccess> DeviceBackend for ErlSharedMemoryAdapter<H> {
                 TokenState::new(tokens, ts)
             })
             .ok_or_else(|| {
-                Report::new(ErlError::storage(format!(
+                Report::new(RateLimitError::storage_failure(format!(
                     "Device {device} not found or not using V2"
                 )))
             })
     }
 
-    fn write_token_state(&self, device: usize, state: TokenState) -> Result<(), ErlError> {
+    fn write_token_state(&self, device: usize, state: TokenState) -> Result<(), RateLimitError> {
         self.handle
             .get_handle()
             .get_state()
@@ -67,13 +67,13 @@ impl<H: SharedMemoryAccess> DeviceBackend for ErlSharedMemoryAdapter<H> {
                     .store_erl_token_state(state.tokens, state.last_update);
             })
             .ok_or_else(|| {
-                Report::new(ErlError::storage(format!(
+                Report::new(RateLimitError::storage_failure(format!(
                     "Device {device} not found or not using V2"
                 )))
             })
     }
 
-    fn read_quota(&self, device: usize) -> Result<DeviceQuota, ErlError> {
+    fn read_quota(&self, device: usize) -> Result<DeviceQuota, RateLimitError> {
         self.handle
             .get_handle()
             .get_state()
@@ -82,13 +82,13 @@ impl<H: SharedMemoryAccess> DeviceBackend for ErlSharedMemoryAdapter<H> {
                 DeviceQuota::new(capacity, rate)
             })
             .ok_or_else(|| {
-                Report::new(ErlError::storage(format!(
+                Report::new(RateLimitError::storage_failure(format!(
                     "Device {device} not found or not using V2"
                 )))
             })
     }
 
-    fn write_refill_rate(&self, device: usize, refill_rate: f64) -> Result<(), ErlError> {
+    fn write_refill_rate(&self, device: usize, refill_rate: f64) -> Result<(), RateLimitError> {
         self.handle
             .get_handle()
             .get_state()
@@ -96,13 +96,13 @@ impl<H: SharedMemoryAccess> DeviceBackend for ErlSharedMemoryAdapter<H> {
                 dev.device_info.set_erl_token_refill_rate(refill_rate);
             })
             .ok_or_else(|| {
-                Report::new(ErlError::invalid_config(format!(
+                Report::new(RateLimitError::invalid_config(format!(
                     "Device {device} not found or not using V2"
                 )))
             })
     }
 
-    fn write_capacity(&self, device: usize, capacity: f64) -> Result<(), ErlError> {
+    fn write_capacity(&self, device: usize, capacity: f64) -> Result<(), RateLimitError> {
         self.handle
             .get_handle()
             .get_state()
@@ -110,31 +110,31 @@ impl<H: SharedMemoryAccess> DeviceBackend for ErlSharedMemoryAdapter<H> {
                 dev.device_info.set_erl_token_capacity(capacity);
             })
             .ok_or_else(|| {
-                Report::new(ErlError::invalid_config(format!(
+                Report::new(RateLimitError::invalid_config(format!(
                     "Device {device} not found or not using V2"
                 )))
             })
     }
 
-    fn fetch_sub_tokens(&self, device: usize, cost: f64) -> Result<f64, ErlError> {
+    fn fetch_sub_tokens(&self, device: usize, cost: f64) -> Result<f64, RateLimitError> {
         self.handle
             .get_handle()
             .get_state()
             .with_device_v2(device, |dev| dev.device_info.fetch_sub_erl_tokens(cost))
             .ok_or_else(|| {
-                Report::new(ErlError::storage(format!(
+                Report::new(RateLimitError::storage_failure(format!(
                     "Device {device} not found or not using V2"
                 )))
             })
     }
 
-    fn fetch_add_tokens(&self, device: usize, amount: f64) -> Result<f64, ErlError> {
+    fn fetch_add_tokens(&self, device: usize, amount: f64) -> Result<f64, RateLimitError> {
         self.handle
             .get_handle()
             .get_state()
             .with_device_v2(device, |dev| dev.device_info.fetch_add_erl_tokens(amount))
             .ok_or_else(|| {
-                Report::new(ErlError::storage(format!(
+                Report::new(RateLimitError::storage_failure(format!(
                     "Device {device} not found or not using V2"
                 )))
             })

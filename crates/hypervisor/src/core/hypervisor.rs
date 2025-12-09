@@ -5,11 +5,11 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::core::process::{GpuProcess, Worker};
+use crate::core::process::{GpuProcess, WorkerHandle};
 use crate::core::scheduler::{GpuScheduler, Scheduler, SchedulingDecision};
 use trap::{TrapAction, TrapError, TrapFrame, TrapHandler, Waker};
 
-pub type HypervisorType = Hypervisor<Worker, Scheduler>;
+pub type HypervisorType = Hypervisor<WorkerHandle, Scheduler>;
 
 pub struct Hypervisor<Proc: GpuProcess + Clone, Sched: GpuScheduler<Proc>> {
     scheduler: Arc<Mutex<Sched>>,
@@ -27,8 +27,8 @@ impl<Proc: GpuProcess + Clone, Sched: GpuScheduler<Proc>> Hypervisor<Proc, Sched
     }
 
     /// Add a new process to hypervisor
-    pub(crate) async fn add_process(&self, process: Proc) {
-        self.scheduler.lock().await.add_process(process);
+    pub(crate) async fn register_process(&self, process: Proc) {
+        self.scheduler.lock().await.register_process(process);
     }
 
     /// Remove a process from hypervisor

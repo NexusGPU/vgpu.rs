@@ -128,7 +128,7 @@ with specific responsibilities:
   CUDA API calls to enforce resource limits. Built as a
   `cdylib` that can be preloaded into CUDA applications to control their
   resource usage.
-  
+
   > **Implementation Reference**: The cuda-limiter module's design and implementation is based on research from
   > [GaiaGPU: Sharing GPUs in Container Clouds](https://ieeexplore.ieee.org/document/8672318). This paper introduces
   > innovative techniques for GPU resource management and isolation in container environments.
@@ -151,7 +151,7 @@ with specific responsibilities:
   ordering, which is critical for correct library loading and runtime behavior
   in complex CUDA or GPU environments.
 
-- [**macro**](crates/macro): Contains procedural macros that simplify common
+- [**tf-macro**](crates/tf-macro): Contains procedural macros that simplify common
   patterns used throughout the codebase, improving code readability and reducing
   boilerplate.
 

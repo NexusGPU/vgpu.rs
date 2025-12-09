@@ -8,7 +8,6 @@
 
 pub mod builder;
 pub mod core;
-pub mod keyed_lock;
 pub mod logging;
 pub mod services;
 pub mod tasks;

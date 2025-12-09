@@ -1,11 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use error_stack::Report;
-
-use crate::ErlError;
 use crate::backend::DeviceBackend;
-
-pub type Result<T, C> = core::result::Result<T, Report<C>>;
+use crate::{RateLimitError, Result};
 
 /// Configuration for estimating kernel cost when updating the bucket.
 #[derive(Debug, Clone)]
@@ -51,7 +47,7 @@ impl<B: DeviceBackend> KernelLimiter<B> {
         device: usize,
         grid_count: u32,
         block_count: u32,
-    ) -> Result<bool, ErlError> {
+    ) -> Result<bool, RateLimitError> {
         let now = Self::now_seconds();
         self.try_acquire_at(device, grid_count, block_count, now)
     }
@@ -67,7 +63,7 @@ impl<B: DeviceBackend> KernelLimiter<B> {
         grid_count: u32,
         block_count: u32,
         _now: f64,
-    ) -> Result<bool, ErlError> {
+    ) -> Result<bool, RateLimitError> {
         let cost = self.estimate_kernel_cost(grid_count, block_count);
 
         // Atomically consume tokens if available
@@ -78,7 +74,7 @@ impl<B: DeviceBackend> KernelLimiter<B> {
     }
 
     /// Inspect the current token count (without refilling).
-    pub fn current_tokens(&self, device: usize) -> Result<f64, ErlError> {
+    pub fn current_tokens(&self, device: usize) -> Result<f64, RateLimitError> {
         let state = self.backend.read_token_state(device)?;
         Ok(state.tokens)
     }
@@ -126,30 +122,38 @@ mod tests {
     }
 
     impl DeviceBackend for MockBackend {
-        fn read_token_state(&self, _device: usize) -> Result<TokenState, ErlError> {
+        fn read_token_state(&self, _device: usize) -> Result<TokenState, RateLimitError> {
             Ok(*self.state.lock().unwrap())
         }
 
-        fn write_token_state(&self, _device: usize, state: TokenState) -> Result<(), ErlError> {
+        fn write_token_state(
+            &self,
+            _device: usize,
+            state: TokenState,
+        ) -> Result<(), RateLimitError> {
             *self.state.lock().unwrap() = state;
             Ok(())
         }
 
-        fn read_quota(&self, _device: usize) -> Result<DeviceQuota, ErlError> {
+        fn read_quota(&self, _device: usize) -> Result<DeviceQuota, RateLimitError> {
             Ok(*self.quota.lock().unwrap())
         }
 
-        fn write_refill_rate(&self, _device: usize, refill_rate: f64) -> Result<(), ErlError> {
+        fn write_refill_rate(
+            &self,
+            _device: usize,
+            refill_rate: f64,
+        ) -> Result<(), RateLimitError> {
             self.quota.lock().unwrap().refill_rate = refill_rate;
             Ok(())
         }
 
-        fn write_capacity(&self, _device: usize, capacity: f64) -> Result<(), ErlError> {
+        fn write_capacity(&self, _device: usize, capacity: f64) -> Result<(), RateLimitError> {
             self.quota.lock().unwrap().capacity = capacity;
             Ok(())
         }
 
-        fn fetch_sub_tokens(&self, _device: usize, cost: f64) -> Result<f64, ErlError> {
+        fn fetch_sub_tokens(&self, _device: usize, cost: f64) -> Result<f64, RateLimitError> {
             let mut state = self.state.lock().unwrap();
             let before = state.tokens;
             if before < cost {
@@ -159,7 +163,7 @@ mod tests {
             Ok(before)
         }
 
-        fn fetch_add_tokens(&self, _device: usize, amount: f64) -> Result<f64, ErlError> {
+        fn fetch_add_tokens(&self, _device: usize, amount: f64) -> Result<f64, RateLimitError> {
             let mut state = self.state.lock().unwrap();
             let capacity = self.quota.lock().unwrap().capacity;
             let before = state.tokens;

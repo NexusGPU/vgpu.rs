@@ -5,7 +5,7 @@ pub mod api {
 
 use core::fmt;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -78,11 +78,17 @@ pub struct GpuDevicePlugin {
     resource_name: String,
     /// device plugin options
     options: DevicePluginOptions,
+    /// NVIDIA device root path prefix for host_path
+    nvidia_dev_root: Option<PathBuf>,
 }
 
 impl GpuDevicePlugin {
     /// Create a new GPU Device Plugin instance
-    pub fn new(endpoint: String, resource_name: String) -> Arc<Self> {
+    pub fn new(
+        endpoint: String,
+        resource_name: String,
+        nvidia_dev_root: Option<PathBuf>,
+    ) -> Arc<Self> {
         let options = DevicePluginOptions {
             pre_start_required: false,
             get_preferred_allocation_available: false,
@@ -92,6 +98,7 @@ impl GpuDevicePlugin {
             endpoint,
             resource_name,
             options,
+            nvidia_dev_root,
         })
     }
 
@@ -226,37 +233,50 @@ impl DevicePluginService {
     }
 
     /// Collect all NVIDIA devices that should be passed to containers
-    fn get_nvidia_devices(nvml: &Nvml) -> Vec<DeviceSpec> {
+    fn get_nvidia_devices(nvml: &Nvml, nvidia_dev_root: Option<&Path>) -> Vec<DeviceSpec> {
         let mut devices = Vec::new();
 
+        let make_host_path = |container_path: &str| -> String {
+            match nvidia_dev_root {
+                Some(root) => root
+                    .join(container_path.trim_start_matches('/'))
+                    .display()
+                    .to_string(),
+                None => container_path.to_string(),
+            }
+        };
+
         // add control device
+        let container_path = "/dev/nvidiactl";
         devices.push(DeviceSpec {
-            container_path: "/dev/nvidiactl".to_string(),
-            host_path: "/dev/nvidiactl".to_string(),
-            permissions: "rwm".to_string(),
+            container_path: container_path.to_string(),
+            host_path: make_host_path(container_path),
+            permissions: "rw".to_string(),
         });
 
         // add UVM devices
+        let container_path = "/dev/nvidia-uvm";
         devices.push(DeviceSpec {
-            container_path: "/dev/nvidia-uvm".to_string(),
-            host_path: "/dev/nvidia-uvm".to_string(),
-            permissions: "rwm".to_string(),
+            container_path: container_path.to_string(),
+            host_path: make_host_path(container_path),
+            permissions: "rw".to_string(),
         });
 
+        let container_path = "/dev/nvidia-uvm-tools";
         devices.push(DeviceSpec {
-            container_path: "/dev/nvidia-uvm-tools".to_string(),
-            host_path: "/dev/nvidia-uvm-tools".to_string(),
-            permissions: "rwm".to_string(),
+            container_path: container_path.to_string(),
+            host_path: make_host_path(container_path),
+            permissions: "rw".to_string(),
         });
 
         // add GPU devices based on NVML device count
         let device_count = nvml.device_count().unwrap_or(0);
         for i in 0..device_count {
-            let device_path = format!("/dev/nvidia{i}");
+            let container_path = format!("/dev/nvidia{i}");
             devices.push(DeviceSpec {
-                container_path: device_path.clone(),
-                host_path: device_path,
-                permissions: "rwm".to_string(),
+                container_path: container_path.clone(),
+                host_path: make_host_path(&container_path),
+                permissions: "rw".to_string(),
             });
         }
 
@@ -287,8 +307,8 @@ impl DevicePlugin for DevicePluginService {
         let cancellation_token = self.cancellation_token.clone();
 
         tokio::spawn(async move {
-            // create devices with IDs from 0 to 255
-            let devices: Vec<api::Device> = (0..=255)
+            // create devices with IDs from 0 to 512
+            let devices: Vec<api::Device> = (0..512)
                 .map(|i| api::Device {
                     id: i.to_string(),
                     health: "Healthy".to_string(),
@@ -349,7 +369,8 @@ impl DevicePlugin for DevicePluginService {
             );
 
             // collect all NVIDIA devices to be passed to the container
-            let devices = Self::get_nvidia_devices(&nvml);
+            let devices =
+                Self::get_nvidia_devices(&nvml, self.device_plugin.nvidia_dev_root.as_deref());
 
             let container_response = ContainerAllocateResponse {
                 envs: HashMap::new(),

@@ -122,8 +122,8 @@ impl CommandProcessor {
 /// command handler configuration.
 #[derive(Debug, Clone)]
 pub struct CommandHandlerConfig {
-    /// Unique limiter ID
-    pub limiter_id: String,
+    /// Unique worker ID
+    pub worker_id: String,
     client_config: ClientConfig,
 }
 
@@ -132,7 +132,7 @@ impl CommandHandlerConfig {
     pub fn new(host_pid: u32, client_config: ClientConfig) -> Self {
         Self {
             client_config,
-            limiter_id: format!("limiter_{host_pid}"),
+            worker_id: format!("worker_{host_pid}"),
         }
     }
 }
@@ -156,7 +156,7 @@ impl CommandHandler {
     pub fn new(config: CommandHandlerConfig) -> Result<Self, Report<CommError>> {
         info!(
             server_url = %config.client_config.server_url,
-            limiter_id = %config.limiter_id,
+            worker_id = %config.worker_id,
             "Creating command handler"
         );
 
