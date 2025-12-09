@@ -214,25 +214,6 @@ impl Limiter {
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
 
-        self.check_bypass_and_health(state, raw_device_index)?;
-
-        // Dispatch to appropriate version
-        match state.version() {
-            1 => self.rate_limiter_v1(state, raw_device_index, grids),
-            2 => self.rate_limiter_v2(raw_device_index, grids, blocks),
-            version => Err(Error::UnsupportedVersion {
-                version,
-                device_idx: raw_device_index,
-            }),
-        }
-    }
-
-    /// Check if device can bypass limiting and validate health
-    fn check_bypass_and_health(
-        &self,
-        state: &utils::shared_memory::SharedDeviceState,
-        raw_device_index: usize,
-    ) -> Result<(), Error> {
         let up_limit = state
             .with_device(
                 raw_device_index,
@@ -245,7 +226,17 @@ impl Limiter {
             return Ok(());
         }
 
-        self.check_device_health(state, raw_device_index)
+        self.check_device_health(state, raw_device_index)?;
+
+        // Dispatch to appropriate version
+        match state.version() {
+            1 => self.rate_limiter_v1(state, raw_device_index, grids),
+            2 => self.rate_limiter_v2(raw_device_index, grids, blocks),
+            version => Err(Error::UnsupportedVersion {
+                version,
+                device_idx: raw_device_index,
+            }),
+        }
     }
 
     /// V1: Core-based rate limiting
