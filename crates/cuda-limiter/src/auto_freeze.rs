@@ -171,6 +171,9 @@ impl AutoFreezeManager {
                     .unwrap_or(false);
 
                 if is_currently_frozen {
+                    // Reset activity timer when frozen to avoid immediate re-freeze after restore
+                    *last_guard = Instant::now();
+
                     let (guard, _timeout_result) = activity_notifier
                         .wait_timeout(last_guard, Duration::from_secs(1))
                         .expect("should wait on condvar");
