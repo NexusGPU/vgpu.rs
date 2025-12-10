@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cudarc::driver::sys::CUdevice;
 use dashmap::DashMap;
@@ -24,6 +24,14 @@ use crate::detour::nvml::FN_NVML_DEVICE_GET_HANDLE_BY_INDEX_V2;
 const RATE_LIMITER_SLEEP_MS: u64 = 10;
 const RATE_LIMITER_HEALTH_CHECK_INTERVAL: u64 = 10;
 const RATE_LIMITER_LOG_INTERVAL: u64 = 50;
+
+/// Cache TTL for up_limit to avoid frequent shared memory access
+const UP_LIMIT_CACHE_TTL: Duration = Duration::from_secs(60);
+
+struct CachedUpLimit {
+    value: u32,
+    last_refresh: Instant,
+}
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
@@ -89,6 +97,9 @@ pub(crate) struct Limiter {
     gpu_idx_uuids: Vec<(usize, String)>,
     /// compute shard
     compute_shard: bool,
+    /// Cached up_limit per device for fast path check
+    /// device_index -> CachedUpLimit
+    up_limit_cache: DashMap<usize, CachedUpLimit>,
 }
 
 impl std::fmt::Debug for Limiter {
@@ -126,6 +137,7 @@ impl Limiter {
             cu_device_mapping: DashMap::new(),
             gpu_idx_uuids,
             compute_shard,
+            up_limit_cache: DashMap::new(),
         })
     }
 
@@ -211,6 +223,14 @@ impl Limiter {
         grids: u32,
         blocks: u32,
     ) -> Result<(), Error> {
+        // Fast path: check cached up_limit first (no shared memory access)
+        if let Some(cached) = self.up_limit_cache.get(&raw_device_index) {
+            if cached.value >= 100 && cached.last_refresh.elapsed() < UP_LIMIT_CACHE_TTL {
+                return Ok(());
+            }
+        }
+
+        // Slow path: access shared memory
         let handle = self.get_or_init_shared_memory()?;
         let state = handle.get_state();
 
@@ -221,6 +241,15 @@ impl Limiter {
                 |device| device.device_info.get_up_limit(),
             )
             .ok_or(Error::DeviceNotConfigured(raw_device_index))?;
+
+        // Update cache
+        self.up_limit_cache.insert(
+            raw_device_index,
+            CachedUpLimit {
+                value: up_limit,
+                last_refresh: Instant::now(),
+            },
+        );
 
         if up_limit >= 100 {
             return Ok(());
