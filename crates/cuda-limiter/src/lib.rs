@@ -340,10 +340,16 @@ fn init_hooks() {
     }
     init_limiter();
 
-    let is_compute_shard = GLOBAL_LIMITER
-        .get()
-        .expect("GLOBAL_LIMITER")
-        .is_compute_shard();
+    let is_compute_shard = match GLOBAL_LIMITER.get() {
+        Some(limiter) => limiter.is_compute_shard(),
+        None => {
+            if let Some(reason) = GLOBAL_LIMITER_ERROR.get() {
+                panic!("GLOBAL_LIMITER initialization failed: {reason}");
+            } else {
+                panic!("GLOBAL_LIMITER not initialized: init has not run");
+            }
+        }
+    };
     if is_compute_shard {
         tracing::debug!("Compute shard detected, skipping hook initialization");
         return;
