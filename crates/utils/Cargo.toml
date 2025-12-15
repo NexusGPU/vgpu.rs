@@ -11,7 +11,7 @@ frida-gum = { workspace = true, features = ["auto-download", "std", "invocation-
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 shared_memory = { workspace = true }
-libc = "0.2.177"
+libc = "0.2.178"
 glob = { workspace = true }
 erl = { path = "../erl" }
 error-stack = { workspace = true }
