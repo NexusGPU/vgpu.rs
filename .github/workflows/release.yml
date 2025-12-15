@@ -83,7 +83,7 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
 
       - name: Upload downloaded tensor-fusion components
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: tensor-fusion-components
           path: |
@@ -153,13 +153,13 @@ jobs:
         run: VERSION=${{ needs.release.outputs.version }} cross build -p bootstrap --release --target ${{ matrix.target }}
 
       - name: Upload cuda-limiter artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: libcuda_limiter-${{ matrix.platform }}
           path: target/${{ matrix.target }}/release/libcuda_limiter.so
 
       - name: Upload bootstrap artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: bootstrap-${{ matrix.platform }}
           path: target/${{ matrix.target }}/release/bootstrap
@@ -168,7 +168,7 @@ jobs:
         run: VERSION=${{ needs.release.outputs.version }} cross build -p add-path --release --target ${{ matrix.target }}
 
       - name: Upload add-path artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: libadd_path-${{ matrix.platform }}
           path: target/${{ matrix.target }}/release/libadd_path.so
