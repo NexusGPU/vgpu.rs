@@ -30,7 +30,6 @@ use crate::auto_freeze::AutoFreezeManager;
 
 mod auto_freeze;
 mod checkpoint;
-mod command_handler;
 mod config;
 mod culib;
 mod detour;
@@ -39,7 +38,6 @@ mod limiter;
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
 static GLOBAL_AUTO_FREEZE_MANAGER: OnceLock<Arc<AutoFreezeManager>> = OnceLock::new();
 static GLOBAL_LIMITER_ERROR: OnceLock<String> = OnceLock::new();
-static GLOBAL_NGPU_LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
 static HOOKS_INITIALIZED: (AtomicBool, AtomicBool) =
     (AtomicBool::new(false), AtomicBool::new(false));
 static LIMITER_ERROR_REPORTED: AtomicBool = AtomicBool::new(false);
@@ -108,8 +106,8 @@ pub(crate) fn mock_shm_path() -> Option<PathBuf> {
 }
 
 fn init_limiter() {
-    static NGPU_INITIALIZED: Once = Once::new();
-    NGPU_INITIALIZED.call_once(|| {
+    static LIMITER_INITIALIZED: Once = Once::new();
+    LIMITER_INITIALIZED.call_once(|| {
         let nvml =
             match Nvml::builder()
                 .lib_path(&env::var_os("TF_NVML_LIB_PATH").unwrap_or(
@@ -260,20 +258,14 @@ fn try_install_cuda_hooks() {
         return;
     }
 
-    let mut hook_manager = HookManager::default();
-    hook_manager.collect_module_names();
-
-    if !hook_manager
-        .module_names
-        .iter()
-        .any(|m| m.starts_with("libcuda."))
-    {
+    if !utils::hooks::is_module_loaded("libcuda.") {
         return;
     }
 
     tracing::debug!("Installing CUDA hooks...");
 
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let mut hook_manager = HookManager::default();
         detour::gpu::enable_hooks(&mut hook_manager)
             .and_then(|_| detour::mem::enable_hooks(&mut hook_manager))
     }));
@@ -297,20 +289,14 @@ fn try_install_nvml_hooks() {
         return;
     }
 
-    let mut hook_manager = HookManager::default();
-    hook_manager.collect_module_names();
-
-    if !hook_manager
-        .module_names
-        .iter()
-        .any(|m| m.starts_with("libnvidia-ml."))
-    {
+    if !utils::hooks::is_module_loaded("libnvidia-ml.") {
         return;
     }
 
     tracing::debug!("Installing NVML hooks...");
 
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let mut hook_manager = HookManager::default();
         detour::nvml::enable_hooks(&mut hook_manager, is_mapping_device_idx())
     }));
 
@@ -356,17 +342,8 @@ fn init_hooks() {
     }
 
     // Try to install hooks immediately if libraries are already loaded
-    let mut hook_manager = HookManager::default();
-    hook_manager.collect_module_names();
-
-    let has_libcuda = hook_manager
-        .module_names
-        .iter()
-        .any(|m| m.starts_with("libcuda."));
-    let has_libnvml = hook_manager
-        .module_names
-        .iter()
-        .any(|m| m.starts_with("libnvidia-ml."));
+    let has_libcuda = utils::hooks::is_module_loaded("libcuda.");
+    let has_libnvml = utils::hooks::is_module_loaded("libnvidia-ml.");
 
     tracing::debug!("has_libcuda: {has_libcuda}, has_libnvml: {has_libnvml}");
 
@@ -381,6 +358,7 @@ fn init_hooks() {
     // Install dlsym hook to catch dynamic library loading
     static DLSYM_HOOK_ONCE: Once = Once::new();
     DLSYM_HOOK_ONCE.call_once(|| {
+        let mut hook_manager = HookManager::default();
         if let Err(err) = replace_symbol!(
             &mut hook_manager,
             None,
