@@ -10,6 +10,7 @@ pub use frida_gum::interceptor::InvocationListener;
 pub use frida_gum::interceptor::Listener;
 use frida_gum::Gum;
 use frida_gum::Module;
+#[cfg(not(target_os = "linux"))]
 use frida_gum::ModuleMap;
 pub use frida_gum::NativePointer;
 
