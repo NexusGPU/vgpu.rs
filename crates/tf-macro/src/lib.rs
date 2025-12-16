@@ -108,7 +108,7 @@ pub fn hook_fn(
 
         // Parse the new body
         if let Ok(parsed_block) = syn::parse2::<syn::Block>(new_body) {
-            modified_function.block = Box::new(parsed_block);
+            *modified_function.block = parsed_block;
         }
 
         let output = quote! {
