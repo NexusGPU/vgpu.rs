@@ -7,7 +7,8 @@ use error_stack::{Report, ResultExt};
 use reqwest::blocking::Client;
 
 const SERVICE_ACCOUNT_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub struct PodConfig {
@@ -211,9 +212,66 @@ fn read_service_account_token() -> Result<String, Report<ConfigError>> {
     Ok(token.to_string())
 }
 
+struct TimeoutConfig {
+    request: Duration,
+    connect: Duration,
+}
+
+impl TimeoutConfig {
+    fn from_env() -> Self {
+        Self {
+            request: Self::parse_env_timeout(
+                "HTTP_REQUEST_TIMEOUT",
+                DEFAULT_REQUEST_TIMEOUT,
+                "request",
+            ),
+            connect: Self::parse_env_timeout(
+                "HTTP_CONNECT_TIMEOUT",
+                DEFAULT_CONNECT_TIMEOUT,
+                "connect",
+            ),
+        }
+    }
+
+    fn parse_env_timeout(env_var: &str, default: Duration, timeout_type: &str) -> Duration {
+        match env::var(env_var).ok().and_then(|s| parse_duration(&s).ok()) {
+            Some(duration) => {
+                tracing::debug!(
+                    timeout_type = timeout_type,
+                    timeout_seconds = duration.as_secs(),
+                    "Using custom {} timeout from environment",
+                    timeout_type
+                );
+                duration
+            }
+            None => {
+                if env::var(env_var).is_ok() {
+                    tracing::warn!(
+                        env_var = env_var,
+                        timeout_type = timeout_type,
+                        default_timeout_seconds = default.as_secs(),
+                        "Failed to parse {}, using default",
+                        env_var
+                    );
+                }
+                default
+            }
+        }
+    }
+}
+
 fn build_http_client() -> Client {
+    let timeouts = TimeoutConfig::from_env();
+
+    tracing::debug!(
+        request_timeout_seconds = timeouts.request.as_secs(),
+        connect_timeout_seconds = timeouts.connect.as_secs(),
+        "Building HTTP client with timeouts"
+    );
+
     Client::builder()
-        .timeout(DEFAULT_REQUEST_TIMEOUT)
+        .timeout(timeouts.request)
+        .connect_timeout(timeouts.connect)
         .build()
         .expect("should build HTTP client")
 }
