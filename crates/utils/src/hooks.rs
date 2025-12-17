@@ -153,11 +153,9 @@ impl HookManager {
                     tracing::debug!("Found module: {}", name);
                     // Store it if not already present
                     if !self.module_names.contains(&name) {
-                        self.module_names.push(name.clone());
-                        self.module_names
-                            .sort_by_key(|b| std::cmp::Reverse(b.len()));
+                        self.module_names.push(name);
                     }
-                    // Return reference to the stored string
+                    // Return reference to the stored string (the one we just pushed or the existing one)
                     self.module_names
                         .iter()
                         .find(|m| m.starts_with(module_prefix))
