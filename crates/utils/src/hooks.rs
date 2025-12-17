@@ -10,6 +10,7 @@ pub use frida_gum::interceptor::InvocationListener;
 pub use frida_gum::interceptor::Listener;
 use frida_gum::Gum;
 use frida_gum::Module;
+#[cfg(not(target_os = "linux"))]
 use frida_gum::ModuleMap;
 pub use frida_gum::NativePointer;
 
@@ -67,33 +68,109 @@ pub struct HookManager {
     pub module_names: Vec<String>,
 }
 
-impl HookManager {
-    pub fn collect_module_names(&mut self) {
-        let mut module_map = ModuleMap::new();
-        module_map.update();
-        self.module_names = module_map
-            .values()
-            .iter()
-            .filter(|m| !m.path().starts_with("/tensor-fusion"))
-            .map(|m| m.name().to_string())
-            .collect();
-        // sort by length to avoid matching a longer module name as a substring of a shorter one
-        self.module_names
-            .sort_by_key(|b| std::cmp::Reverse(b.len()));
+fn find_module_by_prefix(prefix: &str) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let process = match procfs::process::Process::myself() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Failed to access /proc/self: {}", e);
+                return None;
+            }
+        };
+
+        let maps = match process.maps() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!("Failed to read /proc/self/maps: {}", e);
+                return None;
+            }
+        };
+
+        for map in maps {
+            // Skip non-path mappings (e.g., anonymous, heap, stack)
+            let procfs::process::MMapPath::Path(path) = map.pathname else {
+                continue;
+            };
+
+            // Skip if no filename
+            let Some(filename) = path.file_name() else {
+                continue;
+            };
+
+            // Skip if filename is not valid UTF-8
+            let Some(filename_str) = filename.to_str() else {
+                continue;
+            };
+
+            // Check if this library matches our prefix
+            if filename_str.starts_with(prefix) {
+                tracing::debug!(
+                    "Found module '{}' at path: {}",
+                    filename_str,
+                    path.display()
+                );
+                return Some(filename_str.to_string());
+            }
+        }
+
+        tracing::debug!(
+            "Module with prefix '{}' not found in process memory maps",
+            prefix
+        );
+        None
     }
 
-    pub fn hooker<'a>(&'a mut self, module: Option<&'a str>) -> Result<Hooker<'a>, HookError> {
-        let found_module =
-            module.map(|m: &str| self.module_names.iter().find(|x| x.starts_with(m)));
+    #[cfg(not(target_os = "linux"))]
+    {
+        // On non-Linux platforms, fall back to Frida's module enumeration
+        // This is less safe but necessary for cross-platform support
+        let mut module_map = ModuleMap::new();
+        module_map.update();
 
-        let module = match found_module {
-            Some(None) => {
-                return Err(HookError::NoModuleName(Cow::Owned(
-                    module.unwrap().to_string(),
-                )))
+        for module in module_map.values() {
+            let name = module.name();
+            if name.starts_with(prefix) {
+                tracing::debug!("Found module via Frida: {}", name);
+                return Some(name.to_string());
             }
-            Some(m) => m.map(|s| s.as_str()),
-            None => None,
+        }
+
+        tracing::debug!("Module with prefix '{}' not found via Frida", prefix);
+        None
+    }
+}
+
+pub fn is_module_loaded(prefix: &str) -> bool {
+    find_module_by_prefix(prefix).is_some()
+}
+
+impl HookManager {
+    pub fn hooker<'a>(&'a mut self, module: Option<&'a str>) -> Result<Hooker<'a>, HookError> {
+        let module = if let Some(module_prefix) = module {
+            match find_module_by_prefix(module_prefix) {
+                Some(name) => {
+                    tracing::debug!("Found module: {}", name);
+                    // Store it if not already present
+                    if !self.module_names.contains(&name) {
+                        self.module_names.push(name.clone());
+                        self.module_names
+                            .sort_by_key(|b| std::cmp::Reverse(b.len()));
+                    }
+                    // Return reference to the stored string
+                    self.module_names
+                        .iter()
+                        .find(|m| m.starts_with(module_prefix))
+                        .map(|s| s.as_str())
+                }
+                None => {
+                    return Err(HookError::NoModuleName(Cow::Owned(
+                        module_prefix.to_string(),
+                    )))
+                }
+            }
+        } else {
+            None
         };
 
         tracing::debug!("start hook module: {:?}", module);

@@ -13,14 +13,12 @@ use tf_macro::hook_fn;
 use utils::hooks::HookManager;
 use utils::replace_symbol;
 
-use crate::command_handler;
 use crate::config;
 use crate::culib;
 use crate::limiter::Error;
 use crate::with_device;
 use crate::Limiter;
 use crate::GLOBAL_LIMITER;
-use crate::GLOBAL_NGPU_LIBRARY;
 
 #[hook_fn]
 pub(crate) unsafe extern "C" fn cu_launch_kernel_ptsz_detour(
@@ -353,7 +351,7 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
                 };
 
                 // Initialize worker process to get host_pid
-                let process_config = match config::init_worker(
+                let _process_config = match config::init_worker(
                     &hypervisor_ip,
                     &hypervisor_port,
                     &container_name,
@@ -378,28 +376,6 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
 
                 // Initialize checkpoint API with host_pid
                 crate::checkpoint::init_checkpoint_api(process::id());
-
-                // Load tensor-fusion/ngpu.so
-                if let Ok(ngpu_path) = std::env::var("TENSOR_FUSION_NGPU_PATH") {
-                    tracing::debug!("loading ngpu.so from: {ngpu_path}");
-
-                    match unsafe { libloading::Library::new(ngpu_path.as_str()) } {
-                        Ok(lib) => {
-                            GLOBAL_NGPU_LIBRARY
-                                .set(lib)
-                                .expect("set GLOBAL_NGPU_LIBRARY");
-                            tracing::debug!("loaded ngpu.so");
-                        }
-                        Err(e) => {
-                            tracing::error!("failed to load ngpu.so: {e}, path: {ngpu_path}");
-                        }
-                    }
-                    command_handler::start_background_handler(
-                        &hypervisor_ip,
-                        &hypervisor_port,
-                        process_config.host_pid,
-                    );
-                }
 
                 // Mark as successfully initialized only after everything succeeds
                 WORKER_INITIALIZED.store(true, Ordering::Release);
