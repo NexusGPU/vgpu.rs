@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::ffi::c_void;
 use std::ops::Deref;
-use std::sync::atomic::{fence, Ordering};
 use std::sync::LazyLock;
 use std::sync::OnceLock;
 
@@ -65,9 +64,18 @@ impl Hooker<'_> {
 }
 
 /// Struct for managing the hooks using Frida.
-pub struct HookManager {
+pub struct HookManager<'a> {
     interceptor: Interceptor,
     pub module_names: Vec<String>,
+    // Force Frida's module registry to synchronize at construction time.
+    // This prevents a race condition where the first hooked function call triggers
+    // gum_module_registry_synchronize_modules() via dl_iterate_phdr(), which can crash
+    // in multiprocess environments (e.g., Python multiprocessing spawn mode) with many
+    // loaded extension modules.
+    #[allow(dead_code)]
+    modules: Vec<Module>,
+    #[allow(dead_code)]
+    process: Process<'a>,
 }
 
 fn find_module_by_prefix(prefix: &str) -> Option<String> {
@@ -147,7 +155,7 @@ pub fn is_module_loaded(prefix: &str) -> bool {
     find_module_by_prefix(prefix).is_some()
 }
 
-impl HookManager {
+impl HookManager<'_> {
     pub fn hooker<'a>(&'a mut self, module: Option<&'a str>) -> Result<Hooker<'a>, HookError> {
         let module = if let Some(module_prefix) = module {
             match find_module_by_prefix(module_prefix) {
@@ -205,37 +213,27 @@ impl HookManager {
     }
 }
 
-impl Default for HookManager {
+impl Default for HookManager<'_> {
     fn default() -> Self {
         let mut interceptor = Interceptor::obtain(&GUM);
         interceptor.begin_transaction();
+        // Enumerate modules BEFORE any hooks are installed to force Frida's
+        // module registry to synchronize. This prevents crashes in multiprocess
+        // environments where dl_iterate_phdr() is called during first hook invocation.
+        let process = Process::obtain(&GUM);
+        let modules = process.enumerate_modules();
         Self {
             interceptor,
             module_names: vec![],
+            modules,
+            process,
         }
     }
 }
 
-impl Drop for HookManager {
+impl Drop for HookManager<'_> {
     fn drop(&mut self) {
-        self.interceptor.end_transaction();
-
-        // Force Frida's module registry to synchronize immediately after installing hooks.
-        // This prevents a race condition where the first hooked function call triggers
-        // gum_module_registry_synchronize_modules() via dl_iterate_phdr(), which can crash
-        // in multiprocess environments (e.g., Python multiprocessing spawn mode) with many
-        // loaded extension modules.
-        //
-        // By calling enumerate_modules() here, we ensure Frida's internal module cache is
-        // fully populated before any hooked function is invoked.
-        let process = Process::obtain(&GUM);
-        let modules = process.enumerate_modules();
-        // Use black_box to prevent the compiler from optimizing away the enumeration
-        std::hint::black_box(modules.len());
-
-        // Memory fence to ensure all hook installations and module enumeration are visible
-        // to all threads before any hooked function can be called.
-        fence(Ordering::SeqCst);
+        self.interceptor.end_transaction()
     }
 }
 
