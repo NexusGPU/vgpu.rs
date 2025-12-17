@@ -155,7 +155,7 @@ impl HookManager {
                     if !self.module_names.contains(&name) {
                         self.module_names.push(name);
                     }
-                    // Return reference to the stored string (the one we just pushed or the existing one)
+                    // Return reference to the stored string
                     self.module_names
                         .iter()
                         .find(|m| m.starts_with(module_prefix))
