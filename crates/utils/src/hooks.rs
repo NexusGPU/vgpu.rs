@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::ffi::c_void;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
 use std::sync::OnceLock;
 
@@ -18,6 +19,33 @@ use frida_gum::Process;
 use crate::HookError;
 
 static GUM: LazyLock<Gum> = LazyLock::new(Gum::obtain);
+
+// Flag to ensure module registry is synchronized only once
+static MODULE_REGISTRY_SYNCED: AtomicBool = AtomicBool::new(false);
+
+/// Force Frida's module registry to synchronize by enumerating all modules.
+/// This must be called before any hooks are installed to prevent crashes in
+/// multiprocess environments (e.g., Python multiprocessing spawn mode).
+///
+/// The function intentionally leaks the Process and Module objects to ensure
+/// Frida's internal state remains valid for the entire process lifetime.
+fn ensure_module_registry_synced() {
+    if MODULE_REGISTRY_SYNCED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        // Obtain process and enumerate modules to force Frida's module registry sync
+        let process = Process::obtain(&GUM);
+        let modules = process.enumerate_modules();
+
+        // Intentionally leak these to keep Frida's internal state valid.
+        // This prevents crashes when hooked functions are called later.
+        std::mem::forget(modules);
+        std::mem::forget(process);
+
+        tracing::debug!("Frida module registry synchronized");
+    }
+}
 
 pub struct Hooker<'a> {
     interceptor: &'a mut Interceptor,
@@ -64,18 +92,9 @@ impl Hooker<'_> {
 }
 
 /// Struct for managing the hooks using Frida.
-pub struct HookManager<'a> {
+pub struct HookManager {
     interceptor: Interceptor,
     pub module_names: Vec<String>,
-    // Force Frida's module registry to synchronize at construction time.
-    // This prevents a race condition where the first hooked function call triggers
-    // gum_module_registry_synchronize_modules() via dl_iterate_phdr(), which can crash
-    // in multiprocess environments (e.g., Python multiprocessing spawn mode) with many
-    // loaded extension modules.
-    #[allow(dead_code)]
-    modules: Vec<Module>,
-    #[allow(dead_code)]
-    process: Process<'a>,
 }
 
 fn find_module_by_prefix(prefix: &str) -> Option<String> {
@@ -155,7 +174,7 @@ pub fn is_module_loaded(prefix: &str) -> bool {
     find_module_by_prefix(prefix).is_some()
 }
 
-impl HookManager<'_> {
+impl HookManager {
     pub fn hooker<'a>(&'a mut self, module: Option<&'a str>) -> Result<Hooker<'a>, HookError> {
         let module = if let Some(module_prefix) = module {
             match find_module_by_prefix(module_prefix) {
@@ -213,25 +232,21 @@ impl HookManager<'_> {
     }
 }
 
-impl Default for HookManager<'_> {
+impl Default for HookManager {
     fn default() -> Self {
+        // Ensure Frida's module registry is synchronized before any hooks are installed
+        ensure_module_registry_synced();
+
         let mut interceptor = Interceptor::obtain(&GUM);
         interceptor.begin_transaction();
-        // Enumerate modules BEFORE any hooks are installed to force Frida's
-        // module registry to synchronize. This prevents crashes in multiprocess
-        // environments where dl_iterate_phdr() is called during first hook invocation.
-        let process = Process::obtain(&GUM);
-        let modules = process.enumerate_modules();
         Self {
             interceptor,
             module_names: vec![],
-            modules,
-            process,
         }
     }
 }
 
-impl Drop for HookManager<'_> {
+impl Drop for HookManager {
     fn drop(&mut self) {
         self.interceptor.end_transaction()
     }
