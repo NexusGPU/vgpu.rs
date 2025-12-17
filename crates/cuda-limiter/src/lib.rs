@@ -44,6 +44,11 @@ static LIMITER_ERROR_REPORTED: AtomicBool = AtomicBool::new(false);
 
 #[ctor]
 unsafe fn entry_point() {
+    // Force early I/O to initialize glibc/system resources.
+    // This helps prevent crashes in multiprocess spawn environments.
+    // We output to stderr to mimic what trace logging does.
+    eprintln!("[cuda-limiter] initializing (pid={})", std::process::id());
+
     logging::init();
 
     let (enable_nvml_hooks, enable_cuda_hooks) = are_hooks_enabled();

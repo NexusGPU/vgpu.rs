@@ -34,16 +34,59 @@ fn ensure_module_registry_synced() {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
-        // Obtain process and enumerate modules to force Frida's module registry sync
+        // First, warm up dl_iterate_phdr directly via libc before Frida touches it.
+        // This ensures the dynamic linker's internal state is fully initialized.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            extern "C" fn count_modules(
+                _info: *mut libc::dl_phdr_info,
+                _size: libc::size_t,
+                data: *mut libc::c_void,
+            ) -> libc::c_int {
+                let count = data as *mut usize;
+                *count += 1;
+                0
+            }
+            let mut module_count: usize = 0;
+            libc::dl_iterate_phdr(
+                Some(count_modules),
+                &mut module_count as *mut usize as *mut libc::c_void,
+            );
+            tracing::debug!("Pre-warmed dl_iterate_phdr, found {} modules", module_count);
+        }
+
+        // Memory fence to ensure all dl_iterate_phdr operations complete
+        std::sync::atomic::fence(Ordering::SeqCst);
+
+        // Now let Frida do its module enumeration
         let process = Process::obtain(&GUM);
         let modules = process.enumerate_modules();
+
+        tracing::debug!(
+            "Frida module registry synchronized with {} modules",
+            modules.len()
+        );
 
         // Intentionally leak these to keep Frida's internal state valid.
         // This prevents crashes when hooked functions are called later.
         std::mem::forget(modules);
         std::mem::forget(process);
 
-        tracing::debug!("Frida module registry synchronized");
+        // Final memory fence
+        std::sync::atomic::fence(Ordering::SeqCst);
+
+        // Force actual I/O operations to ensure all system resources are initialized.
+        // This mimics what trace logging does when enabled.
+        // Writing to /dev/null triggers real system calls without visible output.
+        #[cfg(target_os = "linux")]
+        {
+            use std::fs::OpenOptions;
+            use std::io::Write;
+            if let Ok(mut f) = OpenOptions::new().write(true).open("/dev/null") {
+                let _ = f.write_all(b"warmup");
+                let _ = f.flush();
+            }
+        }
     }
 }
 
