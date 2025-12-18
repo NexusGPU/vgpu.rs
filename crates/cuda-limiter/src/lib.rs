@@ -324,6 +324,10 @@ fn init_hooks() {
         return;
     }
 
+    // Install dl_iterate_phdr hook FIRST, before Frida initializes
+    #[cfg(target_os = "linux")]
+    install_dl_iterate_phdr_hook();
+
     unsafe {
         // Load CUDA library to ensure it's loaded before hooks are installed
         let _ = culib::culib();
@@ -533,10 +537,34 @@ fn is_mapping_device_idx() -> bool {
 }
 
 // ============================================================================
-// dl_iterate_phdr wrapper to filter out invalid entries (JIT/custom loaders)
+// dl_iterate_phdr hook to filter out invalid entries (JIT/custom loaders)
 // This prevents Frida-gum from crashing when it encounters entries with
 // NULL program headers.
+//
+// We use both LD_PRELOAD wrapper AND Frida hook for maximum coverage:
+// - LD_PRELOAD catches calls from dynamically linked code
+// - Frida hook catches direct calls (including from Frida-gum itself)
 // ============================================================================
+
+#[cfg(target_os = "linux")]
+fn install_dl_iterate_phdr_hook() {
+    static HOOK_INSTALLED: Once = Once::new();
+    HOOK_INSTALLED.call_once(|| {
+        let mut hook_manager = HookManager::default();
+        if let Err(err) = replace_symbol!(
+            &mut hook_manager,
+            None,
+            "dl_iterate_phdr",
+            dl_iterate_phdr_detour,
+            FnDlIteratePhdr,
+            FN_DL_ITERATE_PHDR
+        ) {
+            tracing::error!("Failed to install dl_iterate_phdr Frida hook: {}", err);
+        } else {
+            tracing::debug!("Successfully installed dl_iterate_phdr Frida hook");
+        }
+    });
+}
 
 #[cfg(target_os = "linux")]
 type DlIteratePhdrCallback =
@@ -544,10 +572,45 @@ type DlIteratePhdrCallback =
 #[cfg(target_os = "linux")]
 type RealDlIteratePhdr =
     unsafe extern "C" fn(DlIteratePhdrCallback, *mut c_void) -> std::ffi::c_int;
+#[cfg(target_os = "linux")]
+type FnDlIteratePhdr = RealDlIteratePhdr;
 
 #[cfg(target_os = "linux")]
 static REAL_DL_ITERATE_PHDR: std::sync::atomic::AtomicPtr<c_void> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+// Frida detour for dl_iterate_phdr
+#[cfg(target_os = "linux")]
+#[hook_fn]
+unsafe extern "C" fn dl_iterate_phdr_detour(
+    callback: DlIteratePhdrCallback,
+    data: *mut c_void,
+) -> std::ffi::c_int {
+    eprintln!(
+        "[dl_wrapper/frida] dl_iterate_phdr_detour called (pid={}, callback={:p})",
+        std::process::id(),
+        callback as *const ()
+    );
+
+    // Get original function
+    let original = match FN_DL_ITERATE_PHDR.get() {
+        Some(f) => f,
+        None => {
+            eprintln!("[dl_wrapper/frida] Original function not available");
+            return -1;
+        }
+    };
+
+    // Set up filtering callback
+    TLS_REAL_CALLBACK.with(|cb| cb.set(Some(callback)));
+    TLS_USER_DATA.with(|d| d.set(data));
+
+    // Call original with our filtering wrapper
+    let result = original(dl_wrapper_callback, std::ptr::null_mut());
+    
+    eprintln!("[dl_wrapper/frida] dl_iterate_phdr_detour completed (result={})", result);
+    result
+}
 
 #[cfg(target_os = "linux")]
 thread_local! {
@@ -562,31 +625,47 @@ unsafe extern "C" fn dl_wrapper_callback(
     size: libc::size_t,
     _data: *mut c_void,
 ) -> std::ffi::c_int {
-    use std::sync::atomic::Ordering;
-
+    // First check: null pointer
     if info.is_null() {
+        eprintln!("[dl_wrapper] Callback received NULL info pointer");
+        return 0;
+    }
+
+    // Validate size to ensure we have a proper dl_phdr_info struct
+    if size < std::mem::size_of::<libc::dl_phdr_info>() {
+        eprintln!(
+            "[dl_wrapper] Skipping entry: size too small ({} < {})",
+            size,
+            std::mem::size_of::<libc::dl_phdr_info>()
+        );
         return 0;
     }
 
     let info_ref = &*info;
 
+    // Check for invalid program headers - this is the key filter
     if info_ref.dlpi_phdr.is_null() || info_ref.dlpi_phnum == 0 {
-        static SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
-        if !SKIP_LOGGED.swap(true, Ordering::Relaxed) {
-            let name = if info_ref.dlpi_name.is_null() {
-                "(null)"
-            } else {
-                CStr::from_ptr(info_ref.dlpi_name)
-                    .to_str()
-                    .unwrap_or("(invalid)")
-            };
-            eprintln!(
-                "[dl_wrapper] Skipping invalid entry: name='{}', phdr={:?}, phnum={}",
-                name,
-                info_ref.dlpi_phdr,
-                info_ref.dlpi_phnum
-            );
-        }
+        let name = if info_ref.dlpi_name.is_null() {
+            "(null)"
+        } else {
+            CStr::from_ptr(info_ref.dlpi_name)
+                .to_str()
+                .unwrap_or("(invalid)")
+        };
+        eprintln!(
+            "[dl_wrapper] Skipping invalid entry: name='{}', phdr={:?}, phnum={}",
+            name, info_ref.dlpi_phdr, info_ref.dlpi_phnum
+        );
+        return 0;
+    }
+
+    // Additional safety check: validate phdr is readable
+    // Check if addr looks reasonable (not in kernel space on x86_64)
+    if (info_ref.dlpi_phdr as usize) > 0x7fffffffffff {
+        eprintln!(
+            "[dl_wrapper] Skipping entry: phdr address looks invalid ({:p})",
+            info_ref.dlpi_phdr
+        );
         return 0;
     }
 
@@ -612,6 +691,7 @@ fn get_real_dl_iterate_phdr() -> Option<RealDlIteratePhdr> {
     // Prevent recursion: dlsym may call dl_iterate_phdr internally
     let already_in_dlsym = TLS_IN_DLSYM.with(|f| f.replace(true));
     if already_in_dlsym {
+        eprintln!("[dl_wrapper] Recursion detected in get_real_dl_iterate_phdr");
         return None;
     }
 
@@ -630,11 +710,7 @@ fn get_real_dl_iterate_phdr() -> Option<RealDlIteratePhdr> {
     }
 
     REAL_DL_ITERATE_PHDR.store(new_ptr, Ordering::Release);
-
-    static LOGGED: AtomicBool = AtomicBool::new(false);
-    if !LOGGED.swap(true, Ordering::Relaxed) {
-        eprintln!("[dl_wrapper] Wrapper initialized, real func at {:p}", new_ptr);
-    }
+    eprintln!("[dl_wrapper] Wrapper initialized, real func at {:p}", new_ptr);
 
     Some(unsafe { std::mem::transmute(new_ptr) })
 }
@@ -645,23 +721,39 @@ pub unsafe extern "C" fn dl_iterate_phdr(
     callback: DlIteratePhdrCallback,
     data: *mut c_void,
 ) -> std::ffi::c_int {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    
+    static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+    let count = CALL_COUNT.fetch_add(1, Ordering::Relaxed);
+    
+    // Log every call for diagnostics
+    eprintln!(
+        "[dl_wrapper] dl_iterate_phdr called (count={}, pid={}, callback={:p})",
+        count,
+        std::process::id(),
+        callback as *const ()
+    );
+
     // Check if we're in a recursive call (during dlsym)
     let in_dlsym = TLS_IN_DLSYM.with(|f| f.get());
     if in_dlsym {
-        static RECURSION_LOGGED: AtomicBool = AtomicBool::new(false);
-        if !RECURSION_LOGGED.swap(true, Ordering::Relaxed) {
-            eprintln!("[dl_wrapper] Recursion detected during dlsym, skipping");
-        }
+        eprintln!("[dl_wrapper] Recursion detected during dlsym, skipping");
         return 0;
     }
 
     let real_func = match get_real_dl_iterate_phdr() {
         Some(f) => f,
-        None => return -1,
+        None => {
+            eprintln!("[dl_wrapper] Failed to get real function, returning -1");
+            return -1;
+        }
     };
 
     TLS_REAL_CALLBACK.with(|cb| cb.set(Some(callback)));
     TLS_USER_DATA.with(|d| d.set(data));
 
-    real_func(dl_wrapper_callback, std::ptr::null_mut())
+    let result = real_func(dl_wrapper_callback, std::ptr::null_mut());
+    
+    eprintln!("[dl_wrapper] dl_iterate_phdr completed (count={}, result={})", count, result);
+    result
 }
