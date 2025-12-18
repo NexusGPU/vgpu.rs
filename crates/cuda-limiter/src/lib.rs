@@ -648,8 +648,10 @@ pub unsafe extern "C" fn dl_iterate_phdr(
     // Check if we're in a recursive call (during dlsym)
     let in_dlsym = TLS_IN_DLSYM.with(|f| f.get());
     if in_dlsym {
-        // During dlsym initialization, call libc directly via syscall or return 0
-        // We can't use the wrapper yet, just skip
+        static RECURSION_LOGGED: AtomicBool = AtomicBool::new(false);
+        if !RECURSION_LOGGED.swap(true, Ordering::Relaxed) {
+            eprintln!("[dl_wrapper] Recursion detected during dlsym, skipping");
+        }
         return 0;
     }
 
