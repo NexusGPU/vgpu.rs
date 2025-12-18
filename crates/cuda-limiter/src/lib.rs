@@ -435,38 +435,38 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
 
     let sym_ptr = FN_DLSYM(handle, symbol);
 
-    if may_be_cuda {
-        // Skip checkpoint APIs to avoid recursive calls in auto-freeze manager
-        if symbol_str.starts_with("cuCheckpoint") {
-            return sym_ptr;
-        }
+    // if may_be_cuda {
+    //     // Skip checkpoint APIs to avoid recursive calls in auto-freeze manager
+    //     if symbol_str.starts_with("cuCheckpoint") {
+    //         return sym_ptr;
+    //     }
 
-        let Some(api) = checkpoint::checkpoint_api() else {
-            return sym_ptr;
-        };
+    //     let Some(api) = checkpoint::checkpoint_api() else {
+    //         return sym_ptr;
+    //     };
 
-        if !api.is_supported() {
-            return sym_ptr;
-        }
+    //     if !api.is_supported() {
+    //         return sym_ptr;
+    //     }
 
-        let maybe_auto_freeze_manager = GLOBAL_AUTO_FREEZE_MANAGER.get();
-        let auto_freeze_manager = match maybe_auto_freeze_manager {
-            Some(auto_freeze_manager) => auto_freeze_manager,
-            None => {
-                return sym_ptr;
-            }
-        };
-        let native_pointer = NativePointer(sym_ptr as *mut c_void);
-        if !auto_freeze_manager.contains_native_pointer(&native_pointer) {
-            if let Err(e) = auto_freeze_manager.attach_to_pointer(native_pointer) {
-                tracing::error!(
-                    error = %e,
-                    pointer = ?native_pointer,
-                    "Failed to attach auto-freeze listener"
-                );
-            }
-        }
-    }
+    //     let maybe_auto_freeze_manager = GLOBAL_AUTO_FREEZE_MANAGER.get();
+    //     let auto_freeze_manager = match maybe_auto_freeze_manager {
+    //         Some(auto_freeze_manager) => auto_freeze_manager,
+    //         None => {
+    //             return sym_ptr;
+    //         }
+    //     };
+    //     let native_pointer = NativePointer(sym_ptr as *mut c_void);
+    //     if !auto_freeze_manager.contains_native_pointer(&native_pointer) {
+    //         if let Err(e) = auto_freeze_manager.attach_to_pointer(native_pointer) {
+    //             tracing::error!(
+    //                 error = %e,
+    //                 pointer = ?native_pointer,
+    //                 "Failed to attach auto-freeze listener"
+    //             );
+    //         }
+    //     }
+    // }
     sym_ptr
 }
 
