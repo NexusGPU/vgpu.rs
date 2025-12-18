@@ -37,21 +37,23 @@ fn ensure_module_registry_synced() {
         // First, warm up dl_iterate_phdr directly via libc before Frida touches it.
         // This ensures the dynamic linker's internal state is fully initialized.
         #[cfg(target_os = "linux")]
-        unsafe {
+        {
             extern "C" fn count_modules(
                 _info: *mut libc::dl_phdr_info,
                 _size: libc::size_t,
                 data: *mut libc::c_void,
             ) -> libc::c_int {
                 let count = data as *mut usize;
-                *count += 1;
+                unsafe { *count += 1 };
                 0
             }
             let mut module_count: usize = 0;
-            libc::dl_iterate_phdr(
-                Some(count_modules),
-                &mut module_count as *mut usize as *mut libc::c_void,
-            );
+            unsafe {
+                libc::dl_iterate_phdr(
+                    Some(count_modules),
+                    &mut module_count as *mut usize as *mut libc::c_void,
+                );
+            }
             tracing::debug!("Pre-warmed dl_iterate_phdr, found {} modules", module_count);
         }
 
