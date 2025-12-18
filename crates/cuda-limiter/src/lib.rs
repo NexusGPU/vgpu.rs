@@ -553,6 +553,7 @@ static REAL_DL_ITERATE_PHDR: std::sync::atomic::AtomicPtr<c_void> =
 thread_local! {
     static TLS_REAL_CALLBACK: Cell<Option<DlIteratePhdrCallback>> = const { Cell::new(None) };
     static TLS_USER_DATA: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
+    static TLS_IN_DLSYM: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(target_os = "linux")]
@@ -603,27 +604,39 @@ unsafe extern "C" fn dl_wrapper_callback(
 fn get_real_dl_iterate_phdr() -> Option<RealDlIteratePhdr> {
     use std::sync::atomic::Ordering;
 
-    let mut ptr = REAL_DL_ITERATE_PHDR.load(Ordering::Acquire);
-
-    if ptr.is_null() {
-        unsafe {
-            ptr = libc::dlsym(libc::RTLD_NEXT, b"dl_iterate_phdr\0".as_ptr() as *const libc::c_char);
-        }
-
-        if ptr.is_null() {
-            eprintln!("[dl_wrapper] ERROR: Could not find real dl_iterate_phdr");
-            return None;
-        }
-
-        REAL_DL_ITERATE_PHDR.store(ptr, Ordering::Release);
-
-        static LOGGED: AtomicBool = AtomicBool::new(false);
-        if !LOGGED.swap(true, Ordering::Relaxed) {
-            eprintln!("[dl_wrapper] Wrapper initialized, real func at {:p}", ptr);
-        }
+    let ptr = REAL_DL_ITERATE_PHDR.load(Ordering::Acquire);
+    if !ptr.is_null() {
+        return Some(unsafe { std::mem::transmute(ptr) });
     }
 
-    Some(unsafe { std::mem::transmute(ptr) })
+    // Prevent recursion: dlsym may call dl_iterate_phdr internally
+    let already_in_dlsym = TLS_IN_DLSYM.with(|f| f.replace(true));
+    if already_in_dlsym {
+        return None;
+    }
+
+    let new_ptr = unsafe {
+        libc::dlsym(
+            libc::RTLD_NEXT,
+            b"dl_iterate_phdr\0".as_ptr() as *const libc::c_char,
+        )
+    };
+
+    TLS_IN_DLSYM.with(|f| f.set(false));
+
+    if new_ptr.is_null() {
+        eprintln!("[dl_wrapper] ERROR: Could not find real dl_iterate_phdr");
+        return None;
+    }
+
+    REAL_DL_ITERATE_PHDR.store(new_ptr, Ordering::Release);
+
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::Relaxed) {
+        eprintln!("[dl_wrapper] Wrapper initialized, real func at {:p}", new_ptr);
+    }
+
+    Some(unsafe { std::mem::transmute(new_ptr) })
 }
 
 #[cfg(target_os = "linux")]
@@ -632,6 +645,14 @@ pub unsafe extern "C" fn dl_iterate_phdr(
     callback: DlIteratePhdrCallback,
     data: *mut c_void,
 ) -> std::ffi::c_int {
+    // Check if we're in a recursive call (during dlsym)
+    let in_dlsym = TLS_IN_DLSYM.with(|f| f.get());
+    if in_dlsym {
+        // During dlsym initialization, call libc directly via syscall or return 0
+        // We can't use the wrapper yet, just skip
+        return 0;
+    }
+
     let real_func = match get_real_dl_iterate_phdr() {
         Some(f) => f,
         None => return -1,
