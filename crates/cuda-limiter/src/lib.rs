@@ -607,7 +607,7 @@ fn get_real_dl_iterate_phdr() -> Option<RealDlIteratePhdr> {
 
     if ptr.is_null() {
         unsafe {
-            ptr = libc::dlsym(libc::RTLD_NEXT, b"dl_iterate_phdr\0".as_ptr() as *const i8);
+            ptr = libc::dlsym(libc::RTLD_NEXT, b"dl_iterate_phdr\0".as_ptr() as *const libc::c_char);
         }
 
         if ptr.is_null() {
