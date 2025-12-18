@@ -532,3 +532,115 @@ fn is_mapping_device_idx() -> bool {
         Err(_) => false,
     }
 }
+
+// ============================================================================
+// dl_iterate_phdr wrapper to filter out invalid entries (JIT/custom loaders)
+// This prevents Frida-gum from crashing when it encounters entries with
+// NULL program headers.
+// ============================================================================
+
+#[cfg(target_os = "linux")]
+type DlIteratePhdrCallback =
+    unsafe extern "C" fn(*mut libc::dl_phdr_info, libc::size_t, *mut c_void) -> std::ffi::c_int;
+#[cfg(target_os = "linux")]
+type RealDlIteratePhdr =
+    unsafe extern "C" fn(DlIteratePhdrCallback, *mut c_void) -> std::ffi::c_int;
+
+#[cfg(target_os = "linux")]
+static REAL_DL_ITERATE_PHDR: std::sync::atomic::AtomicPtr<c_void> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    static TLS_REAL_CALLBACK: Cell<Option<DlIteratePhdrCallback>> = const { Cell::new(None) };
+    static TLS_USER_DATA: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn dl_wrapper_callback(
+    info: *mut libc::dl_phdr_info,
+    size: libc::size_t,
+    _data: *mut c_void,
+) -> std::ffi::c_int {
+    use std::sync::atomic::Ordering;
+
+    if info.is_null() {
+        return 0;
+    }
+
+    let info_ref = &*info;
+
+    if info_ref.dlpi_phdr.is_null() || info_ref.dlpi_phnum == 0 {
+        static SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
+        if !SKIP_LOGGED.swap(true, Ordering::Relaxed) {
+            let name = if info_ref.dlpi_name.is_null() {
+                "(null)"
+            } else {
+                CStr::from_ptr(info_ref.dlpi_name)
+                    .to_str()
+                    .unwrap_or("(invalid)")
+            };
+            eprintln!(
+                "[dl_wrapper] Skipping invalid entry: name='{}', phdr={:?}, phnum={}",
+                name,
+                info_ref.dlpi_phdr,
+                info_ref.dlpi_phnum
+            );
+        }
+        return 0;
+    }
+
+    TLS_REAL_CALLBACK.with(|cb| {
+        if let Some(real_cb) = cb.get() {
+            let user_data = TLS_USER_DATA.with(|d| d.get());
+            real_cb(info, size, user_data)
+        } else {
+            0
+        }
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn get_real_dl_iterate_phdr() -> Option<RealDlIteratePhdr> {
+    use std::sync::atomic::Ordering;
+
+    let mut ptr = REAL_DL_ITERATE_PHDR.load(Ordering::Acquire);
+
+    if ptr.is_null() {
+        unsafe {
+            ptr = libc::dlsym(libc::RTLD_NEXT, b"dl_iterate_phdr\0".as_ptr() as *const i8);
+        }
+
+        if ptr.is_null() {
+            eprintln!("[dl_wrapper] ERROR: Could not find real dl_iterate_phdr");
+            return None;
+        }
+
+        REAL_DL_ITERATE_PHDR.store(ptr, Ordering::Release);
+
+        static LOGGED: AtomicBool = AtomicBool::new(false);
+        if !LOGGED.swap(true, Ordering::Relaxed) {
+            eprintln!("[dl_wrapper] Wrapper initialized, real func at {:p}", ptr);
+        }
+    }
+
+    Some(unsafe { std::mem::transmute(ptr) })
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+#[used]
+pub unsafe extern "C" fn dl_iterate_phdr(
+    callback: DlIteratePhdrCallback,
+    data: *mut c_void,
+) -> std::ffi::c_int {
+    let real_func = match get_real_dl_iterate_phdr() {
+        Some(f) => f,
+        None => return -1,
+    };
+
+    TLS_REAL_CALLBACK.with(|cb| cb.set(Some(callback)));
+    TLS_USER_DATA.with(|d| d.set(data));
+
+    real_func(dl_wrapper_callback, std::ptr::null_mut())
+}
