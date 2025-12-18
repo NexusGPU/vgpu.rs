@@ -22,7 +22,6 @@ use trap::http::BlockingHttpTrap;
 use trap::http::HttpTrapConfig;
 use trap::{Trap, TrapAction, TrapError, TrapFrame};
 use utils::hooks::HookManager;
-use utils::hooks::NativePointer;
 use utils::logging;
 use utils::replace_symbol;
 
@@ -629,7 +628,6 @@ fn get_real_dl_iterate_phdr() -> Option<RealDlIteratePhdr> {
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
-#[used]
 pub unsafe extern "C" fn dl_iterate_phdr(
     callback: DlIteratePhdrCallback,
     data: *mut c_void,
