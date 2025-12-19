@@ -145,10 +145,11 @@ jobs:
 
       - name: Download frida-gum dependencies
         run: |
-          wget https://github.com/NexusGPU/vgpu.rs/releases/download/dev-cfef782/libfrida-gum.a
-          wget https://github.com/NexusGPU/vgpu.rs/releases/download/dev-cfef782/frida-gum.h
-          sudo mv frida-gum.h /usr/local/include/
-          sudo mv libfrida-gum.a /usr/local/lib/
+          mkdir -p vendor
+          wget -O vendor/libfrida-gum.a https://github.com/NexusGPU/vgpu.rs/releases/download/dev-cfef782/libfrida-gum.a
+          wget -O vendor/frida-gum.h https://github.com/NexusGPU/vgpu.rs/releases/download/dev-cfef782/frida-gum.h
+          sudo cp vendor/frida-gum.h /usr/local/include/
+          sudo cp vendor/libfrida-gum.a /usr/local/lib/
 
       - name: Build cuda-limiter
         run: VERSION=${{ needs.release.outputs.version }} cross build -p cuda-limiter --release --target ${{ matrix.target }}
@@ -295,6 +296,14 @@ jobs:
         with:
           prefix-key: v1
           shared-key: "hypervisor-${{ matrix.target }}"
+
+      - name: Download frida-gum dependencies
+        run: |
+          mkdir -p vendor
+          wget -O vendor/libfrida-gum.a https://github.com/NexusGPU/vgpu.rs/releases/download/dev-cfef782/libfrida-gum.a
+          wget -O vendor/frida-gum.h https://github.com/NexusGPU/vgpu.rs/releases/download/dev-cfef782/frida-gum.h
+          sudo cp vendor/frida-gum.h /usr/local/include/
+          sudo cp vendor/libfrida-gum.a /usr/local/lib/
 
       - name: Build hypervisor
         run: |

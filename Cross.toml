@@ -1,0 +1,21 @@
+[build.env]
+passthrough = [
+    "VERSION",
+]
+
+[target.x86_64-unknown-linux-gnu]
+pre-build = [
+    "apt-get update",
+    "mkdir -p /usr/local/include /usr/local/lib",
+    "test -f /project/vendor/frida-gum.h && cp /project/vendor/frida-gum.h /usr/local/include/ || true",
+    "test -f /project/vendor/libfrida-gum.a && cp /project/vendor/libfrida-gum.a /usr/local/lib/ || true",
+]
+
+[target.aarch64-unknown-linux-gnu]
+pre-build = [
+    "apt-get update",
+    "mkdir -p /usr/local/include /usr/local/lib",
+    "test -f /project/vendor/frida-gum.h && cp /project/vendor/frida-gum.h /usr/local/include/ || true",
+    "test -f /project/vendor/libfrida-gum.a && cp /project/vendor/libfrida-gum.a /usr/local/lib/ || true",
+]
+

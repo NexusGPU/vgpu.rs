@@ -1,6 +1,7 @@
 /target
 /crates/*/target
 logs
+vendor
 
 
 # START Ruler Generated Files
