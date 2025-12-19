@@ -550,6 +550,14 @@ fn is_mapping_device_idx() -> bool {
 fn install_dl_iterate_phdr_hook() {
     static HOOK_INSTALLED: Once = Once::new();
     HOOK_INSTALLED.call_once(|| {
+        // IMPORTANT: Skip Frida hook because we already have LD_PRELOAD wrapper.
+        // Installing both creates infinite recursion:
+        //   Frida detour → FN_DL_ITERATE_PHDR → LD_PRELOAD wrapper → dlsym → Frida detour → ...
+        // The LD_PRELOAD wrapper is sufficient and avoids this issue.
+        tracing::debug!("Skipping dl_iterate_phdr Frida hook (using LD_PRELOAD wrapper instead)");
+        
+        // Uncomment below if LD_PRELOAD is not working and you need Frida hook:
+        /*
         let mut hook_manager = HookManager::default();
         if let Err(err) = replace_symbol!(
             &mut hook_manager,
@@ -563,6 +571,7 @@ fn install_dl_iterate_phdr_hook() {
         } else {
             tracing::debug!("Successfully installed dl_iterate_phdr Frida hook");
         }
+        */
     });
 }
 

@@ -102,9 +102,6 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             platform: linux-x64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            platform: linux-arm64
 
     name: build_libraries (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -145,6 +142,13 @@ jobs:
         with:
           shared-key: "build-${{ matrix.target }}"
           prefix-key: v1
+
+      - name: Download frida-gum dependencies
+        run: |
+          wget https://github.com/NexusGPU/vgpu.rs/releases/download/dev-cfef782/libfrida-gum.a
+          wget https://github.com/NexusGPU/vgpu.rs/releases/download/dev-cfef782/frida-gum.h
+          sudo mv frida-gum.h /usr/local/include/
+          sudo mv libfrida-gum.a /usr/local/lib/
 
       - name: Build cuda-limiter
         run: VERSION=${{ needs.release.outputs.version }} cross build -p cuda-limiter --release --target ${{ matrix.target }}
