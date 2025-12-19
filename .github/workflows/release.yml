@@ -152,6 +152,9 @@ jobs:
           sudo cp vendor/libfrida-gum.a /usr/local/lib/
 
       - name: Build cuda-limiter
+        env:
+          BINDGEN_EXTRA_CLANG_ARGS_x86_64-unknown-linux-gnu: "-I/usr/local/include"
+          BINDGEN_EXTRA_CLANG_ARGS_aarch64-unknown-linux-gnu: "-I/usr/local/include"
         run: VERSION=${{ needs.release.outputs.version }} cross build -p cuda-limiter --release --target ${{ matrix.target }}
 
       - name: Build bootstrap program
@@ -306,6 +309,9 @@ jobs:
           sudo cp vendor/libfrida-gum.a /usr/local/lib/
 
       - name: Build hypervisor
+        env:
+          BINDGEN_EXTRA_CLANG_ARGS_x86_64-unknown-linux-gnu: "-I/usr/local/include"
+          BINDGEN_EXTRA_CLANG_ARGS_aarch64-unknown-linux-gnu: "-I/usr/local/include"
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target ${{ matrix.target }}
