@@ -129,14 +129,6 @@ jobs:
           rustup update --no-self-update stable
           rustup target add ${{ matrix.target }}
 
-      - name: Install cross
-        run: |
-          if ! (command -v cross &> /dev/null && command -v cross-util &> /dev/null); then
-            cargo install cross --git https://github.com/cross-rs/cross
-          else
-            echo "cross is already installed, skipping installation."
-          fi
-
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -153,12 +145,11 @@ jobs:
 
       - name: Build cuda-limiter
         env:
-          BINDGEN_EXTRA_CLANG_ARGS_x86_64-unknown-linux-gnu: "-I/usr/local/include"
-          BINDGEN_EXTRA_CLANG_ARGS_aarch64-unknown-linux-gnu: "-I/usr/local/include"
-        run: VERSION=${{ needs.release.outputs.version }} cross build -p cuda-limiter --release --target ${{ matrix.target }}
+          BINDGEN_EXTRA_CLANG_ARGS: "-I/usr/local/include"
+        run: VERSION=${{ needs.release.outputs.version }} cargo build -p cuda-limiter --release --target ${{ matrix.target }}
 
       - name: Build bootstrap program
-        run: VERSION=${{ needs.release.outputs.version }} cross build -p bootstrap --release --target ${{ matrix.target }}
+        run: VERSION=${{ needs.release.outputs.version }} cargo build -p bootstrap --release --target ${{ matrix.target }}
 
       - name: Upload cuda-limiter artifact
         uses: actions/upload-artifact@v6
@@ -173,7 +164,7 @@ jobs:
           path: target/${{ matrix.target }}/release/bootstrap
 
       - name: Build add-path
-        run: VERSION=${{ needs.release.outputs.version }} cross build -p add-path --release --target ${{ matrix.target }}
+        run: VERSION=${{ needs.release.outputs.version }} cargo build -p add-path --release --target ${{ matrix.target }}
 
       - name: Upload add-path artifact
         uses: actions/upload-artifact@v6
@@ -247,12 +238,7 @@ jobs:
         include:
           - arch: amd64
             target: x86_64-unknown-linux-gnu
-            use_cross: false
             cache_strategy: gha
-          - arch: arm64
-            target: aarch64-unknown-linux-gnu
-            use_cross: true
-            cache_strategy: no-cache
     runs-on: ubuntu-latest
 
     steps:
@@ -264,35 +250,10 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Install protobuf-compiler (native build)
-        if: '!matrix.use_cross'
+      - name: Install protobuf-compiler
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
-
-      - name: Setup Cross.toml for CI
-        if: matrix.use_cross
-        run: |
-          cat > Cross.toml << 'EOF'
-          [build.env]
-          passthrough = [
-              "VERSION",
-          ]
-
-          [build]
-          pre-build = [
-              "apt-get update && apt-get install -y protobuf-compiler"
-          ]
-          EOF
-
-      - name: Install cross
-        if: matrix.use_cross
-        run: |
-          if ! (command -v cross &> /dev/null && command -v cross-util &> /dev/null); then
-            cargo install cross --git https://github.com/cross-rs/cross
-          else
-            echo "cross is already installed, skipping installation."
-          fi
 
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
@@ -310,14 +271,8 @@ jobs:
 
       - name: Build hypervisor
         env:
-          BINDGEN_EXTRA_CLANG_ARGS_x86_64-unknown-linux-gnu: "-I/usr/local/include"
-          BINDGEN_EXTRA_CLANG_ARGS_aarch64-unknown-linux-gnu: "-I/usr/local/include"
-        run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            VERSION=${{ needs.release.outputs.version }} cross build -p hypervisor --release --target ${{ matrix.target }}
-          else
-            VERSION=${{ needs.release.outputs.version }} cargo build -p hypervisor --release --target ${{ matrix.target }}
-          fi
+          BINDGEN_EXTRA_CLANG_ARGS: "-I/usr/local/include"
+        run: VERSION=${{ needs.release.outputs.version }} cargo build -p hypervisor --release --target ${{ matrix.target }}
 
       - id: meta
         uses: docker/metadata-action@v5
