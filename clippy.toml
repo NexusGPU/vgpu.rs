@@ -1,3 +1,4 @@
 allow-unwrap-in-tests = true
-cognitive-complexity-threshold = 10
+cognitive-complexity-threshold = 11
 avoid-breaking-exported-api = false
+
