@@ -6,7 +6,6 @@ fn main() {
     }
 
     
-    
     let version = env::var("VERSION").unwrap_or_else(|_| "latest".to_string());
     println!("cargo:rustc-env=IMAGE_VERSION={version}");
 
