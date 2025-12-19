@@ -12,7 +12,6 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
-  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
 jobs:
   release:
@@ -110,14 +109,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Update apt repositories
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get update
-
-      - name: Install AArch64 target toolchain
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get install gcc-aarch64-linux-gnu
-
       - name: Install CUDA toolkit
         uses: Jimver/cuda-toolkit@v0.2.29
         with:
@@ -194,12 +185,9 @@ jobs:
       - name: Compress artifacts
         run: |
           tar -czf libcuda_limiter-x64.tar.gz -C artifacts/libcuda_limiter-linux-x64 libcuda_limiter.so
-          tar -czf libcuda_limiter-arm64.tar.gz -C artifacts/libcuda_limiter-linux-arm64 libcuda_limiter.so
           tar -czf libadd_path-x64.tar.gz -C artifacts/libadd_path-linux-x64 libadd_path.so
-          tar -czf libadd_path-arm64.tar.gz -C artifacts/libadd_path-linux-arm64 libadd_path.so
           tar -czf tensor-fusion-components.tar.gz -C artifacts/tensor-fusion-components .
           tar -czf bootstrap-x64.tar.gz -C artifacts/bootstrap-linux-x64 bootstrap
-          tar -czf bootstrap-arm64.tar.gz -C artifacts/bootstrap-linux-arm64 bootstrap
 
       - name: Add assets to manual release
         if: github.event_name == 'workflow_dispatch'
@@ -208,12 +196,9 @@ jobs:
           tag_name: ${{ needs.release.outputs.version }}
           files: |
             libcuda_limiter-x64.tar.gz
-            libcuda_limiter-arm64.tar.gz
             libadd_path-x64.tar.gz
-            libadd_path-arm64.tar.gz
             tensor-fusion-components.tar.gz
             bootstrap-x64.tar.gz
-            bootstrap-arm64.tar.gz
 
       - name: Add assets to semantic release
         if: github.event_name != 'workflow_dispatch'
@@ -222,12 +207,9 @@ jobs:
           tag_name: v${{ needs.release.outputs.version }}
           files: |
             libcuda_limiter-x64.tar.gz
-            libcuda_limiter-arm64.tar.gz
             libadd_path-x64.tar.gz
-            libadd_path-arm64.tar.gz
             tensor-fusion-components.tar.gz
             bootstrap-x64.tar.gz
-            bootstrap-arm64.tar.gz
 
   publish_hypervisor:
     needs:
@@ -327,16 +309,14 @@ jobs:
           docker buildx imagetools create \
             -t tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }} \
             -t tensorfusion/tensor-fusion-hypervisor:latest \
-            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64 \
-            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
+            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64
 
       - name: Create and push manifest for manual release
         if: github.event_name == 'workflow_dispatch'
         run: |
           docker buildx imagetools create \
             -t tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }} \
-            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64 \
-            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_arm64
+            tensorfusion/tensor-fusion-hypervisor:${{ needs.release.outputs.version }}_amd64
 
   trigger_ngpu_release:
     needs:
