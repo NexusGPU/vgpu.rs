@@ -8,7 +8,6 @@ fn main() {
     let version = env::var("VERSION").unwrap_or_else(|_| "latest".to_string());
     println!("cargo:rustc-env=IMAGE_VERSION={version}");
 
-    
     // Add library search path for frida-gum
     println!("cargo:rustc-link-search=native=/usr/local/lib");
 }
