@@ -20,6 +20,7 @@ static GUM: LazyLock<Gum> = LazyLock::new(Gum::obtain);
 
 pub struct Hooker<'a> {
     interceptor: &'a mut Interceptor,
+    #[allow(dead_code)] // 保留以兼容，但现在总是用全局查找
     module: Option<&'a str>,
 }
 impl Hooker<'_> {
@@ -28,12 +29,15 @@ impl Hooker<'_> {
         symbol: &str,
         detour: *mut c_void,
     ) -> Result<NativePointer, HookError> {
-        let function = if let Some(module_name) = self.module {
-            Module::load(&GUM, module_name).find_export_by_name(symbol)
-        } else {
-            Module::find_global_export_by_name(symbol)
-        }
-        .ok_or_else(|| HookError::NoSymbolName(Cow::Owned(symbol.to_string())))?;
+        // 不使用 Module::load，改用全局查找，避免触发 module registry
+        // Module::load 会触发 gum_module_registry_obtain，在 dlopen 过程中可能导致重入
+        // 
+        // 即使指定了 module，我们也只用全局查找，因为：
+        // 1. dlopen(RTLD_NOLOAD) 本身可能触发 r_brk，导致 module registry 同步
+        // 2. dlsym 可能被 hook，导致递归
+        // 3. CUDA/NVML 函数通常只在一个库中，全局查找就能找到正确的
+        let function = Module::find_global_export_by_name(symbol)
+            .ok_or_else(|| HookError::NoSymbolName(Cow::Owned(symbol.to_string())))?;
 
         tracing::debug!(
             "Found function at {:p} for symbol {}, calling interceptor.replace",
