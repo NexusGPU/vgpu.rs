@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::ffi::c_void;
+use std::ffi::CString;
 use std::ops::Deref;
 use std::sync::LazyLock;
 use std::sync::OnceLock;
@@ -9,7 +10,6 @@ pub use frida_gum::interceptor::InvocationContext;
 pub use frida_gum::interceptor::InvocationListener;
 pub use frida_gum::interceptor::Listener;
 use frida_gum::Gum;
-use frida_gum::Module;
 #[cfg(not(target_os = "linux"))]
 use frida_gum::ModuleMap;
 pub use frida_gum::NativePointer;
@@ -29,15 +29,27 @@ impl Hooker<'_> {
         symbol: &str,
         detour: *mut c_void,
     ) -> Result<NativePointer, HookError> {
-        // 不使用 Module::load，改用全局查找，避免触发 module registry
-        // Module::load 会触发 gum_module_registry_obtain，在 dlopen 过程中可能导致重入
-        // 
-        // 即使指定了 module，我们也只用全局查找，因为：
-        // 1. dlopen(RTLD_NOLOAD) 本身可能触发 r_brk，导致 module registry 同步
-        // 2. dlsym 可能被 hook，导致递归
-        // 3. CUDA/NVML 函数通常只在一个库中，全局查找就能找到正确的
-        let function = Module::find_global_export_by_name(symbol)
-            .ok_or_else(|| HookError::NoSymbolName(Cow::Owned(symbol.to_string())))?;
+        // 完全绕过 Frida 的模块查找，直接用 dlsym(RTLD_DEFAULT)
+        // 原因：
+        // 1. Module::load() 会触发 gum_module_load -> gum_module_registry_obtain -> module registry activation
+        // 2. Module::find_global_export_by_name() 也可能内部触发 module registry
+        // 3. 在 dlopen 上下文中调用 module registry 会导致 dl_iterate_phdr 重入死锁
+        //
+        // 解决方案：用原生 dlsym，确保不经过 Frida 的 module registry
+        let function = unsafe {
+            let symbol_cstr = CString::new(symbol).map_err(|_| {
+                HookError::NoSymbolName(Cow::Owned(symbol.to_string()))
+            })?;
+            
+            // 使用 RTLD_DEFAULT 在全局符号表中查找（已加载的所有库）
+            let sym_ptr = libc::dlsym(libc::RTLD_DEFAULT, symbol_cstr.as_ptr());
+            
+            if sym_ptr.is_null() {
+                return Err(HookError::NoSymbolName(Cow::Owned(symbol.to_string())));
+            }
+            
+            NativePointer(sym_ptr)
+        };
 
         tracing::debug!(
             "Found function at {:p} for symbol {}, calling interceptor.replace",
