@@ -320,10 +320,10 @@ fn init_hooks() {
         return;
     }
 
-    unsafe {
-        // Load CUDA library to ensure it's loaded before hooks are installed
-        let _ = culib::culib();
-    }
+    // unsafe {
+    //     // Load CUDA library to ensure it's loaded before hooks are installed
+    //     let _ = culib::culib();
+    // }
     init_limiter();
 
     let is_compute_shard = match GLOBAL_LIMITER.get() {
