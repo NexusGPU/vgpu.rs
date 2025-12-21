@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CString;
 use std::ops::Deref;
@@ -15,6 +16,15 @@ use frida_gum::ModuleMap;
 pub use frida_gum::NativePointer;
 
 use crate::HookError;
+
+/// 原始 dlsym 函数指针，用于避免递归调用
+type DlsymFn = unsafe extern "C" fn(*const c_void, *const c_char) -> *const c_void;
+static ORIGINAL_DLSYM: OnceLock<DlsymFn> = OnceLock::new();
+
+/// 设置原始 dlsym 函数指针
+pub fn set_original_dlsym(dlsym_fn: DlsymFn) {
+    let _ = ORIGINAL_DLSYM.set(dlsym_fn);
+}
 
 static GUM: LazyLock<Gum> = LazyLock::new(Gum::obtain);
 
@@ -35,20 +45,26 @@ impl Hooker<'_> {
         // 2. Module::find_global_export_by_name() 也可能内部触发 module registry
         // 3. 在 dlopen 上下文中调用 module registry 会导致 dl_iterate_phdr 重入死锁
         //
-        // 解决方案：用原生 dlsym，确保不经过 Frida 的 module registry
+        // 解决方案：用原生 dlsym，优先使用提供的原始 dlsym（避免触发 dlsym hook）
         let function = unsafe {
             let symbol_cstr = CString::new(symbol).map_err(|_| {
                 HookError::NoSymbolName(Cow::Owned(symbol.to_string()))
             })?;
             
-            // 使用 RTLD_DEFAULT 在全局符号表中查找（已加载的所有库）
-            let sym_ptr = libc::dlsym(libc::RTLD_DEFAULT, symbol_cstr.as_ptr());
+            // 优先使用原始 dlsym（如果已设置），否则使用 libc::dlsym
+            let sym_ptr = if let Some(original_dlsym) = ORIGINAL_DLSYM.get() {
+                // 使用提供的原始 dlsym，不会触发 dlsym hook
+                original_dlsym(libc::RTLD_DEFAULT, symbol_cstr.as_ptr())
+            } else {
+                // Fallback 到 libc::dlsym（可能会触发 dlsym hook，但有递归保护）
+                libc::dlsym(libc::RTLD_DEFAULT, symbol_cstr.as_ptr())
+            };
             
             if sym_ptr.is_null() {
                 return Err(HookError::NoSymbolName(Cow::Owned(symbol.to_string())));
             }
             
-            NativePointer(sym_ptr)
+            NativePointer(sym_ptr as *mut c_void)
         };
 
         tracing::debug!(

@@ -368,6 +368,11 @@ fn init_hooks() {
             FN_DLSYM
         ) {
             tracing::error!("Failed to install dlsym hook: {}", err);
+        } else {
+            // 设置原始 dlsym，供 hook_export 使用
+            if let Some(original_dlsym) = FN_DLSYM.get() {
+                utils::hooks::set_original_dlsym(*original_dlsym);
+            }
         }
     });
     tracing::debug!("Hook initialization completed");
