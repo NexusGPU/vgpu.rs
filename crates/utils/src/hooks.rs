@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::ffi::c_void;
 use std::ops::Deref;
+use std::ptr::null_mut;
 use std::sync::LazyLock;
 use std::sync::OnceLock;
 
@@ -8,28 +9,93 @@ use frida_gum::interceptor::Interceptor;
 pub use frida_gum::interceptor::InvocationContext;
 pub use frida_gum::interceptor::InvocationListener;
 pub use frida_gum::interceptor::Listener;
-use frida_gum::Gum;
-use frida_gum::Module;
-#[cfg(not(target_os = "linux"))]
-use frida_gum::ModuleMap;
 pub use frida_gum::NativePointer;
+use frida_gum::{Gum, Module, Process};
 
 use crate::HookError;
 
 static GUM: LazyLock<Gum> = LazyLock::new(Gum::obtain);
 
-pub struct Hooker<'a> {
-    interceptor: &'a mut Interceptor,
-    module: Option<&'a str>,
+/// Check if a module with the given prefix is loaded
+pub fn is_module_loaded(prefix: &str) -> bool {
+    let process = Process::obtain(&GUM);
+    let modules = process.enumerate_modules();
+    modules.iter().any(|m| m.name().starts_with(prefix))
 }
-impl Hooker<'_> {
-    pub fn hook_export(
+
+/// Struct for managing the hooks using Frida.
+pub struct HookManager<'a> {
+    interceptor: Interceptor,
+    modules: Vec<Module>,
+    #[allow(dead_code)]
+    process: Process<'a>,
+}
+
+impl<'a> HookManager<'a> {
+    /// Hook the first function exported from a lib that is in modules and is hooked successfully
+    pub fn hook_any_lib_export(
+        &mut self,
+        symbol: &str,
+        detour: *mut c_void,
+        filter: Option<&str>,
+    ) -> Result<NativePointer, HookError> {
+        for module in &self.modules {
+            // In this case we only want libs, no "main binaries"
+            let module_name = module.name();
+            if !module_name.starts_with(filter.unwrap_or("lib")) {
+                continue;
+            }
+
+            if let Some(function) = module.find_export_by_name(symbol) {
+                tracing::trace!("found {symbol:?} in {module_name:?}, hooking");
+                match self.interceptor.replace(
+                    function,
+                    NativePointer(detour),
+                    NativePointer(null_mut()),
+                ) {
+                    Ok(original) => return Ok(original),
+                    Err(err) => {
+                        tracing::trace!(
+                            "hook {symbol:?} in {module_name:?} failed with err {err:?}"
+                        )
+                    }
+                }
+            }
+        }
+        Err(HookError::NoSymbolName(Cow::Owned(symbol.to_string())))
+    }
+
+    /// Hook an exported symbol, suitable for most libc use cases.
+    /// If it fails to hook the first one found, it will try to hook each matching export
+    /// until it succeeds.
+    pub fn hook_export_or_any(
         &mut self,
         symbol: &str,
         detour: *mut c_void,
     ) -> Result<NativePointer, HookError> {
-        let function = if let Some(module_name) = self.module {
-            Module::load(&GUM, module_name).find_export_by_name(symbol)
+        // First try to hook the default exported one, if it fails, fallback to first lib that
+        // provides it.
+        let function = Module::find_global_export_by_name(symbol);
+        match function {
+            Some(func) => self
+                .interceptor
+                .replace(func, NativePointer(detour), NativePointer(null_mut()))
+                .or_else(|_| self.hook_any_lib_export(symbol, detour, None)),
+            None => self.hook_any_lib_export(symbol, detour, None),
+        }}
+
+    /// Hook an export from a specific module or globally if module is None
+    pub fn hook_export(
+        &mut self,
+        module: Option<&str>,
+        symbol: &str,
+        detour: *mut c_void,
+    ) -> Result<NativePointer, HookError> {
+        let function = if let Some(module_name) = module {
+            self.modules
+                .iter()
+                .find(|m| m.name() == module_name)
+                .and_then(|m| m.find_export_by_name(symbol))
         } else {
             Module::find_global_export_by_name(symbol)
         }
@@ -42,11 +108,7 @@ impl Hooker<'_> {
         );
         let result = self
             .interceptor
-            .replace(
-                function,
-                NativePointer(detour),
-                NativePointer(std::ptr::null_mut()),
-            )
+            .replace(function, NativePointer(detour), NativePointer(null_mut()))
             .map_err(Into::into);
 
         match &result {
@@ -60,132 +122,74 @@ impl Hooker<'_> {
 
         result
     }
-}
 
-/// Struct for managing the hooks using Frida.
-pub struct HookManager {
-    interceptor: Interceptor,
-    pub module_names: Vec<String>,
-}
-
-fn find_module_by_prefix(prefix: &str) -> Option<String> {
     #[cfg(target_os = "linux")]
-    {
-        let process = match procfs::process::Process::myself() {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!("Failed to access /proc/self: {}", e);
-                return None;
-            }
-        };
-
-        let maps = match process.maps() {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::error!("Failed to read /proc/self/maps: {}", e);
-                return None;
-            }
-        };
-
-        for map in maps {
-            // Skip non-path mappings (e.g., anonymous, heap, stack)
-            let procfs::process::MMapPath::Path(path) = map.pathname else {
-                continue;
-            };
-
-            // Skip if no filename
-            let Some(filename) = path.file_name() else {
-                continue;
-            };
-
-            // Skip if filename is not valid UTF-8
-            let Some(filename_str) = filename.to_str() else {
-                continue;
-            };
-
-            // Check if this library matches our prefix
-            if filename_str.starts_with(prefix) {
-                tracing::debug!(
-                    "Found module '{}' at path: {}",
-                    filename_str,
-                    path.display()
-                );
-                return Some(filename_str.to_string());
-            }
-        }
-
-        tracing::debug!(
-            "Module with prefix '{}' not found in process memory maps",
-            prefix
-        );
-        None
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        // On non-Linux platforms, fall back to Frida's module enumeration
-        // This is less safe but necessary for cross-platform support
-        let mut module_map = ModuleMap::new();
-        module_map.update();
-
-        for module in module_map.values() {
-            let name = module.name();
-            if name.starts_with(prefix) {
-                tracing::debug!("Found module via Frida: {}", name);
-                return Some(name.to_string());
-            }
-        }
-
-        tracing::debug!("Module with prefix '{}' not found via Frida", prefix);
-        None
-    }
-}
-
-pub fn is_module_loaded(prefix: &str) -> bool {
-    find_module_by_prefix(prefix).is_some()
-}
-
-impl HookManager {
-    pub fn hooker<'a>(&'a mut self, module: Option<&'a str>) -> Result<Hooker<'a>, HookError> {
-        let module = if let Some(module_prefix) = module {
-            match find_module_by_prefix(module_prefix) {
-                Some(name) => {
-                    tracing::debug!("Found module: {}", name);
-                    // Store it if not already present
-                    if !self.module_names.contains(&name) {
-                        self.module_names.push(name);
-                    }
-                    // Return reference to the stored string
-                    self.module_names
-                        .iter()
-                        .find(|m| m.starts_with(module_prefix))
-                        .map(|s| s.as_str())
-                }
-                None => {
-                    return Err(HookError::NoModuleName(Cow::Owned(
-                        module_prefix.to_string(),
-                    )))
-                }
-            }
-        } else {
-            None
-        };
-
-        tracing::debug!("start hook module: {:?}", module);
-
-        Ok(Hooker {
-            interceptor: &mut self.interceptor,
-            module,
-        })
-    }
-
-    pub fn hook_export(
+    /// Hook a symbol in the first module (main module, binary)
+    pub fn hook_symbol_main_module(
         &mut self,
-        module: Option<&str>,
         symbol: &str,
         detour: *mut c_void,
     ) -> Result<NativePointer, HookError> {
-        self.hooker(module)?.hook_export(symbol, detour)
+        let function = self
+            .process
+            .main_module
+            .find_symbol_by_name(symbol)
+            .ok_or_else(|| HookError::NoSymbolName(Cow::Owned(symbol.to_string())))?;
+
+        // on Go we use `replace_fast` since we don't use the original function.
+        self.interceptor
+            .replace_fast(function, NativePointer(detour))
+            .map_err(Into::into)
+    }
+
+    /// Resolve symbol in main module
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    pub fn resolve_symbol_main_module(&self, symbol: &str) -> Option<NativePointer> {
+        self.process.main_module.find_symbol_by_name(symbol)
+    }
+
+    /// Resolve symbol in the given module
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    pub fn resolve_symbol_in_module(
+        &self,
+        module_name: &str,
+        symbol: &str,
+    ) -> Option<NativePointer> {
+        let Some(module) = self.modules.iter().find(|m| m.name() == module_name) else {
+            tracing::trace!(module_name, "Module not found");
+            return None;
+        };
+        module.find_symbol_by_name(symbol)
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    pub fn hook_symbol_in_module(
+        &mut self,
+        module: &str,
+        symbol: &str,
+        detour: *mut c_void,
+    ) -> Result<NativePointer, HookError> {
+        let Some(module) = self.modules.iter().find(|m| m.name() == module) else {
+            return Err(HookError::NoModuleName(Cow::Owned(module.to_string())));
+        };
+
+        let function = module
+            .find_symbol_by_name(symbol)
+            .ok_or_else(|| HookError::NoSymbolName(Cow::Owned(symbol.to_string())))?;
+
+        // on Go we use `replace_fast` since we don't use the original function.
+        self.interceptor
+            .replace_fast(function, NativePointer(detour))
+            .map_err(Into::into)
     }
 
     pub fn attach<I: InvocationListener>(
@@ -201,20 +205,33 @@ impl HookManager {
     pub fn detach(&mut self, listener: Listener) {
         self.interceptor.detach(listener);
     }
+
+    /// Get module names currently loaded
+    pub fn module_names(&self) -> Vec<String> {
+        self.modules.iter().map(|m| m.name().to_string()).collect()
+    }
+
+    /// Check if a module with the given prefix is loaded
+    pub fn is_module_loaded(&self, prefix: &str) -> bool {
+        self.modules.iter().any(|m| m.name().starts_with(prefix))
+    }
 }
 
-impl Default for HookManager {
+impl<'a> Default for HookManager<'a> {
     fn default() -> Self {
         let mut interceptor = Interceptor::obtain(&GUM);
         interceptor.begin_transaction();
+        let process = Process::obtain(&GUM);
+        let modules = process.enumerate_modules();
         Self {
             interceptor,
-            module_names: vec![],
+            modules,
+            process,
         }
     }
 }
 
-impl Drop for HookManager {
+impl<'a> Drop for HookManager<'a> {
     fn drop(&mut self) {
         self.interceptor.end_transaction()
     }
