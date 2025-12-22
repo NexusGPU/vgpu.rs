@@ -20,7 +20,7 @@ async-trait = { workspace = true }
 dashmap = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procfs = "0.17"
+procfs = "0.18"
 
 [dev-dependencies]
 tempfile = { workspace = true }
