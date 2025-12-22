@@ -295,11 +295,12 @@ impl HostPidProbe {
     /// - [`HostPidProbeError::ParseError`] if process information cannot be parsed
     #[tracing::instrument(level = "trace")]
     async fn scan_proc_filesystem() -> Result<Vec<PodProcessInfo>, HostPidProbeError> {
-        let mut proc_dir = fs::read_dir("/proc").await.map_err(|e| {
-            HostPidProbeError::ProcReadError {
-                message: format!("Cannot read /proc directory: {e}"),
-            }
-        })?;
+        let mut proc_dir =
+            fs::read_dir("/proc")
+                .await
+                .map_err(|e| HostPidProbeError::ProcReadError {
+                    message: format!("Cannot read /proc directory: {e}"),
+                })?;
 
         // First, collect all PIDs
         let mut pids = Vec::new();
@@ -357,7 +358,7 @@ impl HostPidProbe {
         let has_pod_env = environ_data
             .split('\0')
             .any(|var| var.starts_with("POD_NAME="));
-        
+
         if !has_pod_env {
             return Err(HostPidProbeError::ParseError {
                 message: "Not a pod process".to_string(),
@@ -670,7 +671,8 @@ mod tests {
         assert!(result.is_err(), "Should not treat this as a pod process");
 
         // Test case 2: actual pod environment
-        let environ_data = "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=ns\0CONTAINER_NAME=container\0";
+        let environ_data =
+            "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=ns\0CONTAINER_NAME=container\0";
         let result = HostPidProbe::parse_environment_variables(environ_data);
         assert!(result.is_ok(), "Should correctly parse pod environment");
     }
@@ -679,21 +681,27 @@ mod tests {
     async fn scan_and_notify_handles_empty_subscriptions() {
         let subscriptions = Arc::new(Mutex::new(HashMap::new()));
         let should_continue = HostPidProbe::scan_and_notify(subscriptions).await;
-        assert!(!should_continue, "Should stop scanning when no subscriptions");
+        assert!(
+            !should_continue,
+            "Should stop scanning when no subscriptions"
+        );
     }
 
     #[tokio::test]
     async fn scan_and_notify_continues_with_active_subscriptions() {
         let subscriptions: ActiveSubscriptions = Arc::new(Mutex::new(HashMap::new()));
         let (sender, _receiver) = oneshot::channel();
-        
+
         {
             let mut guard = subscriptions.lock().await;
             guard.insert(make_req(999), sender);
         }
 
         let should_continue = HostPidProbe::scan_and_notify(Arc::clone(&subscriptions)).await;
-        assert!(should_continue, "Should continue scanning with active subscriptions");
+        assert!(
+            should_continue,
+            "Should continue scanning with active subscriptions"
+        );
     }
 
     #[tokio::test]
