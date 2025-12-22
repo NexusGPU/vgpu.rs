@@ -304,15 +304,24 @@ impl HostPidProbe {
 
         // First, collect all PIDs
         let mut pids = Vec::new();
-        while let Ok(Some(entry)) = proc_dir.next_entry().await {
-            if let Some(pid_str) = entry.file_name().to_str() {
-                if let Ok(pid) = pid_str.parse::<u32>() {
-                    pids.push(pid);
+        loop {
+            match proc_dir.next_entry().await {
+                Ok(Some(entry)) => {
+                    if let Some(pid_str) = entry.file_name().to_str() {
+                        if let Ok(pid) = pid_str.parse::<u32>() {
+                            pids.push(pid);
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    warn!(error = %e, "Error reading /proc entry, continuing scan");
+                    // Continue scanning despite individual entry errors
+                    continue;
                 }
             }
         }
 
-        // Concurrent extraction with controlled concurrency
         const MAX_CONCURRENT: usize = 50;
         let mut processes = Vec::new();
 
@@ -347,7 +356,8 @@ impl HostPidProbe {
         let environ_path = format!("/proc/{pid}/environ");
 
         // Read environment variables first for early filtering
-        let environ_data = fs::read_to_string(&environ_path).await.map_err(|_| {
+        let environ_data = fs::read_to_string(&environ_path).await.map_err(|e| {
+            tracing::trace!(pid = %pid, error = %e, "Cannot read environ file");
             HostPidProbeError::ProcReadError {
                 message: format!("Cannot read {environ_path}"),
             }
@@ -371,7 +381,8 @@ impl HostPidProbe {
 
         // Read status file to get namespace PID
         let status_path = format!("/proc/{pid}/status");
-        let status_data = fs::read_to_string(&status_path).await.map_err(|_| {
+        let status_data = fs::read_to_string(&status_path).await.map_err(|e| {
+            tracing::trace!(pid = %pid, error = %e, "Cannot read status file");
             HostPidProbeError::ProcReadError {
                 message: format!("Cannot read {status_path}"),
             }
@@ -665,16 +676,31 @@ mod tests {
 
     #[test]
     fn early_filter_correctly_identifies_non_pod_processes() {
+        // This tests the logic used in both extract_process_info's early filter
+        // (checking for POD_NAME= prefix) and parse_environment_variables
+
         // Test case 1: environment variable value contains "POD_NAME=" but is not a pod
+        // The early filter checks for "POD_NAME=" at the start of a variable,
+        // so this should pass the early filter but fail parsing
         let environ_data = "PATH=/usr/bin\0MY_VAR=contains POD_NAME= in value\0HOME=/root\0";
         let result = HostPidProbe::parse_environment_variables(environ_data);
         assert!(result.is_err(), "Should not treat this as a pod process");
 
-        // Test case 2: actual pod environment
+        // Test case 2: actual pod environment with POD_NAME= prefix
         let environ_data =
             "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=ns\0CONTAINER_NAME=container\0";
         let result = HostPidProbe::parse_environment_variables(environ_data);
         assert!(result.is_ok(), "Should correctly parse pod environment");
+
+        // Test case 3: verify the early filter logic - no POD_NAME= at all
+        let environ_data = "PATH=/usr/bin\0USER=root\0HOME=/root\0";
+        let has_pod_env = environ_data
+            .split('\0')
+            .any(|var| var.starts_with("POD_NAME="));
+        assert!(
+            !has_pod_env,
+            "Should not detect POD_NAME in regular process"
+        );
     }
 
     #[tokio::test]
