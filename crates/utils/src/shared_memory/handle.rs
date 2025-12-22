@@ -85,14 +85,15 @@ impl SharedMemoryHandle {
 
     /// Opens an existing shared memory segment.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path_buf = path.as_ref().to_path_buf();
+
         let mut shmem = ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .use_tmpfs_with_dir(path.as_ref())
+            .use_tmpfs_with_dir(&path_buf)
             .os_id(SHM_PATH_SUFFIX)
             .open()
-            .context("Failed to open shared memory")?;
+            .with_context(|| format!("Failed to open shared memory: {}", path_buf.display()))?;
 
-        // avoid cleanup by drop
         shmem.set_owner(false);
         let ptr = shmem.as_ptr() as *mut SharedDeviceState;
 
@@ -174,3 +175,78 @@ impl SharedMemoryHandle {
 // Implement Send and Sync because SharedDeviceState uses atomic operations.
 unsafe impl Send for SharedMemoryHandle {}
 unsafe impl Sync for SharedMemoryHandle {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_open_fails_when_not_exists() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let shm_path = temp_dir.path().join("test_open_create");
+
+        let result = SharedMemoryHandle::open(&shm_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_open_existing_shared_memory() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let shm_path = temp_dir.path().join("test_open_existing");
+
+        let configs = vec![DeviceConfig {
+            device_idx: 0,
+            device_uuid: "GPU-test-uuid".to_string(),
+            up_limit: 75,
+            mem_limit: 4 * 1024 * 1024 * 1024,
+            sm_count: 64,
+            max_thread_per_sm: 1024,
+            total_cuda_cores: 1024,
+        }];
+
+        let handle1 = SharedMemoryHandle::create(&shm_path, &configs).expect("Failed to create");
+        assert_eq!(handle1.get_state().device_count(), 1);
+
+        let handle2 = SharedMemoryHandle::open(&shm_path).expect("Failed to open existing");
+        assert_eq!(handle2.get_state().device_count(), 1);
+
+        let device_info = handle2
+            .get_state()
+            .get_device_info(0)
+            .expect("Device should exist");
+        assert_eq!(device_info.0, "GPU-test-uuid");
+    }
+
+    #[test]
+    fn test_open_multiple_times() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let shm_path = temp_dir.path().join("test_open_multiple");
+
+        SharedMemoryHandle::create(&shm_path, &[]).expect("Failed to create shared memory");
+
+        let handle1 = SharedMemoryHandle::open(&shm_path).expect("Failed to open first time");
+        assert_eq!(handle1.get_state().device_count(), 0);
+
+        let handle2 = SharedMemoryHandle::open(&shm_path).expect("Failed to open second time");
+        assert_eq!(handle2.get_state().device_count(), 0);
+
+        drop(handle1);
+
+        let handle3 = SharedMemoryHandle::open(&shm_path).expect("Failed to open third time");
+        assert_eq!(handle3.get_state().device_count(), 0);
+    }
+
+    #[test]
+    fn test_open_with_nested_path() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let shm_path = temp_dir.path().join("nested").join("path").join("test");
+
+        SharedMemoryHandle::create(&shm_path, &[]).expect("Failed to create with nested path");
+
+        let handle = SharedMemoryHandle::open(&shm_path).expect("Failed to open with nested path");
+        assert_eq!(handle.get_state().device_count(), 0);
+
+        assert!(shm_path.exists(), "Nested directories should be created");
+    }
+}

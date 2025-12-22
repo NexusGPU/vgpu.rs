@@ -49,7 +49,7 @@ priority-queue = "2.7.0"
 serde_yaml = "0.9"
 influxdb-line-protocol = "2.0.0"
 poem = "3.1"
-frida-gum = "0.17"
+frida-gum = {git="https://github.com/NexusGPU/frida-rust.git", rev="5f48fa8"}
 libc = "0.2.178"
 tempfile = "3.23.0"
 proc-macro2 = "1"
