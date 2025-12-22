@@ -83,23 +83,31 @@ impl SharedMemoryHandle {
         }
     }
 
-    /// Opens an existing shared memory segment.
+    /// Opens an existing shared memory segment, creates one if it doesn't exist.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let mut shmem = ShmemConf::new()
+        match ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
             .use_tmpfs_with_dir(path.as_ref())
             .os_id(SHM_PATH_SUFFIX)
             .open()
-            .context("Failed to open shared memory")?;
-
-        // avoid cleanup by drop
-        shmem.set_owner(false);
-        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
-
-        Ok(Self {
-            shmem: RefCell::new(shmem),
-            ptr,
-        })
+        {
+            Ok(mut shmem) => {
+                shmem.set_owner(false);
+                let ptr = shmem.as_ptr() as *mut SharedDeviceState;
+                Ok(Self {
+                    shmem: RefCell::new(shmem),
+                    ptr,
+                })
+            }
+            Err(e) => {
+                info!(
+                    path = ?path.as_ref(),
+                    err = ?e,
+                    "Shared memory not found, creating new one"
+                );
+                Self::create(path, &[])
+            }
+        }
     }
 
     /// Creates a new shared memory segment.
@@ -174,3 +182,76 @@ impl SharedMemoryHandle {
 // Implement Send and Sync because SharedDeviceState uses atomic operations.
 unsafe impl Send for SharedMemoryHandle {}
 unsafe impl Sync for SharedMemoryHandle {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_open_creates_when_not_exists() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let shm_path = temp_dir.path().join("test_open_create");
+
+        let handle = SharedMemoryHandle::open(&shm_path).expect("Failed to open/create");
+
+        let state = handle.get_state();
+        assert_eq!(state.device_count(), 0);
+    }
+
+    #[test]
+    fn test_open_existing_shared_memory() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let shm_path = temp_dir.path().join("test_open_existing");
+
+        let configs = vec![DeviceConfig {
+            device_idx: 0,
+            device_uuid: "GPU-test-uuid".to_string(),
+            up_limit: 75,
+            mem_limit: 4 * 1024 * 1024 * 1024,
+            sm_count: 64,
+            max_thread_per_sm: 1024,
+            total_cuda_cores: 1024,
+        }];
+
+        let handle1 = SharedMemoryHandle::create(&shm_path, &configs).expect("Failed to create");
+        assert_eq!(handle1.get_state().device_count(), 1);
+
+        let handle2 = SharedMemoryHandle::open(&shm_path).expect("Failed to open existing");
+        assert_eq!(handle2.get_state().device_count(), 1);
+
+        let device_info = handle2
+            .get_state()
+            .get_device_info(0)
+            .expect("Device should exist");
+        assert_eq!(device_info.0, "GPU-test-uuid");
+    }
+
+    #[test]
+    fn test_open_multiple_times() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let shm_path = temp_dir.path().join("test_open_multiple");
+
+        let handle1 = SharedMemoryHandle::open(&shm_path).expect("Failed to open first time");
+        assert_eq!(handle1.get_state().device_count(), 0);
+
+        let handle2 = SharedMemoryHandle::open(&shm_path).expect("Failed to open second time");
+        assert_eq!(handle2.get_state().device_count(), 0);
+
+        drop(handle1);
+
+        let handle3 = SharedMemoryHandle::open(&shm_path).expect("Failed to open third time");
+        assert_eq!(handle3.get_state().device_count(), 0);
+    }
+
+    #[test]
+    fn test_open_with_nested_path() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let shm_path = temp_dir.path().join("nested").join("path").join("test");
+
+        let handle = SharedMemoryHandle::open(&shm_path).expect("Failed to open with nested path");
+        assert_eq!(handle.get_state().device_count(), 0);
+
+        assert!(shm_path.exists(), "Nested directories should be created");
+    }
+}
