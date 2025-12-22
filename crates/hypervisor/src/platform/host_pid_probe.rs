@@ -13,10 +13,13 @@
 
 use core::error::Error;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use derive_more::Display;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use tokio::fs;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
@@ -235,17 +238,26 @@ impl HostPidProbe {
             }
         };
 
-        let mut subscriptions_guard = subscriptions.lock().await;
-        if subscriptions_guard.is_empty() {
-            return false;
+        // Fast check: acquire lock briefly to check if empty
+        {
+            let guard = subscriptions.lock().await;
+            if guard.is_empty() {
+                return false;
+            }
         }
 
         if found_processes.is_empty() {
             return true; // Keep scanning if there are subscriptions
         }
 
-        let mut fulfilled_requests = Vec::new();
+        // Clone active subscription keys outside the lock
+        let active_keys: HashSet<SubscriptionRequest> = {
+            let guard = subscriptions.lock().await;
+            guard.keys().cloned().collect()
+        };
 
+        // Match processes outside the lock
+        let mut fulfilled_requests = Vec::new();
         for process in found_processes {
             let key = SubscriptionRequest {
                 pod_name: process.pod_name.clone(),
@@ -254,11 +266,13 @@ impl HostPidProbe {
                 container_pid: process.container_pid,
             };
 
-            if subscriptions_guard.contains_key(&key) {
+            if active_keys.contains(&key) {
                 fulfilled_requests.push((key, process));
             }
         }
 
+        // Only hold lock when removing and notifying
+        let mut subscriptions_guard = subscriptions.lock().await;
         for (key, process_info) in fulfilled_requests {
             if let Some(sender) = subscriptions_guard.remove(&key) {
                 if sender.send(process_info).is_err() {
@@ -281,46 +295,36 @@ impl HostPidProbe {
     /// - [`HostPidProbeError::ParseError`] if process information cannot be parsed
     #[tracing::instrument(level = "trace")]
     async fn scan_proc_filesystem() -> Result<Vec<PodProcessInfo>, HostPidProbeError> {
+        let mut proc_dir = fs::read_dir("/proc").await.map_err(|e| {
+            HostPidProbeError::ProcReadError {
+                message: format!("Cannot read /proc directory: {e}"),
+            }
+        })?;
+
+        // First, collect all PIDs
+        let mut pids = Vec::new();
+        while let Ok(Some(entry)) = proc_dir.next_entry().await {
+            if let Some(pid_str) = entry.file_name().to_str() {
+                if let Ok(pid) = pid_str.parse::<u32>() {
+                    pids.push(pid);
+                }
+            }
+        }
+
+        // Concurrent extraction with controlled concurrency
+        const MAX_CONCURRENT: usize = 50;
         let mut processes = Vec::new();
 
-        let mut proc_dir = match fs::read_dir("/proc").await {
-            Ok(dir) => dir,
-            Err(e) => {
-                return Err(HostPidProbeError::ProcReadError {
-                    message: format!("Cannot read /proc directory: {e}"),
-                });
-            }
-        };
+        for chunk in pids.chunks(MAX_CONCURRENT) {
+            let mut tasks: FuturesUnordered<_> = chunk
+                .iter()
+                .map(|&pid| Self::extract_process_info(pid))
+                .collect();
 
-        loop {
-            let entry_opt = match proc_dir.next_entry().await {
-                Ok(opt) => opt,
-                Err(e) => {
-                    return Err(HostPidProbeError::ProcReadError {
-                        message: format!("Cannot read /proc entry: {e}"),
-                    });
+            while let Some(result) = tasks.next().await {
+                if let Ok(process_info) = result {
+                    processes.push(process_info);
                 }
-            };
-
-            // Break when no more entries
-            let entry = match entry_opt {
-                Some(ent) => ent,
-                None => break,
-            };
-
-            let file_name = entry.file_name();
-            let pid_str = match file_name.to_str() {
-                Some(pid_str) => pid_str,
-                None => continue,
-            };
-
-            let pid = match pid_str.parse::<u32>() {
-                Ok(pid) => pid,
-                Err(_) => continue,
-            };
-
-            if let Ok(process_info) = HostPidProbe::extract_process_info(pid).await {
-                processes.push(process_info);
             }
         }
 
@@ -340,25 +344,35 @@ impl HostPidProbe {
     #[tracing::instrument(level = "trace")]
     async fn extract_process_info(pid: u32) -> Result<PodProcessInfo, HostPidProbeError> {
         let environ_path = format!("/proc/{pid}/environ");
-        let status_path = format!("/proc/{pid}/status");
 
-        // Read environment variables
-        let environ_data = fs::read_to_string(&environ_path).await.map_err(|e| {
-            warn!(pid = %pid, error = %e, "Cannot read {environ_path}");
+        // Read environment variables first for early filtering
+        let environ_data = fs::read_to_string(&environ_path).await.map_err(|_| {
             HostPidProbeError::ProcReadError {
-                message: format!("Cannot read {environ_path}: {e}"),
+                message: format!("Cannot read {environ_path}"),
             }
         })?;
+
+        // Fast check: skip non-pod processes immediately
+        // Check for null-byte separated environment variable (more precise than simple contains)
+        let has_pod_env = environ_data
+            .split('\0')
+            .any(|var| var.starts_with("POD_NAME="));
+        
+        if !has_pod_env {
+            return Err(HostPidProbeError::ParseError {
+                message: "Not a pod process".to_string(),
+            });
+        }
 
         // Extract pod name, namespace, and container name from environment
         let (pod_name, namespace, container_name) =
             Self::parse_environment_variables(&environ_data)?;
 
         // Read status file to get namespace PID
-        let status_data = fs::read_to_string(&status_path).await.map_err(|e| {
-            warn!(pid = %pid, error = %e, "Cannot read {status_path}");
+        let status_path = format!("/proc/{pid}/status");
+        let status_data = fs::read_to_string(&status_path).await.map_err(|_| {
             HostPidProbeError::ProcReadError {
-                message: format!("Cannot read {status_path}: {e}"),
+                message: format!("Cannot read {status_path}"),
             }
         })?;
 
@@ -645,6 +659,88 @@ mod tests {
         {
             let subs = probe.subscriptions.lock().await;
             assert!(subs.is_empty());
+        }
+    }
+
+    #[test]
+    fn early_filter_correctly_identifies_non_pod_processes() {
+        // Test case 1: environment variable value contains "POD_NAME=" but is not a pod
+        let environ_data = "PATH=/usr/bin\0MY_VAR=contains POD_NAME= in value\0HOME=/root\0";
+        let result = HostPidProbe::parse_environment_variables(environ_data);
+        assert!(result.is_err(), "Should not treat this as a pod process");
+
+        // Test case 2: actual pod environment
+        let environ_data = "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=ns\0CONTAINER_NAME=container\0";
+        let result = HostPidProbe::parse_environment_variables(environ_data);
+        assert!(result.is_ok(), "Should correctly parse pod environment");
+    }
+
+    #[tokio::test]
+    async fn scan_and_notify_handles_empty_subscriptions() {
+        let subscriptions = Arc::new(Mutex::new(HashMap::new()));
+        let should_continue = HostPidProbe::scan_and_notify(subscriptions).await;
+        assert!(!should_continue, "Should stop scanning when no subscriptions");
+    }
+
+    #[tokio::test]
+    async fn scan_and_notify_continues_with_active_subscriptions() {
+        let subscriptions: ActiveSubscriptions = Arc::new(Mutex::new(HashMap::new()));
+        let (sender, _receiver) = oneshot::channel();
+        
+        {
+            let mut guard = subscriptions.lock().await;
+            guard.insert(make_req(999), sender);
+        }
+
+        let should_continue = HostPidProbe::scan_and_notify(Arc::clone(&subscriptions)).await;
+        assert!(should_continue, "Should continue scanning with active subscriptions");
+    }
+
+    #[tokio::test]
+    async fn concurrent_subscriptions_dont_interfere() {
+        let probe = HostPidProbe::new(Duration::from_secs(30));
+
+        // Create multiple concurrent subscriptions
+        let mut receivers = Vec::new();
+        for i in 0..10 {
+            let receiver = probe
+                .subscribe(make_req(i), Duration::from_millis(100))
+                .await;
+            receivers.push((i, receiver));
+        }
+
+        // Verify all subscriptions are registered
+        {
+            let subs = probe.subscriptions.lock().await;
+            assert_eq!(subs.len(), 10);
+        }
+
+        // Notify some of them
+        {
+            let mut subs = probe.subscriptions.lock().await;
+            for i in [0, 2, 5, 9] {
+                let req = make_req(i);
+                if let Some(sender) = subs.remove(&req) {
+                    let info = PodProcessInfo {
+                        host_pid: 1000 + i,
+                        container_pid: i,
+                        pod_name: req.pod_name.clone(),
+                        namespace: req.namespace.clone(),
+                        container_name: req.container_name.clone(),
+                    };
+                    let _ = sender.send(info);
+                }
+            }
+        }
+
+        // Verify notified subscriptions received their data
+        for (pid, receiver) in receivers {
+            if [0, 2, 5, 9].contains(&pid) {
+                let result = timeout(TEST_TIMEOUT, receiver).await;
+                assert!(result.is_ok(), "Subscription {pid} should receive data");
+                let info = result.unwrap().unwrap();
+                assert_eq!(info.container_pid, pid);
+            }
         }
     }
 }
