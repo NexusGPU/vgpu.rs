@@ -83,31 +83,24 @@ impl SharedMemoryHandle {
         }
     }
 
-    /// Opens an existing shared memory segment, creates one if it doesn't exist.
+    /// Opens an existing shared memory segment.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        match ShmemConf::new()
+        let path_buf = path.as_ref().to_path_buf();
+
+        let mut shmem = ShmemConf::new()
             .size(std::mem::size_of::<SharedDeviceState>())
-            .use_tmpfs_with_dir(path.as_ref())
+            .use_tmpfs_with_dir(&path_buf)
             .os_id(SHM_PATH_SUFFIX)
             .open()
-        {
-            Ok(mut shmem) => {
-                shmem.set_owner(false);
-                let ptr = shmem.as_ptr() as *mut SharedDeviceState;
-                Ok(Self {
-                    shmem: RefCell::new(shmem),
-                    ptr,
-                })
-            }
-            Err(e) => {
-                info!(
-                    path = ?path.as_ref(),
-                    err = ?e,
-                    "Shared memory not found, creating new one"
-                );
-                Self::create(path, &[])
-            }
-        }
+            .with_context(|| format!("Failed to open shared memory: {}", path_buf.display()))?;
+
+        shmem.set_owner(false);
+        let ptr = shmem.as_ptr() as *mut SharedDeviceState;
+
+        Ok(Self {
+            shmem: RefCell::new(shmem),
+            ptr,
+        })
     }
 
     /// Creates a new shared memory segment.
@@ -189,14 +182,12 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_open_creates_when_not_exists() {
+    fn test_open_fails_when_not_exists() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let shm_path = temp_dir.path().join("test_open_create");
 
-        let handle = SharedMemoryHandle::open(&shm_path).expect("Failed to open/create");
-
-        let state = handle.get_state();
-        assert_eq!(state.device_count(), 0);
+        let result = SharedMemoryHandle::open(&shm_path);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -232,6 +223,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let shm_path = temp_dir.path().join("test_open_multiple");
 
+        SharedMemoryHandle::create(&shm_path, &[]).expect("Failed to create shared memory");
+
         let handle1 = SharedMemoryHandle::open(&shm_path).expect("Failed to open first time");
         assert_eq!(handle1.get_state().device_count(), 0);
 
@@ -248,6 +241,8 @@ mod tests {
     fn test_open_with_nested_path() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let shm_path = temp_dir.path().join("nested").join("path").join("test");
+
+        SharedMemoryHandle::create(&shm_path, &[]).expect("Failed to create with nested path");
 
         let handle = SharedMemoryHandle::open(&shm_path).expect("Failed to open with nested path");
         assert_eq!(handle.get_state().device_count(), 0);
