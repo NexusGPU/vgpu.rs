@@ -98,6 +98,11 @@ fn find_module_by_prefix(prefix: &str) -> Option<String> {
                 continue;
             };
 
+            // Skip if path is not valid UTF-8
+            let Some(path_str) = path.to_str() else {
+                continue;
+            };
+
             // Skip if filename is not valid UTF-8
             let Some(filename_str) = filename.to_str() else {
                 continue;
@@ -110,7 +115,7 @@ fn find_module_by_prefix(prefix: &str) -> Option<String> {
                     filename_str,
                     path.display()
                 );
-                return Some(filename_str.to_string());
+                return Some(path_str.to_string());
             }
         }
 
@@ -150,16 +155,17 @@ impl HookManager {
         let module = if let Some(module_prefix) = module {
             match find_module_by_prefix(module_prefix) {
                 Some(name) => {
-                    tracing::debug!("Found module: {}", name);
-                    // Store it if not already present
-                    if !self.module_names.contains(&name) {
-                        self.module_names.push(name);
-                    }
-                    // Return reference to the stored string
-                    self.module_names
-                        .iter()
-                        .find(|m| m.starts_with(module_prefix))
-                        .map(|s| s.as_str())
+                    let idx = self.module_names.iter().position(|m| m.as_str() == name);
+                    let name_ref = match idx {
+                        Some(i) => &self.module_names[i],
+                        None => {
+                            self.module_names.push(name);
+                            self.module_names
+                                .last()
+                                .expect("just pushed module name must exist")
+                        }
+                    };
+                    Some(name_ref.as_str())
                 }
                 None => {
                     return Err(HookError::NoModuleName(Cow::Owned(

@@ -4,7 +4,6 @@ use std::env;
 use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CStr;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +14,6 @@ use std::sync::OnceLock;
 
 use ctor::ctor;
 use limiter::Limiter;
-use nvml_wrapper::Nvml;
 use tf_macro::hook_fn;
 use trap::dummy::DummyTrap;
 use trap::http::BlockingHttpTrap;
@@ -27,6 +25,7 @@ use utils::logging;
 use utils::replace_symbol;
 
 use crate::auto_freeze::AutoFreezeManager;
+use crate::nvmllib::init_nvml;
 
 mod auto_freeze;
 mod checkpoint;
@@ -34,6 +33,7 @@ mod config;
 mod culib;
 mod detour;
 mod limiter;
+mod nvmllib;
 
 static GLOBAL_LIMITER: OnceLock<Limiter> = OnceLock::new();
 static GLOBAL_AUTO_FREEZE_MANAGER: OnceLock<Arc<AutoFreezeManager>> = OnceLock::new();
@@ -108,19 +108,13 @@ pub(crate) fn mock_shm_path() -> Option<PathBuf> {
 fn init_limiter() {
     static LIMITER_INITIALIZED: Once = Once::new();
     LIMITER_INITIALIZED.call_once(|| {
-        let nvml =
-            match Nvml::builder()
-                .lib_path(&env::var_os("TF_NVML_LIB_PATH").unwrap_or(
-                    OsStr::new("/lib/x86_64-linux-gnu/libnvidia-ml.so.1").to_os_string(),
-                ))
-                .init()
-            {
-                Ok(nvml) => nvml,
-                Err(e) => {
-                    record_limiter_error(format!("failed to initialize NVML: {e}"));
-                    return;
-                }
-            };
+        let nvml = match init_nvml() {
+            Ok(nvml) => nvml,
+            Err(e) => {
+                record_limiter_error(format!("failed to initialize NVML: {e}"));
+                return;
+            }
+        };
 
         let config = if mock_shm_path().is_none() {
             let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
