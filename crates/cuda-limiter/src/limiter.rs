@@ -588,6 +588,37 @@ impl Limiter {
     pub(crate) fn is_compute_shard(&self) -> bool {
         self.compute_shard
     }
+
+    /// Check if all devices have unlimited rate (up_limit >= 100)
+    pub(crate) fn all_devices_unlimited(&self) -> bool {
+        let handle = match self.get_or_init_shared_memory() {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!("Failed to access shared memory: {}", e);
+                return false;
+            }
+        };
+
+        let state = handle.get_state();
+
+        for (idx, _uuid) in &self.gpu_idx_uuids {
+            let up_limit = state.with_device(
+                *idx,
+                |device| device.device_info.get_up_limit(),
+                |device| device.device_info.get_up_limit(),
+            );
+
+            if let Some(limit) = up_limit {
+                if limit < 100 {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 fn shm_path() -> PathBuf {
