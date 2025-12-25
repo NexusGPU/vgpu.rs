@@ -77,9 +77,12 @@ fn are_hooks_enabled() -> (bool, bool) {
 }
 
 fn should_skip_hooks_on_no_limit() -> bool {
-    env::var("TF_SKIP_HOOKS_IF_NO_LIMIT")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false)
+    static SKIP_HOOKS_ON_NO_LIMIT: OnceLock<bool> = OnceLock::new();
+    *SKIP_HOOKS_ON_NO_LIMIT.get_or_init(|| {
+        env::var("TF_SKIP_HOOKS_IF_NO_LIMIT")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false)
+    })
 }
 
 fn record_limiter_error(message: impl Into<String>) {
@@ -357,6 +360,7 @@ fn init_hooks() {
             );
         } else {
             tracing::info!("All devices have up_limit >= 100, skipping all hooks installation");
+            return;
         }
     }
 
@@ -375,23 +379,20 @@ fn init_hooks() {
     }
 
     // Install dlsym hook to catch dynamic library loading
-    // Skip if we're skipping all hooks (unless it's nvidia-smi which might need NVML hooks later)
-    if !should_skip_hooks || is_nvidia_smi {
-        static DLSYM_HOOK_ONCE: Once = Once::new();
-        DLSYM_HOOK_ONCE.call_once(|| {
-            let mut hook_manager = HookManager::default();
-            if let Err(err) = replace_symbol!(
-                &mut hook_manager,
-                None,
-                "dlsym",
-                dlsym_detour,
-                FnDlsym,
-                FN_DLSYM
-            ) {
-                tracing::error!("Failed to install dlsym hook: {}", err);
-            }
-        });
-    }
+    static DLSYM_HOOK_ONCE: Once = Once::new();
+    DLSYM_HOOK_ONCE.call_once(|| {
+        let mut hook_manager = HookManager::default();
+        if let Err(err) = replace_symbol!(
+            &mut hook_manager,
+            None,
+            "dlsym",
+            dlsym_detour,
+            FnDlsym,
+            FN_DLSYM
+        ) {
+            tracing::error!("Failed to install dlsym hook: {}", err);
+        }
+    });
     tracing::debug!("Hook initialization completed");
 }
 
@@ -439,26 +440,16 @@ unsafe extern "C" fn dlsym_detour(handle: *const c_void, symbol: *const c_char) 
     }
     let _guard = ResetGuard;
 
-    // Check if should skip hooks
-    let all_unlimited = GLOBAL_LIMITER
-        .get()
-        .map(|limiter| limiter.all_devices_unlimited())
-        .unwrap_or(false);
-    let should_skip_hooks = should_skip_hooks_on_no_limit() && all_unlimited;
-    let is_nvidia_smi = is_mapping_device_idx();
-
     // Try to install hooks if not already done
-    if may_be_cuda && !HOOKS_INITIALIZED.1.load(Ordering::Acquire)
-        && !should_skip_hooks {
-            tracing::debug!("dlsym observed CUDA symbol {symbol_str}, ensuring hooks installed");
-            try_install_cuda_hooks();
-        }
+    if may_be_cuda && !HOOKS_INITIALIZED.1.load(Ordering::Acquire) {
+        tracing::debug!("dlsym observed CUDA symbol {symbol_str}, ensuring hooks installed");
+        try_install_cuda_hooks();
+    }
 
-    if may_be_nvml && !HOOKS_INITIALIZED.0.load(Ordering::Acquire)
-        && (!should_skip_hooks || is_nvidia_smi) {
-            tracing::debug!("dlsym observed NVML symbol {symbol_str}, ensuring hooks installed");
-            try_install_nvml_hooks();
-        }
+    if may_be_nvml && !HOOKS_INITIALIZED.0.load(Ordering::Acquire) {
+        tracing::debug!("dlsym observed NVML symbol {symbol_str}, ensuring hooks installed");
+        try_install_nvml_hooks();
+    }
 
     let sym_ptr = FN_DLSYM(handle, symbol);
 
