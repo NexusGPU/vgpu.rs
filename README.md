@@ -232,3 +232,4 @@ A common utility library providing shared functionality across multiple crates:
 *   **Hooking**: Low-level wrappers for API interception.
 *   **Shared Memory**: Wrappers for creating and accessing shared memory.
 *   **Build Info**: Embeds version and build information at compile time.
+
