@@ -45,53 +45,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  download_tensor_fusion_components:
-    needs: release
-    if: needs.release.outputs.published == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download tensor-fusion-worker from tensor-fusion-worker
-        uses: robinraju/release-downloader@v1
-        with:
-          repository: "NexusGPU/tensor-fusion-worker"
-          latest: true
-          fileName: "tensor-fusion-worker"
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-
-      - name: Download libcuda.so from tensor-fusion-client
-        uses: robinraju/release-downloader@v1
-        with:
-          repository: "NexusGPU/tensor-fusion-client"
-          latest: true
-          fileName: "libcuda.so"
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-
-      - name: Download libnvidia-ml.so from tensor-fusion-client
-        uses: robinraju/release-downloader@v1
-        with:
-          repository: "NexusGPU/tensor-fusion-client"
-          latest: true
-          fileName: "libnvidia-ml.so"
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-
-      - name: Download libteleport.so from tensor-fusion-client
-        uses: robinraju/release-downloader@v1
-        with:
-          repository: "NexusGPU/tensor-fusion-client"
-          latest: true
-          fileName: "libteleport.so"
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-
-      - name: Upload downloaded tensor-fusion components
-        uses: actions/upload-artifact@v6
-        with:
-          name: tensor-fusion-components
-          path: |
-            tensor-fusion-worker
-            libcuda.so
-            libnvidia-ml.so
-            libteleport.so
-
   build_libraries:
     needs:
       - release
@@ -177,7 +130,6 @@ jobs:
     needs:
       - release
       - build_libraries
-      - download_tensor_fusion_components
     if: needs.release.outputs.published == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -198,7 +150,6 @@ jobs:
           tar -czf libcuda_limiter-arm64.tar.gz -C artifacts/libcuda_limiter-linux-arm64 libcuda_limiter.so
           tar -czf libadd_path-x64.tar.gz -C artifacts/libadd_path-linux-x64 libadd_path.so
           tar -czf libadd_path-arm64.tar.gz -C artifacts/libadd_path-linux-arm64 libadd_path.so
-          tar -czf tensor-fusion-components.tar.gz -C artifacts/tensor-fusion-components .
           tar -czf bootstrap-x64.tar.gz -C artifacts/bootstrap-linux-x64 bootstrap
           tar -czf bootstrap-arm64.tar.gz -C artifacts/bootstrap-linux-arm64 bootstrap
 
@@ -212,7 +163,6 @@ jobs:
             libcuda_limiter-arm64.tar.gz
             libadd_path-x64.tar.gz
             libadd_path-arm64.tar.gz
-            tensor-fusion-components.tar.gz
             bootstrap-x64.tar.gz
             bootstrap-arm64.tar.gz
 
@@ -226,7 +176,6 @@ jobs:
             libcuda_limiter-arm64.tar.gz
             libadd_path-x64.tar.gz
             libadd_path-arm64.tar.gz
-            tensor-fusion-components.tar.gz
             bootstrap-x64.tar.gz
             bootstrap-arm64.tar.gz
 
