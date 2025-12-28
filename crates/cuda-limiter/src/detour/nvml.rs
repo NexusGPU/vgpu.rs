@@ -13,7 +13,7 @@ use tf_macro::hook_fn;
 use utils::hooks::HookManager;
 use utils::replace_symbol;
 
-use crate::GLOBAL_LIMITER;
+use crate::{is_nvidia_smi, should_skip_hooks_on_no_limit, GLOBAL_LIMITER};
 
 #[hook_fn]
 pub(crate) unsafe fn nvml_device_get_memory_info_detour(
@@ -21,6 +21,10 @@ pub(crate) unsafe fn nvml_device_get_memory_info_detour(
     memory: *mut nvmlMemory_t,
 ) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+
+    if should_skip_hooks_on_no_limit() && limiter.all_devices_unlimited() && is_nvidia_smi() {
+        return FN_NVML_DEVICE_GET_MEMORY_INFO(device, memory);
+    }
 
     let device_index = match limiter.device_raw_index_by_nvml_handle(device) {
         Ok(device_index) => device_index,
@@ -75,6 +79,11 @@ pub(crate) unsafe fn nvml_device_get_memory_info_v2_detour(
     memory: *mut nvmlMemory_v2_t,
 ) -> nvmlReturn_t {
     let limiter = GLOBAL_LIMITER.get().expect("Limiter not initialized");
+
+    if should_skip_hooks_on_no_limit() && limiter.all_devices_unlimited() && is_nvidia_smi() {
+        return FN_NVML_DEVICE_GET_MEMORY_INFO_V2(device, memory);
+    }
+
     let device_index = match limiter.device_raw_index_by_nvml_handle(device) {
         Ok(device_index) => device_index,
         Err(e) => {

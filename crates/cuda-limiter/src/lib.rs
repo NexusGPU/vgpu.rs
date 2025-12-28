@@ -76,7 +76,7 @@ fn are_hooks_enabled() -> (bool, bool) {
     (enable_nvml_hooks, enable_cuda_hooks)
 }
 
-fn should_skip_hooks_on_no_limit() -> bool {
+pub(crate) fn should_skip_hooks_on_no_limit() -> bool {
     static SKIP_HOOKS_ON_NO_LIMIT: OnceLock<bool> = OnceLock::new();
     *SKIP_HOOKS_ON_NO_LIMIT.get_or_init(|| {
         env::var("TF_SKIP_HOOKS_IF_NO_LIMIT")
@@ -300,7 +300,7 @@ fn try_install_nvml_hooks() {
 
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let mut hook_manager = HookManager::default();
-        detour::nvml::enable_hooks(&mut hook_manager, is_mapping_device_idx())
+        detour::nvml::enable_hooks(&mut hook_manager, is_nvidia_smi())
     }));
 
     match install_result {
@@ -351,7 +351,7 @@ fn init_hooks() {
         .unwrap_or(false);
 
     let should_skip_hooks = should_skip_hooks_on_no_limit() && all_unlimited;
-    let is_nvidia_smi = is_mapping_device_idx();
+    let is_nvidia_smi = is_nvidia_smi();
 
     if should_skip_hooks {
         if is_nvidia_smi {
@@ -544,7 +544,7 @@ pub fn global_trap() -> impl Trap {
         })
 }
 
-fn is_mapping_device_idx() -> bool {
+pub(crate) fn is_nvidia_smi() -> bool {
     match fs::read_to_string("/proc/self/cmdline") {
         Ok(cmdline) => cmdline.contains("nvidia-smi"),
         Err(_) => false,
