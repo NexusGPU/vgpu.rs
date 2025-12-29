@@ -40,7 +40,7 @@ schemars = { workspace = true }
 notify = "8.2"
 cudarc = { workspace = true, features = ["std", "driver", "dynamic-loading", "cuda-11080"] }
 libc = { workspace = true }
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = "0.29"
 glob = "0.3"
 async-trait = { workspace = true }
