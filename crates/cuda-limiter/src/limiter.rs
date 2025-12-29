@@ -98,6 +98,8 @@ pub(crate) struct Limiter {
     gpu_idx_uuids: Vec<(usize, String)>,
     /// compute shard
     compute_shard: bool,
+    /// isolation level
+    isolation: Option<String>,
     /// Cached up_limit per device for fast path check
     /// device_index -> CachedUpLimit
     up_limit_cache: DashMap<usize, CachedUpLimit>,
@@ -115,6 +117,7 @@ impl Limiter {
         nvml: Nvml,
         mut gpu_uuids: Vec<String>,
         compute_shard: bool,
+        isolation: Option<String>,
     ) -> Result<Self, Error> {
         gpu_uuids.sort();
         gpu_uuids.dedup();
@@ -138,6 +141,7 @@ impl Limiter {
             cu_device_mapping: DashMap::new(),
             gpu_idx_uuids,
             compute_shard,
+            isolation,
             up_limit_cache: DashMap::new(),
         })
     }
@@ -587,6 +591,10 @@ impl Limiter {
     /// Check if the limiter is a compute shard
     pub(crate) fn is_compute_shard(&self) -> bool {
         self.compute_shard
+    }
+
+    pub(crate) fn isolation(&self) -> Option<&str> {
+        self.isolation.as_deref()
     }
 
     /// Check if all devices have unlimited resources (both up_limit >= 100 and mem_limit == total_memory)

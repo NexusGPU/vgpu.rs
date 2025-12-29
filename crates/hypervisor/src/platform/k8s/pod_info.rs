@@ -82,8 +82,10 @@ impl TensorFusionPodInfo {
         // Parse isolation level
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/isolation")) {
             pod_info.compute_shard = value == "shard";
+            pod_info.isolation = Some(value.clone());
         } else {
             pod_info.compute_shard = false;
+            pod_info.isolation = None;
         }
 
         Ok(Self(pod_info))
