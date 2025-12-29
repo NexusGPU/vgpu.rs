@@ -67,7 +67,7 @@ url = "2.5"
 libloading = "0.8"
 shared_memory = { git="https://github.com/NexusGPU/shared_memory.git", rev="d679661" }
 tower = "0.5"
-schemars = "1.1"
+schemars = "1.2"
 glob = "0.3"
 async-trait = "0.1"
 dashmap = "6.1"
