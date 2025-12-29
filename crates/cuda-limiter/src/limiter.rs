@@ -589,7 +589,7 @@ impl Limiter {
         self.compute_shard
     }
 
-    /// Check if all devices have unlimited rate (up_limit >= 100)
+    /// Check if all devices have unlimited resources (both up_limit >= 100 and mem_limit == total_memory)
     pub(crate) fn all_devices_unlimited(&self) -> bool {
         let handle = match self.get_or_init_shared_memory() {
             Ok(h) => h,
@@ -602,17 +602,43 @@ impl Limiter {
         let state = handle.get_state();
 
         for (idx, _uuid) in &self.gpu_idx_uuids {
-            let up_limit = state.with_device(
-                *idx,
-                |device| device.device_info.get_up_limit(),
-                |device| device.device_info.get_up_limit(),
-            );
+            let (up_limit, mem_limit) = state
+                .with_device(
+                    *idx,
+                    |device| {
+                        (
+                            device.device_info.get_up_limit(),
+                            device.device_info.get_mem_limit(),
+                        )
+                    },
+                    |device| {
+                        (
+                            device.device_info.get_up_limit(),
+                            device.device_info.get_mem_limit(),
+                        )
+                    },
+                )
+                .unwrap_or((0, 0));
 
-            if let Some(limit) = up_limit {
-                if limit < 100 {
+            if up_limit < 100 {
+                return false;
+            }
+
+            let device_total_memory = match self.nvml.device_by_index(*idx as u32) {
+                Ok(device) => match device.memory_info() {
+                    Ok(info) => info.total,
+                    Err(e) => {
+                        tracing::warn!("Failed to get memory info for device {}: {}", idx, e);
+                        return false;
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("Failed to get device {} by index: {}", idx, e);
                     return false;
                 }
-            } else {
+            };
+
+            if mem_limit < device_total_memory {
                 return false;
             }
         }
