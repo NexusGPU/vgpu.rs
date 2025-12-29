@@ -14,6 +14,7 @@ const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct PodConfig {
     pub gpu_uuids: Vec<String>,
     pub compute_shard: bool,
+    pub isolation: Option<String>,
     pub auto_freeze: Option<AutoFreezeConfig>,
 }
 
@@ -124,6 +125,7 @@ fn request_pod_info(
     Ok(PodConfig {
         gpu_uuids: pod_info.gpu_uuids,
         compute_shard: pod_info.compute_shard,
+        isolation: pod_info.isolation,
         auto_freeze: pod_info.auto_freeze,
     })
 }

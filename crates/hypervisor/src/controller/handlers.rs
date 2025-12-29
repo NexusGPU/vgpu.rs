@@ -104,6 +104,7 @@ where
         vram_limit: pod_entry.vram_limit,
         qos_level: pod_entry.qos_level.map(|qos| qos.into()),
         compute_shard: pod_entry.compute_shard,
+        isolation: pod_entry.isolation.clone(),
         auto_freeze,
     };
 

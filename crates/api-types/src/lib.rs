@@ -74,6 +74,8 @@ pub struct PodResourceInfo {
     pub labels: BTreeMap<String, String>,
     // Whether the workload is a compute shard
     pub compute_shard: bool,
+    /// Isolation level from annotation
+    pub isolation: Option<String>,
 }
 
 /// Response format for Worker query API (legacy, use PodInfoResponse for new code)
@@ -128,6 +130,8 @@ pub struct PodInfo {
     pub qos_level: Option<QosLevelPascalCase>,
     /// Whether the workload is a compute shard
     pub compute_shard: bool,
+    /// Isolation level from annotation
+    pub isolation: Option<String>,
     /// Auto-freeze configuration based on QoS level
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_freeze: Option<AutoFreezeConfig>,

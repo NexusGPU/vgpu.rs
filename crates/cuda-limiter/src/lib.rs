@@ -166,6 +166,7 @@ fn init_limiter() {
             config::PodConfig {
                 gpu_uuids: uuids,
                 compute_shard: false,
+                isolation: None,
                 auto_freeze: None,
             }
         };
@@ -215,7 +216,12 @@ fn init_limiter() {
             }
         }
 
-        let limiter = match Limiter::new(nvml, config.gpu_uuids, config.compute_shard) {
+        let limiter = match Limiter::new(
+            nvml,
+            config.gpu_uuids,
+            config.compute_shard,
+            config.isolation,
+        ) {
             Ok(limiter) => limiter,
             Err(err) => {
                 record_limiter_error(format!("failed to initialize limiter: {err}"));
@@ -329,8 +335,8 @@ fn init_hooks() {
     }
     init_limiter();
 
-    let is_compute_shard = match GLOBAL_LIMITER.get() {
-        Some(limiter) => limiter.is_compute_shard(),
+    let limiter = match GLOBAL_LIMITER.get() {
+        Some(limiter) => limiter,
         None => {
             if let Some(reason) = GLOBAL_LIMITER_ERROR.get() {
                 panic!("GLOBAL_LIMITER initialization failed: {reason}");
@@ -339,8 +345,16 @@ fn init_hooks() {
             }
         }
     };
-    if is_compute_shard {
-        tracing::debug!("Compute shard detected, skipping hook initialization");
+
+    let isolation = limiter.isolation();
+    let should_skip_isolation =
+        limiter.is_compute_shard() || isolation.is_some_and(|iso| iso == "shard" || iso == "hard");
+
+    if should_skip_isolation {
+        tracing::info!(
+            "Isolation level '{}' detected, skipping hook initialization",
+            isolation.unwrap_or("shard")
+        );
         return;
     }
 
