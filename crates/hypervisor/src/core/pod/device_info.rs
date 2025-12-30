@@ -5,13 +5,26 @@ use anyhow::Result;
 use api_types::PodResourceInfo;
 use cudarc::driver::sys::CUdevice_attribute;
 use cudarc::driver::CudaContext;
+use dashmap::DashMap;
 use nvml_wrapper::Nvml;
+use std::sync::LazyLock;
 use utils::shared_memory::DeviceConfig;
 
 /// Configuration constant for CUDA cores calculation
 /// This factor is used to scale SM count and threads per SM to estimate total CUDA cores
 /// Formula: total_cuda_cores = sm_count * max_thread_per_sm * FACTOR
 const FACTOR: u32 = 64;
+
+/// Cached GPU hardware information to avoid repeated CUDA context creation
+#[derive(Debug, Clone, Copy)]
+struct GpuHardwareInfo {
+    sm_count: u32,
+    max_thread_per_sm: u32,
+    total_cuda_cores: u32,
+}
+
+/// Global cache for GPU hardware information, indexed by device_idx
+static GPU_HARDWARE_CACHE: LazyLock<DashMap<u32, GpuHardwareInfo>> = LazyLock::new(DashMap::new);
 
 /// Creates device configs from PodResourceInfo (pod metadata) for pod-level registration
 #[tracing::instrument(skip(nvml), fields(pod = %pod_info.pod_name, namespace = %pod_info.namespace, gpu_count = pod_info.gpu_uuids.as_ref().map(|v| v.len()).unwrap_or(0)))]
@@ -82,6 +95,38 @@ pub async fn create_device_configs_from_pod_resource_info(
     Ok(device_configs)
 }
 
+/// Get or cache GPU hardware information
+fn get_gpu_hardware_info(device_idx: u32) -> Result<GpuHardwareInfo> {
+    if let Some(cached) = GPU_HARDWARE_CACHE.get(&device_idx) {
+        return Ok(*cached);
+    }
+
+    let ctx = CudaContext::new(device_idx as usize)?;
+    let sm_count =
+        ctx.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
+    let max_thread_per_sm = ctx
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR)?
+        as u32;
+    let total_cuda_cores = sm_count * max_thread_per_sm * FACTOR;
+
+    let info = GpuHardwareInfo {
+        sm_count,
+        max_thread_per_sm,
+        total_cuda_cores,
+    };
+
+    GPU_HARDWARE_CACHE.insert(device_idx, info);
+    tracing::debug!(
+        device_idx = device_idx,
+        sm_count = sm_count,
+        max_thread_per_sm = max_thread_per_sm,
+        total_cuda_cores = total_cuda_cores,
+        "Cached GPU hardware information"
+    );
+
+    Ok(info)
+}
+
 /// Calculate device limits from actual GPU hardware information
 #[tracing::instrument(skip(nvml), fields(device_idx = device_idx, tflops_limit = ?tflops_limit, vram_limit = ?vram_limit, tflops_capacity = ?tflops_capacity))]
 pub fn calculate_device_limits_from_gpu_info(
@@ -92,15 +137,12 @@ pub fn calculate_device_limits_from_gpu_info(
     tflops_capacity: Option<f64>,
 ) -> Result<(u32, u32, u32, u32, u64)> {
     let device = nvml.device_by_index(device_idx)?;
-    let ctx = CudaContext::new(device_idx as usize)?;
-    let sm_count =
-        ctx.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
-    let max_thread_per_sm = ctx
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR)?
-        as u32;
 
-    // Calculate total CUDA cores using the formula: sm_count * max_thread_per_sm * FACTOR
-    let total_cuda_cores = sm_count * max_thread_per_sm * FACTOR;
+    // Use cached hardware info to avoid creating CUDA context every time
+    let hardware_info = get_gpu_hardware_info(device_idx)?;
+    let sm_count = hardware_info.sm_count;
+    let max_thread_per_sm = hardware_info.max_thread_per_sm;
+    let total_cuda_cores = hardware_info.total_cuda_cores;
 
     // Get memory information
     let memory_info = device.memory_info()?;
