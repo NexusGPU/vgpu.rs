@@ -268,12 +268,6 @@ where
     pub async fn ensure_pod_registered(&self, namespace: &str, pod_name: &str) -> Result<()> {
         let pod_identifier = PodIdentifier::new(namespace, pod_name);
 
-        // Fast path: if pod is already registered, return immediately
-        // This avoids expensive K8s queries and CUDA context creation for already-registered pods
-        if self.pod_state_store.contains_pod(&pod_identifier) {
-            return Ok(());
-        }
-
         // Get pod info from cache
         let pod_info = self
             .pod_info_cache
