@@ -33,7 +33,7 @@ futures.workspace = true
 poem = { workspace = true }
 http-bidir-comm = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-tokio-util = "0.7.17"
+tokio-util = "0.7.18"
 tower = { workspace = true }
 hyper-util = { version = "0.1", features = ["tokio"] }
 schemars = { workspace = true }
