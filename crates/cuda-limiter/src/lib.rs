@@ -348,12 +348,12 @@ fn init_hooks() {
 
     let isolation = limiter.isolation();
     let should_skip_isolation =
-        limiter.is_compute_shard() || isolation.is_some_and(|iso| iso == "shard" || iso == "hard");
+        limiter.is_compute_shard() || isolation.is_some_and(|iso| iso == "soft" || iso == "hard");
 
     if should_skip_isolation {
         tracing::info!(
             "Isolation level '{}' detected, skipping hook initialization",
-            isolation.unwrap_or("shard")
+            isolation.unwrap_or("soft")
         );
         return;
     }
