@@ -50,7 +50,7 @@ serde_yaml = "0.9"
 influxdb-line-protocol = "2.0.0"
 poem = "3.1"
 frida-gum = {git="https://github.com/NexusGPU/frida-rust.git", rev="5f48fa8"}
-libc = "0.2.178"
+libc = "0.2.180"
 tempfile = "3.24.0"
 proc-macro2 = "1"
 quote = "1"
