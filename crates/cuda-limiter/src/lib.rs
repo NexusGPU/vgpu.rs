@@ -346,11 +346,13 @@ fn init_hooks() {
         }
     };
 
+    let is_nvidia_smi = is_nvidia_smi();
+
     let isolation = limiter.isolation();
     let should_skip_isolation =
         limiter.is_compute_shard() || isolation.is_some_and(|iso| iso == "soft" || iso == "hard");
 
-    if should_skip_isolation {
+    if should_skip_isolation && !is_nvidia_smi {
         tracing::info!(
             "Isolation level '{}' detected, skipping hook initialization",
             isolation.unwrap_or("soft")
@@ -365,7 +367,6 @@ fn init_hooks() {
         .unwrap_or(false);
 
     let should_skip_hooks = should_skip_hooks_on_no_limit() && all_unlimited;
-    let is_nvidia_smi = is_nvidia_smi();
 
     if should_skip_hooks {
         if is_nvidia_smi {
