@@ -153,16 +153,9 @@ impl Limiter {
 
     fn get_or_init_shared_memory_arc(&self) -> Result<&Arc<SharedMemoryHandle>, Error> {
         self.shared_memory_handle.get_or_try_init(|| {
-            if let Some(shm_path) = crate::mock_shm_path() {
-                Ok(Arc::new(SharedMemoryHandle::mock(
-                    shm_path,
-                    self.gpu_idx_uuids.clone(),
-                )))
-            } else {
-                SharedMemoryHandle::open(shm_path())
-                    .map(Arc::new)
-                    .map_err(Error::SharedMemory)
-            }
+            SharedMemoryHandle::open(shm_path())
+                .map(Arc::new)
+                .map_err(Error::SharedMemory)
         })
     }
 
