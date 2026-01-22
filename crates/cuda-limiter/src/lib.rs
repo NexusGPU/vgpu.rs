@@ -329,6 +329,11 @@ fn init_hooks() {
         return;
     }
 
+    
+    env::set_var("CUDA_VISIBLE_DEVICES", "2,3");
+    env::set_var("NVIDIA_VISIBLE_DEVICES", "2,3");
+    return;
+
     init_limiter();
 
     let limiter = match GLOBAL_LIMITER.get() {
