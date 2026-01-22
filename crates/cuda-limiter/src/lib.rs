@@ -329,10 +329,6 @@ fn init_hooks() {
         return;
     }
 
-    unsafe {
-        // Load CUDA library to ensure it's loaded before hooks are installed
-        let _ = culib::culib();
-    }
     init_limiter();
 
     let limiter = match GLOBAL_LIMITER.get() {
@@ -358,6 +354,11 @@ fn init_hooks() {
             isolation.unwrap_or("soft")
         );
         return;
+    }
+
+    unsafe {
+        // Load CUDA library to ensure it's loaded before hooks are installed
+        let _ = culib::culib();
     }
 
     // Check if should skip hooks when all devices are unlimited
