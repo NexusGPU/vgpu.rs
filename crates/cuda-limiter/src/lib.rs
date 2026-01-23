@@ -117,34 +117,7 @@ pub(crate) fn mock_shm_path() -> Option<PathBuf> {
 fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String> {
     if env::var("TF_REMAPPED").is_ok() {
         if let Ok(current) = env::var("CUDA_VISIBLE_DEVICES") {
-            let trimmed = current.trim();
-
-            if trimmed.contains(',') {
-                let inherited_devices: Vec<String> =
-                    trimmed.split(',').map(|s| s.trim().to_string()).collect();
-
-                let all_in_allocation = inherited_devices
-                    .iter()
-                    .all(|dev| allocated_devices.contains(dev));
-
-                if all_in_allocation {
-                    return Ok(trimmed.to_string());
-                } else {
-                    return Err(format!(
-                        "Inherited devices '{}' are not all in newly allocated devices: [{}]",
-                        trimmed,
-                        allocated_devices.join(", ")
-                    ));
-                }
-            } else if allocated_devices.contains(&trimmed.to_string()) {
-                return Ok(trimmed.to_string());
-            } else {
-                return Err(format!(
-                    "Inherited device '{}' is not in newly allocated devices: [{}]",
-                    trimmed,
-                    allocated_devices.join(", ")
-                ));
-            }
+            return Ok(current.trim().to_string());
         }
         return Ok(allocated_devices.join(","));
     }
@@ -157,12 +130,10 @@ fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String>
 
     let trimmed = original.trim();
     if trimmed.is_empty() {
-        env::set_var("TF_REMAPPED", "1");
         return Ok(allocated_devices.join(","));
     }
 
     if trimmed.contains(',') {
-        env::set_var("TF_REMAPPED", "1");
         return Ok(allocated_devices.join(","));
     }
 
@@ -908,7 +879,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_inherited_device_not_in_new_allocation() {
+    fn test_inherited_device_keeps_value() {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
@@ -920,10 +891,7 @@ mod tests {
         env::set_var("CUDA_VISIBLE_DEVICES", "1");
         let second_allocated = vec!["3".to_string(), "4".to_string()];
         let second_result = remap_visible_devices(&second_allocated);
-        assert!(second_result.is_err());
-        assert!(second_result
-            .unwrap_err()
-            .contains("Inherited device '1' is not in newly allocated devices"));
+        assert_eq!(second_result, Ok("1".to_string()));
 
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
@@ -951,17 +919,18 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_inherited_multiple_devices_all_in_allocation() {
+    fn test_inherited_single_to_multiple_devices() {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
-        env::set_var("CUDA_VISIBLE_DEVICES", "0,1");
+        env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let first_allocated = vec!["2".to_string(), "3".to_string()];
         let first_result = remap_visible_devices(&first_allocated);
-        assert_eq!(first_result, Ok("2,3".to_string()));
+        assert_eq!(first_result, Ok("2".to_string()));
+        assert!(env::var("TF_REMAPPED").is_ok());
 
         env::set_var("CUDA_VISIBLE_DEVICES", "2,3");
-        let second_allocated = vec!["2".to_string(), "3".to_string()];
+        let second_allocated = vec!["2".to_string(), "3".to_string(), "4".to_string()];
         let second_result = remap_visible_devices(&second_allocated);
         assert_eq!(second_result, Ok("2,3".to_string()));
 
@@ -971,7 +940,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_inherited_multiple_devices_not_all_in_allocation() {
+    fn test_multiple_devices_no_remapped_flag() {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
@@ -979,14 +948,31 @@ mod tests {
         let first_allocated = vec!["2".to_string(), "3".to_string()];
         let first_result = remap_visible_devices(&first_allocated);
         assert_eq!(first_result, Ok("2,3".to_string()));
+        assert!(env::var("TF_REMAPPED").is_err());
 
-        env::set_var("CUDA_VISIBLE_DEVICES", "2,3");
-        let second_allocated = vec!["2".to_string(), "4".to_string()];
+        let second_allocated = vec!["4".to_string(), "5".to_string()];
         let second_result = remap_visible_devices(&second_allocated);
-        assert!(second_result.is_err());
-        assert!(second_result
-            .unwrap_err()
-            .contains("Inherited devices '2,3' are not all in newly allocated devices"));
+        assert_eq!(second_result, Ok("4,5".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+    }
+
+    #[test]
+    #[serial]
+    fn test_empty_env_no_remapped_flag() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "");
+        let first_allocated = vec!["2".to_string(), "3".to_string()];
+        let first_result = remap_visible_devices(&first_allocated);
+        assert_eq!(first_result, Ok("2,3".to_string()));
+        assert!(env::var("TF_REMAPPED").is_err());
+
+        let second_allocated = vec!["4".to_string(), "5".to_string()];
+        let second_result = remap_visible_devices(&second_allocated);
+        assert_eq!(second_result, Ok("4,5".to_string()));
 
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
