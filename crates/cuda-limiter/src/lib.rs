@@ -114,6 +114,38 @@ pub(crate) fn mock_shm_path() -> Option<PathBuf> {
         .ok()
 }
 
+fn remap_visible_devices(
+    original_env: Option<&str>,
+    allocated_devices: &[String],
+) -> Result<String, String> {
+    let Some(original) = original_env else {
+        return Ok(allocated_devices.join(","));
+    };
+
+    let trimmed = original.trim();
+    if trimmed.is_empty() {
+        return Ok(allocated_devices.join(","));
+    }
+
+    if trimmed.contains(',') {
+        return Ok(allocated_devices.join(","));
+    }
+
+    let virtual_id = trimmed
+        .parse::<usize>()
+        .map_err(|_| format!("Invalid device ID in CUDA_VISIBLE_DEVICES: '{}'", trimmed))?;
+
+    if virtual_id >= allocated_devices.len() {
+        return Err(format!(
+            "Virtual device ID {} out of range (only {} device(s) allocated)",
+            virtual_id,
+            allocated_devices.len()
+        ));
+    }
+
+    Ok(allocated_devices[virtual_id].clone())
+}
+
 fn init_limiter() {
     static LIMITER_INITIALIZED: Once = Once::new();
     LIMITER_INITIALIZED.call_once(|| {
@@ -206,11 +238,32 @@ fn init_limiter() {
             }
 
             if !device_indices.is_empty() {
-                let visible_devices = device_indices.join(",");
-                tracing::info!(
-                    "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
-                    &visible_devices
-                );
+                let original_env = env::var("CUDA_VISIBLE_DEVICES").ok();
+                let visible_devices = match remap_visible_devices(
+                    original_env.as_deref(),
+                    &device_indices,
+                ) {
+                    Ok(devices) => devices,
+                    Err(err) => {
+                        record_limiter_error(err);
+                        return;
+                    }
+                };
+
+                if let Some(ref original) = original_env {
+                    tracing::info!(
+                        "Remapping CUDA_VISIBLE_DEVICES from '{}' to '{}' (allocated devices: {})",
+                        original,
+                        &visible_devices,
+                        device_indices.join(",")
+                    );
+                } else {
+                    tracing::info!(
+                        "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
+                        &visible_devices
+                    );
+                }
+
                 env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
                 env::set_var("NVIDIA_VISIBLE_DEVICES", &visible_devices);
             }
@@ -563,5 +616,129 @@ pub(crate) fn is_nvidia_smi() -> bool {
     match fs::read_to_string("/proc/self/cmdline") {
         Ok(cmdline) => cmdline.contains("nvidia-smi"),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remap_single_device_valid_first() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(Some("0"), &allocated);
+        assert_eq!(result, Ok("2".to_string()));
+    }
+
+    #[test]
+    fn test_remap_single_device_valid_second() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(Some("1"), &allocated);
+        assert_eq!(result, Ok("3".to_string()));
+    }
+
+    #[test]
+    fn test_remap_single_device_out_of_range() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(Some("2"), &allocated);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Virtual device ID 2 out of range"));
+    }
+
+    #[test]
+    fn test_remap_single_device_out_of_range_large() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(Some("10"), &allocated);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Virtual device ID 10 out of range"));
+    }
+
+    #[test]
+    fn test_remap_multiple_devices_no_remap() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(Some("0,1"), &allocated);
+        assert_eq!(result, Ok("2,3".to_string()));
+    }
+
+    #[test]
+    fn test_remap_multiple_devices_with_spaces() {
+        let allocated = vec!["2".to_string(), "3".to_string(), "5".to_string()];
+        let result = remap_visible_devices(Some("0, 1, 2"), &allocated);
+        assert_eq!(result, Ok("2,3,5".to_string()));
+    }
+
+    #[test]
+    fn test_remap_no_original_env() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(None, &allocated);
+        assert_eq!(result, Ok("2,3".to_string()));
+    }
+
+    #[test]
+    fn test_remap_empty_original_env() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(Some(""), &allocated);
+        assert_eq!(result, Ok("2,3".to_string()));
+    }
+
+    #[test]
+    fn test_remap_whitespace_only_original_env() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(Some("  "), &allocated);
+        assert_eq!(result, Ok("2,3".to_string()));
+    }
+
+    #[test]
+    fn test_remap_empty_allocated_devices() {
+        let allocated: Vec<String> = vec![];
+        let result = remap_visible_devices(Some("0"), &allocated);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Virtual device ID 0 out of range"));
+    }
+
+    #[test]
+    fn test_remap_invalid_device_id_letters() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(Some("abc"), &allocated);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid device ID"));
+    }
+
+    #[test]
+    fn test_remap_invalid_device_id_special_chars() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(Some("@#$"), &allocated);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid device ID"));
+    }
+
+    #[test]
+    fn test_remap_single_device_with_whitespace() {
+        let allocated = vec!["2".to_string(), "3".to_string()];
+        let result = remap_visible_devices(Some("  1  "), &allocated);
+        assert_eq!(result, Ok("3".to_string()));
+    }
+
+    #[test]
+    fn test_remap_single_allocated_device() {
+        let allocated = vec!["5".to_string()];
+        let result = remap_visible_devices(Some("0"), &allocated);
+        assert_eq!(result, Ok("5".to_string()));
+    }
+
+    #[test]
+    fn test_remap_single_allocated_device_out_of_range() {
+        let allocated = vec!["5".to_string()];
+        let result = remap_visible_devices(Some("1"), &allocated);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Virtual device ID 1 out of range"));
     }
 }
