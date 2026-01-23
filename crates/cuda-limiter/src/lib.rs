@@ -114,10 +114,17 @@ pub(crate) fn mock_shm_path() -> Option<PathBuf> {
         .ok()
 }
 
-fn remap_visible_devices(
-    original_env: Option<&str>,
-    allocated_devices: &[String],
-) -> Result<String, String> {
+fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String> {
+    let original_env = env::var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES")
+        .ok()
+        .or_else(|| env::var("CUDA_VISIBLE_DEVICES").ok());
+
+    if env::var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES").is_err() {
+        if let Some(ref original) = original_env {
+            env::set_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES", original);
+        }
+    }
+
     let Some(original) = original_env else {
         return Ok(allocated_devices.join(","));
     };
@@ -238,19 +245,23 @@ fn init_limiter() {
             }
 
             if !device_indices.is_empty() {
-                let original_env = env::var("CUDA_VISIBLE_DEVICES").ok();
-                let visible_devices =
-                    match remap_visible_devices(original_env.as_deref(), &device_indices) {
-                        Ok(devices) => devices,
-                        Err(err) => {
-                            record_limiter_error(err);
-                            return;
-                        }
-                    };
+                device_indices.sort_by_key(|id| id.parse::<u32>().unwrap_or(u32::MAX));
 
-                if let Some(ref original) = original_env {
+                let visible_devices = match remap_visible_devices(&device_indices) {
+                    Ok(devices) => devices,
+                    Err(err) => {
+                        record_limiter_error(err);
+                        return;
+                    }
+                };
+
+                let original_for_log = env::var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES")
+                    .ok()
+                    .or_else(|| env::var("CUDA_VISIBLE_DEVICES").ok());
+
+                if let Some(ref original) = original_for_log {
                     tracing::info!(
-                        "Remapping CUDA_VISIBLE_DEVICES from '{}' to '{}' (allocated devices: {})",
+                        "Remapping CUDA_VISIBLE_DEVICES from original '{}' to '{}' (allocated devices: {})",
                         original,
                         &visible_devices,
                         device_indices.join(",")
@@ -621,123 +632,264 @@ pub(crate) fn is_nvidia_smi() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_remap_single_device_valid_first() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(Some("0"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert_eq!(result, Ok("2".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_single_device_valid_second() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "1");
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(Some("1"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert_eq!(result, Ok("3".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_single_device_out_of_range() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "2");
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(Some("2"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
             .contains("Virtual device ID 2 out of range"));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_single_device_out_of_range_large() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "10");
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(Some("10"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
             .contains("Virtual device ID 10 out of range"));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_multiple_devices_no_remap() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "0,1");
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(Some("0,1"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert_eq!(result, Ok("2,3".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_multiple_devices_with_spaces() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "0, 1, 2");
         let allocated = vec!["2".to_string(), "3".to_string(), "5".to_string()];
-        let result = remap_visible_devices(Some("0, 1, 2"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert_eq!(result, Ok("2,3,5".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_no_original_env() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(None, &allocated);
+        let result = remap_visible_devices(&allocated);
         assert_eq!(result, Ok("2,3".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_empty_original_env() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "");
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(Some(""), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert_eq!(result, Ok("2,3".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_whitespace_only_original_env() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "  ");
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(Some("  "), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert_eq!(result, Ok("2,3".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_empty_allocated_devices() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let allocated: Vec<String> = vec![];
-        let result = remap_visible_devices(Some("0"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
             .contains("Virtual device ID 0 out of range"));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_invalid_device_id_letters() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "abc");
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(Some("abc"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid device ID"));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_invalid_device_id_special_chars() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "@#$");
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(Some("@#$"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid device ID"));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_single_device_with_whitespace() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "  1  ");
         let allocated = vec!["2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(Some("  1  "), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert_eq!(result, Ok("3".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_single_allocated_device() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let allocated = vec!["5".to_string()];
-        let result = remap_visible_devices(Some("0"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert_eq!(result, Ok("5".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 
     #[test]
+    #[serial]
     fn test_remap_single_allocated_device_out_of_range() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "1");
         let allocated = vec!["5".to_string()];
-        let result = remap_visible_devices(Some("1"), &allocated);
+        let result = remap_visible_devices(&allocated);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
             .contains("Virtual device ID 1 out of range"));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+    }
+
+    #[test]
+    #[serial]
+    fn test_remap_prevents_double_remap() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "0");
+        let first_allocated = vec!["1".to_string(), "2".to_string()];
+        let first_result = remap_visible_devices(&first_allocated);
+        assert_eq!(first_result, Ok("1".to_string()));
+
+        env::set_var("CUDA_VISIBLE_DEVICES", "1");
+        let second_allocated = vec!["3".to_string(), "4".to_string()];
+        let second_result = remap_visible_devices(&second_allocated);
+
+        assert_eq!(second_result, Ok("3".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_ORIGINAL_CUDA_VISIBLE_DEVICES");
     }
 }
