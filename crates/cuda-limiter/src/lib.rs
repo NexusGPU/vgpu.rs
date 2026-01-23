@@ -124,7 +124,6 @@ fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String>
 
     let original = env::var("CUDA_VISIBLE_DEVICES").ok();
     let Some(original) = original else {
-        env::set_var("TF_REMAPPED", "1");
         return Ok(allocated_devices.join(","));
     };
 
@@ -247,6 +246,9 @@ fn init_limiter() {
             if !device_indices.is_empty() {
                 device_indices.sort_by_key(|id| id.parse::<u32>().unwrap_or(u32::MAX));
 
+                let is_inherited = env::var("TF_REMAPPED").is_ok();
+                let original = env::var("CUDA_VISIBLE_DEVICES").ok();
+
                 let visible_devices = match remap_visible_devices(&device_indices) {
                     Ok(devices) => devices,
                     Err(err) => {
@@ -255,27 +257,24 @@ fn init_limiter() {
                     }
                 };
 
-                if env::var("TF_REMAPPED").is_ok() {
+                if is_inherited {
                     tracing::info!(
                         "Device inherited, CUDA_VISIBLE_DEVICES set to '{}' (allocated devices: {})",
                         &visible_devices,
                         device_indices.join(",")
                     );
+                } else if let Some(ref original) = original {
+                    tracing::info!(
+                        "Remapping CUDA_VISIBLE_DEVICES from '{}' to '{}' (allocated devices: {})",
+                        original,
+                        &visible_devices,
+                        device_indices.join(",")
+                    );
                 } else {
-                    let original = env::var("CUDA_VISIBLE_DEVICES").ok();
-                    if let Some(ref original) = original {
-                        tracing::info!(
-                            "Remapping CUDA_VISIBLE_DEVICES from '{}' to '{}' (allocated devices: {})",
-                            original,
-                            &visible_devices,
-                            device_indices.join(",")
-                        );
-                    } else {
-                        tracing::info!(
-                            "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
-                            &visible_devices
-                        );
-                    }
+                    tracing::info!(
+                        "Setting CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES to {}",
+                        &visible_devices
+                    );
                 }
 
                 env::set_var("CUDA_VISIBLE_DEVICES", &visible_devices);
