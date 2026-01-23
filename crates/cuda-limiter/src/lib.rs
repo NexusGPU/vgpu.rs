@@ -239,16 +239,14 @@ fn init_limiter() {
 
             if !device_indices.is_empty() {
                 let original_env = env::var("CUDA_VISIBLE_DEVICES").ok();
-                let visible_devices = match remap_visible_devices(
-                    original_env.as_deref(),
-                    &device_indices,
-                ) {
-                    Ok(devices) => devices,
-                    Err(err) => {
-                        record_limiter_error(err);
-                        return;
-                    }
-                };
+                let visible_devices =
+                    match remap_visible_devices(original_env.as_deref(), &device_indices) {
+                        Ok(devices) => devices,
+                        Err(err) => {
+                            record_limiter_error(err);
+                            return;
+                        }
+                    };
 
                 if let Some(ref original) = original_env {
                     tracing::info!(
