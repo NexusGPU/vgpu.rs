@@ -120,15 +120,13 @@ fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String>
             let trimmed = current.trim();
 
             if trimmed.contains(',') {
-                let inherited_devices: Vec<String> = trimmed
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .collect();
-                
+                let inherited_devices: Vec<String> =
+                    trimmed.split(',').map(|s| s.trim().to_string()).collect();
+
                 let all_in_allocation = inherited_devices
                     .iter()
                     .all(|dev| allocated_devices.contains(dev));
-                
+
                 if all_in_allocation {
                     return Ok(trimmed.to_string());
                 } else {
