@@ -675,6 +675,7 @@ mod tests {
             pod_name: "test-pod".to_string(),
             containers: Some(vec!["test-container".to_string()]),
             gpu_uuids: Some(vec!["GPU-test-123".to_string()]),
+            container_gpu_uuids: None,
             qos_level: Some(QosLevel::Medium),
             tflops_request: Some(5.0),
             tflops_limit: Some(10.0),

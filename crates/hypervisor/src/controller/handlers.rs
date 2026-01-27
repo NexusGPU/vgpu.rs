@@ -22,6 +22,12 @@ use crate::core::pod::PodManager;
 use api_types::AutoFreezeConfig;
 use utils::shared_memory::traits::SharedMemoryAccess;
 
+/// Query parameters for pod info request
+#[derive(Debug, Deserialize)]
+pub struct PodInfoQuery {
+    pub container_name: Option<String>,
+}
+
 /// Query parameters for process initialization
 #[derive(Debug, Deserialize)]
 pub struct ProcessInitQuery {
@@ -33,6 +39,7 @@ pub struct ProcessInitQuery {
 #[handler]
 pub async fn get_pod_info<M, P, D, T>(
     req: &Request,
+    query: Query<PodInfoQuery>,
     pod_manager: Data<&Arc<PodManager<M, P, D, T>>>,
     auto_freeze_config: Data<&Arc<AutoFreezeAndResume>>,
 ) -> poem::Result<poem::web::Json<PodInfoResponse>>
@@ -88,10 +95,42 @@ where
             })
     });
 
-    let pod_info = PodInfo {
-        pod_name: pod_entry.pod_name.clone(),
-        namespace: pod_entry.namespace.clone(),
-        gpu_uuids: pod_entry
+    // Select GPU UUIDs based on container name if provided
+    let gpu_uuids = if let Some(container_name) = &query.container_name {
+        // Try to get container-specific GPU list
+        if let Some(container_gpu_map) = &pod_entry.container_gpu_uuids {
+            if let Some(container_gpus) = container_gpu_map.get(container_name) {
+                container_gpus
+                    .iter()
+                    .map(|uuid| uuid.replace("gpu-", "GPU-"))
+                    .collect()
+            } else {
+                // Container name not found in mapping, fallback to pod-level gpu_uuids
+                pod_entry
+                    .gpu_uuids
+                    .map(|uuids| {
+                        uuids
+                            .into_iter()
+                            .map(|uuid| uuid.replace("gpu-", "GPU-"))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+        } else {
+            // No container-level mapping, use pod-level gpu_uuids
+            pod_entry
+                .gpu_uuids
+                .map(|uuids| {
+                    uuids
+                        .into_iter()
+                        .map(|uuid| uuid.replace("gpu-", "GPU-"))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+    } else {
+        // No container_name provided, use pod-level gpu_uuids
+        pod_entry
             .gpu_uuids
             .map(|uuids| {
                 uuids
@@ -99,7 +138,13 @@ where
                     .map(|uuid| uuid.replace("gpu-", "GPU-"))
                     .collect()
             })
-            .unwrap_or_default(),
+            .unwrap_or_default()
+    };
+
+    let pod_info = PodInfo {
+        pod_name: pod_entry.pod_name.clone(),
+        namespace: pod_entry.namespace.clone(),
+        gpu_uuids,
         tflops_limit: pod_entry.tflops_limit,
         vram_limit: pod_entry.vram_limit,
         qos_level: pod_entry.qos_level.map(|qos| qos.into()),
