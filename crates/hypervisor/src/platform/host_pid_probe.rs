@@ -69,6 +69,45 @@ pub enum HostPidProbeError {
 
 impl Error for HostPidProbeError {}
 
+/// Parses environment variables to extract pod name, namespace, and container name.
+///
+/// # Arguments
+///
+/// * `environ_data` - The content of `/proc/{pid}/environ` file
+///
+/// # Returns
+///
+/// A tuple of (pod_name, namespace, container_name) if all required variables are found
+///
+/// # Errors
+///
+/// Returns [`HostPidProbeError::ParseError`] if required environment variables are not found
+pub fn parse_pod_environment_variables(
+    environ_data: &str,
+) -> Result<(String, String, String), HostPidProbeError> {
+    let mut pod_name = None;
+    let mut namespace = None;
+    let mut container_name = None;
+
+    for env_var in environ_data.split('\0') {
+        if let Some(value) = env_var.strip_prefix("POD_NAME=") {
+            pod_name = Some(value.to_string());
+        } else if let Some(value) = env_var.strip_prefix("POD_NAMESPACE=") {
+            namespace = Some(value.to_string());
+        } else if let Some(value) = env_var.strip_prefix("CONTAINER_NAME=") {
+            container_name = Some(value.to_string());
+        }
+    }
+
+    match (pod_name, namespace, container_name) {
+        (Some(pod), Some(ns), Some(container)) => Ok((pod, ns, container)),
+        _ => Err(HostPidProbeError::ParseError {
+            message: "POD_NAME, POD_NAMESPACE, or CONTAINER_NAME not found in environment"
+                .to_string(),
+        }),
+    }
+}
+
 type SubscriptionSender = oneshot::Sender<PodProcessInfo>;
 type ActiveSubscriptions = Arc<Mutex<HashMap<SubscriptionRequest, SubscriptionSender>>>;
 
@@ -376,8 +415,7 @@ impl HostPidProbe {
         }
 
         // Extract pod name, namespace, and container name from environment
-        let (pod_name, namespace, container_name) =
-            Self::parse_environment_variables(&environ_data)?;
+        let (pod_name, namespace, container_name) = parse_pod_environment_variables(&environ_data)?;
 
         // Read status file to get namespace PID
         let status_path = format!("/proc/{pid}/status");
@@ -397,37 +435,6 @@ impl HostPidProbe {
             namespace,
             container_name,
         })
-    }
-
-    /// Parses environment variables to extract pod name, namespace, and container name.
-    ///
-    /// # Errors
-    ///
-    /// - [`HostPidProbeError::ParseError`] if required environment variables are not found
-    fn parse_environment_variables(
-        environ_data: &str,
-    ) -> Result<(String, String, String), HostPidProbeError> {
-        let mut pod_name = None;
-        let mut namespace = None;
-        let mut container_name = None;
-
-        for env_var in environ_data.split('\0') {
-            if let Some(value) = env_var.strip_prefix("POD_NAME=") {
-                pod_name = Some(value.to_string());
-            } else if let Some(value) = env_var.strip_prefix("POD_NAMESPACE=") {
-                namespace = Some(value.to_string());
-            } else if let Some(value) = env_var.strip_prefix("CONTAINER_NAME=") {
-                container_name = Some(value.to_string());
-            }
-        }
-
-        match (pod_name, namespace, container_name) {
-            (Some(pod), Some(ns), Some(container)) => Ok((pod, ns, container)),
-            _ => Err(HostPidProbeError::ParseError {
-                message: "POD_NAME, POD_NAMESPACE, or CONTAINER_NAME not found in environment"
-                    .to_string(),
-            }),
-        }
     }
 
     /// Parses the status file to extract the container PID from NSpid.
@@ -492,7 +499,7 @@ mod tests {
     fn parse_environment_variables_success() {
         let environ_data = "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=my-namespace\0CONTAINER_NAME=my-container\0HOME=/root\0";
 
-        let result = HostPidProbe::parse_environment_variables(environ_data);
+        let result = parse_pod_environment_variables(environ_data);
 
         assert!(
             result.is_ok(),
@@ -508,15 +515,15 @@ mod tests {
     fn parse_environment_variables_missing_required() {
         // missing POD_NAME
         let environ_data = "PATH=/usr/bin\0CONTAINER_NAME=my-container\0HOME=/root\0";
-        assert!(HostPidProbe::parse_environment_variables(environ_data).is_err());
+        assert!(parse_pod_environment_variables(environ_data).is_err());
 
         // missing CONTAINER_NAME
         let environ_data = "POD_NAME=my-pod\0POD_NAMESPACE=my-namespace\0";
-        assert!(HostPidProbe::parse_environment_variables(environ_data).is_err());
+        assert!(parse_pod_environment_variables(environ_data).is_err());
 
         // missing POD_NAMESPACE
         let environ_data = "POD_NAME=my-pod\0CONTAINER_NAME=my-container\0";
-        assert!(HostPidProbe::parse_environment_variables(environ_data).is_err());
+        assert!(parse_pod_environment_variables(environ_data).is_err());
     }
 
     #[test]
@@ -683,13 +690,13 @@ mod tests {
         // The early filter checks for "POD_NAME=" at the start of a variable,
         // so this should pass the early filter but fail parsing
         let environ_data = "PATH=/usr/bin\0MY_VAR=contains POD_NAME= in value\0HOME=/root\0";
-        let result = HostPidProbe::parse_environment_variables(environ_data);
+        let result = parse_pod_environment_variables(environ_data);
         assert!(result.is_err(), "Should not treat this as a pod process");
 
         // Test case 2: actual pod environment with POD_NAME= prefix
         let environ_data =
             "PATH=/usr/bin\0POD_NAME=my-pod\0POD_NAMESPACE=ns\0CONTAINER_NAME=container\0";
-        let result = HostPidProbe::parse_environment_variables(environ_data);
+        let result = parse_pod_environment_variables(environ_data);
         assert!(result.is_ok(), "Should correctly parse pod environment");
 
         // Test case 3: verify the early filter logic - no POD_NAME= at all

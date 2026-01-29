@@ -62,6 +62,8 @@ pub struct PodResourceInfo {
     pub vram_limit: Option<u64>,
     /// List of GPU UUIDs
     pub gpu_uuids: Option<Vec<String>>,
+    /// Container-level GPU mappings: container name -> GPU UUIDs
+    pub container_gpu_uuids: Option<BTreeMap<String, Vec<String>>>,
     /// QoS level for the workload
     pub qos_level: Option<QosLevel>,
     /// Container names

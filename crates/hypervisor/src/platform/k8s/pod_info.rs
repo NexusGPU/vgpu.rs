@@ -60,6 +60,32 @@ impl TensorFusionPodInfo {
             pod_info.gpu_uuids = Some(value.split(',').map(|s| s.to_string()).collect());
         }
 
+        // Parse container-level GPU mappings
+        if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/container-gpus")) {
+            let container_gpus: BTreeMap<String, Vec<String>> = serde_json::from_str(value)
+                .change_context(KubernetesError::AnnotationParseError {
+                    message: format!("Invalid container-gpus JSON format: {value}"),
+                })?;
+
+            // Clean and validate: trim keys/values, filter empty GPU lists
+            let cleaned_container_gpus: BTreeMap<String, Vec<String>> = container_gpus
+                .into_iter()
+                .map(|(container_name, gpu_list)| {
+                    let cleaned_gpus: Vec<String> = gpu_list
+                        .into_iter()
+                        .map(|gpu| gpu.trim().to_string())
+                        .filter(|gpu| !gpu.is_empty())
+                        .collect();
+                    (container_name.trim().to_string(), cleaned_gpus)
+                })
+                .filter(|(_, gpus)| !gpus.is_empty())
+                .collect();
+
+            if !cleaned_container_gpus.is_empty() {
+                pod_info.container_gpu_uuids = Some(cleaned_container_gpus);
+            }
+        }
+
         // Parse QoS level
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/qos")) {
             // Extract worker configuration from annotations
@@ -98,6 +124,7 @@ impl TensorFusionPodInfo {
             || self.0.tflops_limit.is_some()
             || self.0.vram_limit.is_some()
             || self.0.gpu_uuids.is_some()
+            || self.0.container_gpu_uuids.is_some()
             || self.0.qos_level.is_some()
             || self.0.containers.is_some()
     }
@@ -431,5 +458,160 @@ mod tests {
                 "GPU-22222222-2222-2222-2222-222222222222".to_string()
             ])
         );
+    }
+
+    #[test]
+    fn from_pod_annotations_with_container_gpus_single_container() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/container-gpus".to_string(),
+            r#"{"container1": ["GPU-aaaa", "GPU-bbbb"]}"#.to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(result.has_annotations());
+        assert!(result.0.container_gpu_uuids.is_some());
+
+        let container_gpus = result.0.container_gpu_uuids.unwrap();
+        assert_eq!(container_gpus.len(), 1);
+        assert_eq!(
+            container_gpus.get("container1"),
+            Some(&vec!["GPU-aaaa".to_string(), "GPU-bbbb".to_string()])
+        );
+    }
+
+    #[test]
+    fn from_pod_annotations_with_container_gpus_multiple_containers() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/container-gpus".to_string(),
+            r#"{"container1": ["GPU-1111"], "container2": ["GPU-2222", "GPU-3333"]}"#.to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(result.has_annotations());
+        assert!(result.0.container_gpu_uuids.is_some());
+
+        let container_gpus = result.0.container_gpu_uuids.unwrap();
+        assert_eq!(container_gpus.len(), 2);
+        assert_eq!(
+            container_gpus.get("container1"),
+            Some(&vec!["GPU-1111".to_string()])
+        );
+        assert_eq!(
+            container_gpus.get("container2"),
+            Some(&vec!["GPU-2222".to_string(), "GPU-3333".to_string()])
+        );
+    }
+
+    #[test]
+    fn from_pod_annotations_with_container_gpus_trim_whitespace() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/container-gpus".to_string(),
+            r#"{"  container1  ": ["  GPU-aaaa  ", "GPU-bbbb"]}"#.to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(result.has_annotations());
+        let container_gpus = result.0.container_gpu_uuids.unwrap();
+        assert_eq!(
+            container_gpus.get("container1"),
+            Some(&vec!["GPU-aaaa".to_string(), "GPU-bbbb".to_string()])
+        );
+    }
+
+    #[test]
+    fn from_pod_annotations_with_container_gpus_filter_empty() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/container-gpus".to_string(),
+            r#"{"container1": ["GPU-aaaa", "", "GPU-bbbb"], "container2": []}"#.to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(result.has_annotations());
+        let container_gpus = result.0.container_gpu_uuids.unwrap();
+
+        assert_eq!(container_gpus.len(), 1);
+        assert_eq!(
+            container_gpus.get("container1"),
+            Some(&vec!["GPU-aaaa".to_string(), "GPU-bbbb".to_string()])
+        );
+        assert_eq!(container_gpus.get("container2"), None);
+    }
+
+    #[test]
+    fn from_pod_annotations_with_container_gpus_invalid_json() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/container-gpus".to_string(),
+            "not a valid json".to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new());
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_pod_annotations_with_both_gpu_ids_and_container_gpus() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/gpu-ids".to_string(),
+            "GPU-default-1,GPU-default-2".to_string(),
+        );
+        annotations.insert(
+            "tensor-fusion.ai/container-gpus".to_string(),
+            r#"{"container1": ["GPU-container-1"]}"#.to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(result.has_annotations());
+        assert_eq!(
+            result.0.gpu_uuids,
+            Some(vec![
+                "GPU-default-1".to_string(),
+                "GPU-default-2".to_string()
+            ])
+        );
+        assert!(result.0.container_gpu_uuids.is_some());
+        let container_gpus = result.0.container_gpu_uuids.unwrap();
+        assert_eq!(
+            container_gpus.get("container1"),
+            Some(&vec!["GPU-container-1".to_string()])
+        );
+    }
+
+    #[test]
+    fn from_pod_annotations_with_container_gpus_empty_after_cleaning() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/container-gpus".to_string(),
+            r#"{"container1": ["", "  "]}"#.to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(!result.has_annotations());
+        assert_eq!(result.0.container_gpu_uuids, None);
     }
 }
