@@ -65,7 +65,7 @@ fn request_pod_info(
     hypervisor_ip: &str,
     hypervisor_port: &str,
 ) -> Result<PodConfig, Report<ConfigError>> {
-    let token = read_service_account_token()?;
+    let token = read_service_account_token_if_needed(hypervisor_ip)?;
     let container_pid = std::process::id();
     let container_name = env::var("CONTAINER_NAME").unwrap_or_default();
 
@@ -80,8 +80,11 @@ fn request_pod_info(
 
     let mut request = client
         .get(&url)
-        .bearer_auth(&token)
         .query(&[("container_pid", container_pid.to_string())]);
+
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
 
     if !container_name.is_empty() {
         request = request.query(&[("container_name", container_name)]);
@@ -136,7 +139,7 @@ fn request_process_init(
     hypervisor_port: &str,
     container_name: &str,
 ) -> Result<ProcessConfig, Report<ConfigError>> {
-    let token = read_service_account_token()?;
+    let token = read_service_account_token_if_needed(hypervisor_ip)?;
     let container_pid = std::process::id();
 
     tracing::Span::current().record("container_pid", container_pid);
@@ -148,13 +151,16 @@ fn request_process_init(
 
     let request_start = std::time::Instant::now();
 
-    let response = client
-        .post(&url)
-        .bearer_auth(&token)
-        .query(&[
-            ("container_pid", container_pid.to_string()),
-            ("container_name", container_name.to_string()),
-        ])
+    let mut request = client.post(&url).query(&[
+        ("container_pid", container_pid.to_string()),
+        ("container_name", container_name.to_string()),
+    ]);
+
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request
         .send()
         .change_context(ConfigError::HttpRequest)
         .attach_with(|| format!("Failed to send POST request to {url}"))?;
@@ -212,6 +218,37 @@ fn read_service_account_token() -> Result<String, Report<ConfigError>> {
     tracing::debug!("Successfully read service account token");
 
     Ok(token.to_string())
+}
+
+fn read_service_account_token_if_needed(
+    hypervisor_ip: &str,
+) -> Result<Option<String>, Report<ConfigError>> {
+    if is_local_hypervisor(hypervisor_ip) {
+        tracing::debug!(
+            hypervisor_ip = hypervisor_ip,
+            "Local hypervisor detected, skipping service account token"
+        );
+        return Ok(None);
+    }
+
+    let token = read_service_account_token()?;
+    Ok(Some(token))
+}
+
+fn is_local_hypervisor(hypervisor_ip: &str) -> bool {
+    if hypervisor_ip.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+
+    if hypervisor_ip.starts_with("127.") {
+        return true;
+    }
+
+    if hypervisor_ip == "::1" {
+        return true;
+    }
+
+    false
 }
 
 struct TimeoutConfig {
