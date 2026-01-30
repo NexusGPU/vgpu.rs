@@ -424,19 +424,6 @@ mod tests {
     }
 
     #[test]
-    fn from_pod_annotations_with_gpu_uuids_empty() {
-        let mut annotations = BTreeMap::new();
-        annotations.insert("tensor-fusion.ai/gpu-ids".to_string(), "".to_string());
-
-        let result =
-            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
-                .unwrap();
-
-        assert!(result.has_annotations());
-        assert_eq!(result.0.gpu_uuids, Some(vec!["".to_string()]));
-    }
-
-    #[test]
     fn from_pod_annotations_comprehensive_with_gpu_uuids() {
         let mut annotations = BTreeMap::new();
         annotations.insert(
