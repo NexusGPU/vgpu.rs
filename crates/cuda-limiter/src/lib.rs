@@ -1054,14 +1054,8 @@ mod tests {
     fn test_limit_boundary_conditions() {
         // up_limit = 100 (boundary)
         assert!(is_tflops_unlimited(100), "up_limit=100 should be unlimited");
-        assert!(
-            !is_tflops_unlimited(99),
-            "up_limit=99 should be limited"
-        );
-        assert!(
-            is_tflops_unlimited(101),
-            "up_limit=101 should be unlimited"
-        );
+        assert!(!is_tflops_unlimited(99), "up_limit=99 should be limited");
+        assert!(is_tflops_unlimited(101), "up_limit=101 should be unlimited");
 
         // mem_limit = total_memory (boundary)
         let total_mem = 1024 * 1024 * 1024; // 1GB
@@ -1112,7 +1106,7 @@ mod hook_skip_tests {
         // Check TF_SKIP_HOOKS_IF_NO_LIMIT environment variable
         env::var("TF_SKIP_HOOKS_IF_NO_LIMIT")
             .ok()
-            .map_or(false, |v| v == "true" || v == "1")
+            .is_some_and(|v| v == "true" || v == "1")
             && is_unlimited
     }
 
