@@ -289,6 +289,54 @@ pub fn parse_duration(duration_str: &str) -> Result<Duration, Report<ConfigError
         .change_context(ConfigError::InvalidResponse)
         .attach_with(|| format!("Failed to parse duration: {duration_str}"))
 }
+#[tracing::instrument(level = "debug")]
+fn read_service_account_token() -> Result<String, Report<ConfigError>> {
+    let token_path = DEFAULT_SERVICE_ACCOUNT_TOKEN_PATH.to_string();
+    let token = fs::read_to_string(&token_path)
+        .change_context(ConfigError::TokenRead)
+        .attach_with(|| format!("Failed to read token from {token_path}"))?;
+
+    let token = token.trim();
+
+    if token.is_empty() {
+        return Err(Report::new(ConfigError::EmptyToken).attach("Service account token is empty"));
+    }
+
+    tracing::debug!(token_path = %token_path, "Successfully read service account token");
+
+    Ok(token.to_string())
+}
+
+fn read_service_account_token_if_needed(
+    hypervisor_ip: &str,
+) -> Result<Option<String>, Report<ConfigError>> {
+    if is_local_hypervisor(hypervisor_ip) {
+        tracing::debug!(
+            hypervisor_ip = hypervisor_ip,
+            "Local hypervisor detected, skipping service account token"
+        );
+        return Ok(None);
+    }
+
+    let token = read_service_account_token()?;
+    Ok(Some(token))
+}
+
+fn is_local_hypervisor(hypervisor_ip: &str) -> bool {
+    if hypervisor_ip.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+
+    if hypervisor_ip.starts_with("127.") {
+        return true;
+    }
+
+    if hypervisor_ip == "::1" {
+        return true;
+    }
+
+    false
+}
 
 #[cfg(test)]
 mod tests {
@@ -408,52 +456,4 @@ mod tests {
         let result = super::parse_duration("invalid");
         assert!(result.is_err(), "Should fail on invalid format");
     }
-}
-#[tracing::instrument(level = "debug")]
-fn read_service_account_token() -> Result<String, Report<ConfigError>> {
-    let token_path = DEFAULT_SERVICE_ACCOUNT_TOKEN_PATH.to_string();
-    let token = fs::read_to_string(&token_path)
-        .change_context(ConfigError::TokenRead)
-        .attach_with(|| format!("Failed to read token from {token_path}"))?;
-
-    let token = token.trim();
-
-    if token.is_empty() {
-        return Err(Report::new(ConfigError::EmptyToken).attach("Service account token is empty"));
-    }
-
-    tracing::debug!(token_path = %token_path, "Successfully read service account token");
-
-    Ok(token.to_string())
-}
-
-fn read_service_account_token_if_needed(
-    hypervisor_ip: &str,
-) -> Result<Option<String>, Report<ConfigError>> {
-    if is_local_hypervisor(hypervisor_ip) {
-        tracing::debug!(
-            hypervisor_ip = hypervisor_ip,
-            "Local hypervisor detected, skipping service account token"
-        );
-        return Ok(None);
-    }
-
-    let token = read_service_account_token()?;
-    Ok(Some(token))
-}
-
-fn is_local_hypervisor(hypervisor_ip: &str) -> bool {
-    if hypervisor_ip.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-
-    if hypervisor_ip.starts_with("127.") {
-        return true;
-    }
-
-    if hypervisor_ip == "::1" {
-        return true;
-    }
-
-    false
 }
