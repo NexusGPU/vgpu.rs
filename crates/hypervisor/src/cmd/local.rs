@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use erl::{DeviceController, DeviceControllerConfig};
@@ -236,6 +236,12 @@ async fn run_erl_control_loop(
         let now = Instant::now();
         let delta = now.duration_since(last_update);
         last_update = now;
+
+        let heartbeat = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        shm_handle.get_state().update_heartbeat(heartbeat);
 
         for (device_idx, controller) in &mut controllers {
             // Get current GPU utilization from NVML
