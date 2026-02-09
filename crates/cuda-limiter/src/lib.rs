@@ -115,19 +115,13 @@ pub(crate) fn mock_shm_path() -> Option<PathBuf> {
 }
 
 fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String> {
-    if env::var("TF_REMAPPED").is_ok() {
+    if let Ok(last_remapped) = env::var("TF_REMAPPED") {
         if let Ok(current) = env::var("CUDA_VISIBLE_DEVICES") {
-            let trimmed = current.trim();
-            if !trimmed.is_empty() {
-                let already_remapped = trimmed
-                    .split(',')
-                    .all(|d| allocated_devices.iter().any(|a| a == d.trim()));
-                if already_remapped {
-                    return Ok(trimmed.to_string());
-                }
-                // Values not in allocated set (e.g. child process with externally set
-                // CUDA_VISIBLE_DEVICES), fall through to re-remap
+            if current.trim() == last_remapped {
+                return Ok(last_remapped);
             }
+            // CUDA_VISIBLE_DEVICES was changed externally (e.g. by framework in child
+            // process), fall through to re-remap
         } else {
             return Ok(allocated_devices.join(","));
         }
@@ -135,8 +129,9 @@ fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String>
 
     let original = env::var("CUDA_VISIBLE_DEVICES").ok();
     let Some(original) = original else {
-        env::set_var("TF_REMAPPED", "1");
-        return Ok(allocated_devices.join(","));
+        let result = allocated_devices.join(",");
+        env::set_var("TF_REMAPPED", &result);
+        return Ok(result);
     };
 
     let trimmed = original.trim();
@@ -160,8 +155,9 @@ fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String>
         ));
     }
 
-    env::set_var("TF_REMAPPED", "1");
-    Ok(allocated_devices[virtual_id].clone())
+    let result = allocated_devices[virtual_id].clone();
+    env::set_var("TF_REMAPPED", &result);
+    Ok(result)
 }
 
 fn init_limiter() {
@@ -890,21 +886,22 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_inherited_device_remaps_when_value_not_in_allocated() {
+    fn test_inherited_device_remaps_when_value_changed() {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
+        // First remap: virtual 0 → physical "1", TF_REMAPPED="1"
         env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let first_allocated = vec!["1".to_string(), "2".to_string()];
         let first_result = remap_visible_devices(&first_allocated);
         assert_eq!(first_result, Ok("1".to_string()));
+        assert_eq!(env::var("TF_REMAPPED"), Ok("1".to_string()));
 
-        // Simulate child process: TF_REMAPPED inherited, but CUDA_VISIBLE_DEVICES
-        // changed externally to a virtual index not in allocated set
-        env::set_var("CUDA_VISIBLE_DEVICES", "1");
+        // Simulate child process: framework sets CUDA_VISIBLE_DEVICES=0 (virtual index)
+        env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let second_allocated = vec!["3".to_string(), "4".to_string()];
         let second_result = remap_visible_devices(&second_allocated);
-        assert_eq!(second_result, Ok("4".to_string()));
+        assert_eq!(second_result, Ok("3".to_string()));
 
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
@@ -912,15 +909,17 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_inherited_device_in_new_allocation() {
+    fn test_inherited_value_unchanged_same_process() {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
+        // First remap: virtual 0 → physical "1", TF_REMAPPED="1"
         env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let first_allocated = vec!["1".to_string(), "2".to_string()];
         let first_result = remap_visible_devices(&first_allocated);
         assert_eq!(first_result, Ok("1".to_string()));
 
+        // Same process re-init: CUDA_VISIBLE_DEVICES matches TF_REMAPPED → keep as-is
         env::set_var("CUDA_VISIBLE_DEVICES", "1");
         let second_allocated = vec!["1".to_string(), "3".to_string()];
         let second_result = remap_visible_devices(&second_allocated);
@@ -936,14 +935,16 @@ mod tests {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
+        // First remap: virtual 0 → physical "2", TF_REMAPPED="2"
         env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let first_allocated = vec!["2".to_string(), "3".to_string()];
         let first_result = remap_visible_devices(&first_allocated);
         assert_eq!(first_result, Ok("2".to_string()));
-        assert!(env::var("TF_REMAPPED").is_ok());
+        assert_eq!(env::var("TF_REMAPPED"), Ok("2".to_string()));
 
-        env::set_var("CUDA_VISIBLE_DEVICES", "2,3");
-        let second_allocated = vec!["2".to_string(), "3".to_string(), "4".to_string()];
+        // Child process: framework sets CUDA_VISIBLE_DEVICES="0,1" (multi virtual indices)
+        env::set_var("CUDA_VISIBLE_DEVICES", "0,1");
+        let second_allocated = vec!["2".to_string(), "3".to_string()];
         let second_result = remap_visible_devices(&second_allocated);
         assert_eq!(second_result, Ok("2,3".to_string()));
 
@@ -1031,11 +1032,12 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_inherited_single_device_not_in_allocated_remaps() {
+    fn test_inherited_single_device_changed_remaps() {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
-        env::set_var("TF_REMAPPED", "1");
+        // Parent remapped to "1,2", child framework sets CUDA_VISIBLE_DEVICES=0
+        env::set_var("TF_REMAPPED", "1,2");
         env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let allocated = vec!["1".to_string(), "2".to_string()];
         let result = remap_visible_devices(&allocated);
@@ -1047,11 +1049,29 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_inherited_multi_device_not_in_allocated_remaps() {
+    fn test_inherited_second_device_changed_remaps() {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
-        env::set_var("TF_REMAPPED", "1");
+        // Parent remapped to "1,2", child framework sets CUDA_VISIBLE_DEVICES=1
+        env::set_var("TF_REMAPPED", "1,2");
+        env::set_var("CUDA_VISIBLE_DEVICES", "1");
+        let allocated = vec!["1".to_string(), "2".to_string()];
+        let result = remap_visible_devices(&allocated);
+        assert_eq!(result, Ok("2".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+    }
+
+    #[test]
+    #[serial]
+    fn test_inherited_multi_device_changed_remaps() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+
+        // Parent remapped to "3", child framework sets CUDA_VISIBLE_DEVICES=0,1
+        env::set_var("TF_REMAPPED", "3");
         env::set_var("CUDA_VISIBLE_DEVICES", "0,1");
         let allocated = vec!["3".to_string(), "4".to_string()];
         let result = remap_visible_devices(&allocated);
@@ -1063,27 +1083,12 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_inherited_partial_match_remaps() {
+    fn test_inherited_value_unchanged_keeps_value() {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
-        env::set_var("TF_REMAPPED", "1");
-        env::set_var("CUDA_VISIBLE_DEVICES", "1,5");
-        let allocated = vec!["1".to_string(), "2".to_string(), "3".to_string()];
-        let result = remap_visible_devices(&allocated);
-        assert_eq!(result, Ok("1,2,3".to_string()));
-
-        env::remove_var("CUDA_VISIBLE_DEVICES");
-        env::remove_var("TF_REMAPPED");
-    }
-
-    #[test]
-    #[serial]
-    fn test_inherited_all_in_allocated_keeps_value() {
-        env::remove_var("CUDA_VISIBLE_DEVICES");
-        env::remove_var("TF_REMAPPED");
-
-        env::set_var("TF_REMAPPED", "1");
+        // TF_REMAPPED matches CUDA_VISIBLE_DEVICES → already remapped, return as-is
+        env::set_var("TF_REMAPPED", "2");
         env::set_var("CUDA_VISIBLE_DEVICES", "2");
         let allocated = vec!["1".to_string(), "2".to_string()];
         let result = remap_visible_devices(&allocated);
