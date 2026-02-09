@@ -171,9 +171,10 @@ async fn end_to_end_sse() -> Result<(), Box<dyn std::error::Error + Send + Sync>
     std::mem::forget(handle);
 
     // 7. verify server stats
-    let stats = server.get_client_stats(&client_id).await.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "Missing client stats")
-    })?;
+    let stats = server
+        .get_client_stats(&client_id)
+        .await
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Missing client stats"))?;
     assert_eq!(stats.completed_tasks, 1);
 
     Ok(())
