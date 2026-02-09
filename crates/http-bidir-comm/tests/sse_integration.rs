@@ -9,7 +9,8 @@ use http_bidir_comm::ClientConfig;
 use http_bidir_comm::TaskProcessor;
 use http_bidir_comm::TaskResult;
 use poem::get;
-use poem::listener::TcpListener;
+use poem::http::StatusCode;
+use poem::listener::TcpAcceptor;
 use poem::post;
 use poem::web::sse::Event;
 use poem::web::sse::SSE;
@@ -22,6 +23,7 @@ use poem::Server;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::time::sleep as async_sleep;
+use tracing::warn;
 
 type ServerType = HttpServer<TestTask, TestResult>;
 
@@ -81,12 +83,18 @@ async fn events_handler(
 async fn result_handler(
     Data(server): Data<&Arc<ServerType>>,
     Json(res): Json<TaskResult<TestResult>>,
-) {
-    let _ = server.submit_result_internal(res).await;
+) -> StatusCode {
+    match server.submit_result_internal(res).await {
+        Ok(()) => StatusCode::OK,
+        Err(err) => {
+            warn!(error = %err, "Failed to submit task result");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn end_to_end_sse() {
+async fn end_to_end_sse() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 1. start HttpServer
     let server = Arc::new(ServerType::new());
 
@@ -97,15 +105,17 @@ async fn end_to_end_sse() {
         .data(server.clone());
 
     // 3. bind random port
-    let listener = TcpListener::bind("127.0.0.1:38041");
-    let addr = "127.0.0.1:38041";
+    let std_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    std_listener.set_nonblocking(true)?;
+    let local_addr = std_listener.local_addr()?;
+    let acceptor = TcpAcceptor::from_std(std_listener)?;
+    let addr = local_addr.to_string();
 
     // run server in background
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
-            Server::new(listener).run(routes).await.unwrap();
-        });
+    tokio::spawn(async move {
+        if let Err(err) = Server::new_with_acceptor(acceptor).run(routes).await {
+            warn!(error = %err, "Server run failed");
+        }
     });
 
     // 4. enqueue task for client
@@ -117,8 +127,7 @@ async fn end_to_end_sse() {
                 value: "hello".into(),
             },
         )
-        .await
-        .unwrap();
+        .await?;
 
     // 5. run BlockingSseClient in blocking thread
     let server_url = format!("http://{addr}");
@@ -129,18 +138,44 @@ async fn end_to_end_sse() {
     let processor = Arc::new(EchoProcessor);
 
     let handle = thread::spawn(move || {
-        // create client in blocking thread to avoid panic
-        let sse_client = BlockingSseClient::<TestTask, TestResult>::new(cfg).unwrap();
-        let _ = sse_client.start("", processor);
+        let sse_client = match BlockingSseClient::<TestTask, TestResult>::new(cfg) {
+            Ok(client) => client,
+            Err(err) => {
+                warn!(error = %err, "Failed to create blocking SSE client");
+                return;
+            }
+        };
+
+        if let Err(err) = sse_client.start("", processor) {
+            warn!(error = %err, "Blocking SSE client exited");
+        }
     });
 
     // 6. wait for processing
-    async_sleep(Duration::from_secs(2)).await;
+    let wait_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(stats) = server.get_client_stats(&client_id).await {
+            if stats.completed_tasks == 1 {
+                break;
+            }
+        }
+
+        if tokio::time::Instant::now() >= wait_deadline {
+            break;
+        }
+
+        async_sleep(Duration::from_millis(100)).await;
+    }
 
     // prevent dropping of runtime inside client thread to avoid panic
     std::mem::forget(handle);
 
     // 7. verify server stats
-    let stats = server.get_client_stats(&client_id).await.unwrap();
+    let stats = server
+        .get_client_stats(&client_id)
+        .await
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Missing client stats"))?;
     assert_eq!(stats.completed_tasks, 1);
+
+    Ok(())
 }
