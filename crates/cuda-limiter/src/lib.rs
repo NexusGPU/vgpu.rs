@@ -254,7 +254,7 @@ fn init_limiter() {
             if !device_indices.is_empty() {
                 device_indices.sort_by_key(|id| id.parse::<u32>().unwrap_or(u32::MAX));
 
-                let is_inherited = env::var("TF_REMAPPED").is_ok();
+                let old_remapped = env::var("TF_REMAPPED").ok();
                 let original = env::var("CUDA_VISIBLE_DEVICES").ok();
 
                 let visible_devices = match remap_visible_devices(&device_indices) {
@@ -264,6 +264,8 @@ fn init_limiter() {
                         return;
                     }
                 };
+
+                let is_inherited = old_remapped.as_deref() == Some(visible_devices.as_str());
 
                 if is_inherited {
                     tracing::info!(
