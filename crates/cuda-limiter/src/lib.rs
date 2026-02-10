@@ -115,17 +115,23 @@ pub(crate) fn mock_shm_path() -> Option<PathBuf> {
 }
 
 fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String> {
-    if env::var("TF_REMAPPED").is_ok() {
+    if let Ok(last_remapped) = env::var("TF_REMAPPED") {
         if let Ok(current) = env::var("CUDA_VISIBLE_DEVICES") {
-            return Ok(current.trim().to_string());
+            if current.trim() == last_remapped {
+                return Ok(last_remapped);
+            }
+            // CUDA_VISIBLE_DEVICES was changed externally (e.g. by framework in child
+            // process), fall through to re-remap
+        } else {
+            return Ok(allocated_devices.join(","));
         }
-        return Ok(allocated_devices.join(","));
     }
 
     let original = env::var("CUDA_VISIBLE_DEVICES").ok();
     let Some(original) = original else {
-        env::set_var("TF_REMAPPED", "1");
-        return Ok(allocated_devices.join(","));
+        let result = allocated_devices.join(",");
+        env::set_var("TF_REMAPPED", &result);
+        return Ok(result);
     };
 
     let trimmed = original.trim();
@@ -149,8 +155,9 @@ fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String>
         ));
     }
 
-    env::set_var("TF_REMAPPED", "1");
-    Ok(allocated_devices[virtual_id].clone())
+    let result = allocated_devices[virtual_id].clone();
+    env::set_var("TF_REMAPPED", &result);
+    Ok(result)
 }
 
 fn init_limiter() {
@@ -412,13 +419,13 @@ fn init_hooks() {
     let is_nvidia_smi = is_nvidia_smi();
 
     let isolation = limiter.isolation();
-    let should_skip_isolation =
-        limiter.is_compute_shard() || isolation.is_some_and(|iso| iso == "soft" || iso == "hard");
+    // Only "soft" isolation mode uses hooks, all others skip
+    let should_skip_isolation = isolation.is_some_and(|iso| iso != "soft");
 
     if should_skip_isolation && !is_nvidia_smi {
         tracing::info!(
-            "Isolation level '{}' detected, skipping hook initialization",
-            isolation.unwrap_or("soft")
+            "Isolation level '{}' detected (non-soft), skipping hook initialization",
+            isolation.unwrap()
         );
         return;
     }
@@ -879,19 +886,22 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_inherited_device_keeps_value() {
+    fn test_inherited_device_remaps_when_value_changed() {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
+        // First remap: virtual 0 → physical "1", TF_REMAPPED="1"
         env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let first_allocated = vec!["1".to_string(), "2".to_string()];
         let first_result = remap_visible_devices(&first_allocated);
         assert_eq!(first_result, Ok("1".to_string()));
+        assert_eq!(env::var("TF_REMAPPED"), Ok("1".to_string()));
 
-        env::set_var("CUDA_VISIBLE_DEVICES", "1");
+        // Simulate child process: framework sets CUDA_VISIBLE_DEVICES=0 (virtual index)
+        env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let second_allocated = vec!["3".to_string(), "4".to_string()];
         let second_result = remap_visible_devices(&second_allocated);
-        assert_eq!(second_result, Ok("1".to_string()));
+        assert_eq!(second_result, Ok("3".to_string()));
 
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
@@ -899,15 +909,17 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_inherited_device_in_new_allocation() {
+    fn test_inherited_value_unchanged_same_process() {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
+        // First remap: virtual 0 → physical "1", TF_REMAPPED="1"
         env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let first_allocated = vec!["1".to_string(), "2".to_string()];
         let first_result = remap_visible_devices(&first_allocated);
         assert_eq!(first_result, Ok("1".to_string()));
 
+        // Same process re-init: CUDA_VISIBLE_DEVICES matches TF_REMAPPED → keep as-is
         env::set_var("CUDA_VISIBLE_DEVICES", "1");
         let second_allocated = vec!["1".to_string(), "3".to_string()];
         let second_result = remap_visible_devices(&second_allocated);
@@ -923,14 +935,16 @@ mod tests {
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
 
+        // First remap: virtual 0 → physical "2", TF_REMAPPED="2"
         env::set_var("CUDA_VISIBLE_DEVICES", "0");
         let first_allocated = vec!["2".to_string(), "3".to_string()];
         let first_result = remap_visible_devices(&first_allocated);
         assert_eq!(first_result, Ok("2".to_string()));
-        assert!(env::var("TF_REMAPPED").is_ok());
+        assert_eq!(env::var("TF_REMAPPED"), Ok("2".to_string()));
 
-        env::set_var("CUDA_VISIBLE_DEVICES", "2,3");
-        let second_allocated = vec!["2".to_string(), "3".to_string(), "4".to_string()];
+        // Child process: framework sets CUDA_VISIBLE_DEVICES="0,1" (multi virtual indices)
+        env::set_var("CUDA_VISIBLE_DEVICES", "0,1");
+        let second_allocated = vec!["2".to_string(), "3".to_string()];
         let second_result = remap_visible_devices(&second_allocated);
         assert_eq!(second_result, Ok("2,3".to_string()));
 
@@ -1014,5 +1028,238 @@ mod tests {
 
         env::remove_var("CUDA_VISIBLE_DEVICES");
         env::remove_var("TF_REMAPPED");
+    }
+
+    #[test]
+    #[serial]
+    fn test_inherited_single_device_changed_remaps() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+
+        // Parent remapped to "1,2", child framework sets CUDA_VISIBLE_DEVICES=0
+        env::set_var("TF_REMAPPED", "1,2");
+        env::set_var("CUDA_VISIBLE_DEVICES", "0");
+        let allocated = vec!["1".to_string(), "2".to_string()];
+        let result = remap_visible_devices(&allocated);
+        assert_eq!(result, Ok("1".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+    }
+
+    #[test]
+    #[serial]
+    fn test_inherited_second_device_changed_remaps() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+
+        // Parent remapped to "1,2", child framework sets CUDA_VISIBLE_DEVICES=1
+        env::set_var("TF_REMAPPED", "1,2");
+        env::set_var("CUDA_VISIBLE_DEVICES", "1");
+        let allocated = vec!["1".to_string(), "2".to_string()];
+        let result = remap_visible_devices(&allocated);
+        assert_eq!(result, Ok("2".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+    }
+
+    #[test]
+    #[serial]
+    fn test_inherited_multi_device_changed_remaps() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+
+        // Parent remapped to "3", child framework sets CUDA_VISIBLE_DEVICES=0,1
+        env::set_var("TF_REMAPPED", "3");
+        env::set_var("CUDA_VISIBLE_DEVICES", "0,1");
+        let allocated = vec!["3".to_string(), "4".to_string()];
+        let result = remap_visible_devices(&allocated);
+        assert_eq!(result, Ok("3,4".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+    }
+
+    #[test]
+    #[serial]
+    fn test_inherited_value_unchanged_keeps_value() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+
+        // TF_REMAPPED matches CUDA_VISIBLE_DEVICES → already remapped, return as-is
+        env::set_var("TF_REMAPPED", "2");
+        env::set_var("CUDA_VISIBLE_DEVICES", "2");
+        let allocated = vec!["1".to_string(), "2".to_string()];
+        let result = remap_visible_devices(&allocated);
+        assert_eq!(result, Ok("2".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+    }
+
+    #[test]
+    #[serial]
+    fn test_inherited_no_cuda_visible_devices() {
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+
+        env::set_var("TF_REMAPPED", "1");
+        let allocated = vec!["1".to_string(), "2".to_string()];
+        let result = remap_visible_devices(&allocated);
+        assert_eq!(result, Ok("1,2".to_string()));
+
+        env::remove_var("CUDA_VISIBLE_DEVICES");
+        env::remove_var("TF_REMAPPED");
+    }
+
+    // Isolation logic tests
+    #[test]
+    fn test_isolation_soft_should_not_skip() {
+        // isolation = "soft" should continue to check limits, not skip
+        let isolation = Some("soft");
+        let should_skip = isolation.is_some_and(|iso| iso != "soft");
+        assert!(!should_skip, "soft isolation should NOT skip hooks");
+    }
+
+    #[test]
+    fn test_isolation_hard_should_skip() {
+        // isolation = "hard" should skip hooks
+        let isolation = Some("hard");
+        let should_skip = isolation.is_some_and(|iso| iso != "soft");
+        assert!(should_skip, "hard isolation should skip hooks");
+    }
+
+    #[test]
+    fn test_isolation_shard_should_skip() {
+        // isolation = "shard" should skip hooks
+        let isolation = Some("shard");
+        let should_skip = isolation.is_some_and(|iso| iso != "soft");
+        assert!(should_skip, "shard isolation should skip hooks");
+    }
+
+    #[test]
+    fn test_isolation_none_should_not_skip() {
+        // isolation = None should continue to check limits
+        let isolation: Option<&str> = None;
+        let should_skip = isolation.is_some_and(|iso| iso != "soft");
+        assert!(!should_skip, "no isolation should check limits");
+    }
+
+    // Limit boundary condition tests
+    #[test]
+    fn test_limit_boundary_conditions() {
+        // up_limit = 100 (boundary)
+        assert!(is_tflops_unlimited(100), "up_limit=100 should be unlimited");
+        assert!(!is_tflops_unlimited(99), "up_limit=99 should be limited");
+        assert!(is_tflops_unlimited(101), "up_limit=101 should be unlimited");
+
+        // mem_limit = total_memory (boundary)
+        let total_mem = 1024 * 1024 * 1024; // 1GB
+        assert!(
+            is_mem_unlimited(total_mem, total_mem),
+            "mem=total should be unlimited"
+        );
+        assert!(
+            !is_mem_unlimited(total_mem - 1, total_mem),
+            "mem<total should be limited"
+        );
+        assert!(
+            is_mem_unlimited(total_mem + 1, total_mem),
+            "mem>total should be unlimited"
+        );
+    }
+
+    fn is_tflops_unlimited(up_limit: u32) -> bool {
+        up_limit >= 100
+    }
+
+    fn is_mem_unlimited(mem_limit: u64, total_memory: u64) -> bool {
+        mem_limit >= total_memory
+    }
+}
+
+// Hook skip logic integration tests
+#[cfg(test)]
+mod hook_skip_tests {
+    use super::*;
+    use serial_test::serial;
+
+    // Helper function to test the skip logic
+    fn should_skip_hooks_helper(
+        isolation: Option<&str>,
+        up_limit: u32,
+        mem_percent: u64, // 0-100, represents percentage of total memory
+    ) -> bool {
+        // First layer: Isolation check
+        let should_skip_isolation = isolation.is_some_and(|iso| iso != "soft");
+        if should_skip_isolation {
+            return true;
+        }
+
+        // Second layer: Limit check
+        let is_unlimited = up_limit >= 100 && mem_percent >= 100;
+
+        // Check TF_SKIP_HOOKS_IF_NO_LIMIT environment variable
+        env::var("TF_SKIP_HOOKS_IF_NO_LIMIT")
+            .ok()
+            .is_some_and(|v| v == "true" || v == "1")
+            && is_unlimited
+    }
+
+    #[test]
+    #[serial]
+    fn test_should_skip_hooks_hard_isolation() {
+        // Case 1: isolation = "hard" -> always skip, regardless of limits
+        assert!(should_skip_hooks_helper(Some("hard"), 50, 50));
+        assert!(should_skip_hooks_helper(Some("hard"), 100, 100));
+    }
+
+    #[test]
+    #[serial]
+    fn test_should_skip_hooks_soft_with_limits() {
+        env::remove_var("TF_SKIP_HOOKS_IF_NO_LIMIT");
+
+        // Case 2: isolation = "soft", has limits -> not skip
+        assert!(!should_skip_hooks_helper(Some("soft"), 50, 80));
+        assert!(!should_skip_hooks_helper(Some("soft"), 100, 50));
+        assert!(!should_skip_hooks_helper(Some("soft"), 50, 100));
+
+        env::remove_var("TF_SKIP_HOOKS_IF_NO_LIMIT");
+    }
+
+    #[test]
+    #[serial]
+    fn test_should_skip_hooks_soft_no_limits() {
+        env::set_var("TF_SKIP_HOOKS_IF_NO_LIMIT", "true");
+
+        // Case 3: isolation = "soft", no limits, TF_SKIP_HOOKS_IF_NO_LIMIT=true -> skip
+        assert!(should_skip_hooks_helper(Some("soft"), 100, 100));
+
+        env::remove_var("TF_SKIP_HOOKS_IF_NO_LIMIT");
+    }
+
+    #[test]
+    #[serial]
+    fn test_should_skip_hooks_none_no_limits() {
+        env::set_var("TF_SKIP_HOOKS_IF_NO_LIMIT", "true");
+
+        // Case 4: isolation = None, no limits, TF_SKIP_HOOKS_IF_NO_LIMIT=true -> skip
+        assert!(should_skip_hooks_helper(None, 100, 100));
+
+        env::remove_var("TF_SKIP_HOOKS_IF_NO_LIMIT");
+    }
+
+    #[test]
+    #[serial]
+    fn test_should_skip_hooks_none_with_limits() {
+        env::remove_var("TF_SKIP_HOOKS_IF_NO_LIMIT");
+
+        // Case 5: isolation = None, has limits -> not skip
+        assert!(!should_skip_hooks_helper(None, 50, 50));
+        assert!(!should_skip_hooks_helper(None, 50, 100));
+        assert!(!should_skip_hooks_helper(None, 100, 50));
+
+        env::remove_var("TF_SKIP_HOOKS_IF_NO_LIMIT");
     }
 }

@@ -37,52 +37,66 @@ impl TensorFusionPodInfo {
 
         // Parse TFLOPS request
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/tflops-request")) {
-            pod_info.tflops_request = Some(parse_tflops_value(value)?);
+            if !value.trim().is_empty() {
+                pod_info.tflops_request = Some(parse_tflops_value(value)?);
+            }
         }
 
         // Parse VRAM request
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/vram-request")) {
-            pod_info.vram_request = Some(parse_memory_value(value)?);
+            if !value.trim().is_empty() {
+                pod_info.vram_request = Some(parse_memory_value(value)?);
+            }
         }
 
         // Parse TFLOPS limit
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/tflops-limit")) {
-            pod_info.tflops_limit = Some(parse_tflops_value(value)?);
+            if !value.trim().is_empty() {
+                pod_info.tflops_limit = Some(parse_tflops_value(value)?);
+            }
         }
 
         // Parse VRAM limit
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/vram-limit")) {
-            pod_info.vram_limit = Some(parse_memory_value(value)?);
+            if !value.trim().is_empty() {
+                pod_info.vram_limit = Some(parse_memory_value(value)?);
+            }
         }
 
         // Parse GPU UUIDs
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/gpu-ids")) {
-            pod_info.gpu_uuids = Some(value.split(',').map(|s| s.to_string()).collect());
+            if !value.trim().is_empty() {
+                pod_info.gpu_uuids = Some(value.split(',').map(|s| s.to_string()).collect());
+            }
         }
 
         // Parse container-level GPU mappings
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/container-gpus")) {
-            let container_gpus: BTreeMap<String, Vec<String>> = serde_json::from_str(value)
-                .change_context(KubernetesError::AnnotationParseError {
-                    message: format!("Invalid container-gpus JSON format: {value}"),
-                })?;
+            if value.trim().is_empty() {
+                // Skip empty string values
+            } else {
+                let container_gpus: BTreeMap<String, Vec<String>> = serde_json::from_str(value)
+                    .change_context(KubernetesError::AnnotationParseError {
+                        message: format!("Invalid container-gpus JSON format: {value}"),
+                    })?;
 
-            // Clean and validate: trim keys/values, filter empty GPU lists
-            let cleaned_container_gpus: BTreeMap<String, Vec<String>> = container_gpus
-                .into_iter()
-                .map(|(container_name, gpu_list)| {
-                    let cleaned_gpus: Vec<String> = gpu_list
-                        .into_iter()
-                        .map(|gpu| gpu.trim().to_string())
-                        .filter(|gpu| !gpu.is_empty())
-                        .collect();
-                    (container_name.trim().to_string(), cleaned_gpus)
-                })
-                .filter(|(_, gpus)| !gpus.is_empty())
-                .collect();
+                // Clean and validate: trim keys/values, filter empty GPU lists
+                let cleaned_container_gpus: BTreeMap<String, Vec<String>> = container_gpus
+                    .into_iter()
+                    .map(|(container_name, gpu_list)| {
+                        let cleaned_gpus: Vec<String> = gpu_list
+                            .into_iter()
+                            .map(|gpu| gpu.trim().to_string())
+                            .filter(|gpu| !gpu.is_empty())
+                            .collect();
+                        (container_name.trim().to_string(), cleaned_gpus)
+                    })
+                    .filter(|(_, gpus)| !gpus.is_empty())
+                    .collect();
 
-            if !cleaned_container_gpus.is_empty() {
-                pod_info.container_gpu_uuids = Some(cleaned_container_gpus);
+                if !cleaned_container_gpus.is_empty() {
+                    pod_info.container_gpu_uuids = Some(cleaned_container_gpus);
+                }
             }
         }
 
@@ -102,7 +116,9 @@ impl TensorFusionPodInfo {
 
         // Parse container names
         if let Some(value) = annotations.get(&format!("{TENSOR_FUSION_DOMAIN}/inject-container")) {
-            pod_info.containers = Some(value.split(',').map(|s| s.to_string()).collect());
+            if !value.trim().is_empty() {
+                pod_info.containers = Some(value.split(',').map(|s| s.to_string()).collect());
+            }
         }
 
         // Parse isolation level
@@ -408,19 +424,6 @@ mod tests {
     }
 
     #[test]
-    fn from_pod_annotations_with_gpu_uuids_empty() {
-        let mut annotations = BTreeMap::new();
-        annotations.insert("tensor-fusion.ai/gpu-ids".to_string(), "".to_string());
-
-        let result =
-            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
-                .unwrap();
-
-        assert!(result.has_annotations());
-        assert_eq!(result.0.gpu_uuids, Some(vec!["".to_string()]));
-    }
-
-    #[test]
     fn from_pod_annotations_comprehensive_with_gpu_uuids() {
         let mut annotations = BTreeMap::new();
         annotations.insert(
@@ -613,5 +616,123 @@ mod tests {
 
         assert!(!result.has_annotations());
         assert_eq!(result.0.container_gpu_uuids, None);
+    }
+
+    #[test]
+    fn from_pod_annotations_with_empty_string_values() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/tflops-request".to_string(),
+            "".to_string(),
+        );
+        annotations.insert("tensor-fusion.ai/tflops-limit".to_string(), "".to_string());
+        annotations.insert("tensor-fusion.ai/vram-request".to_string(), "".to_string());
+        annotations.insert("tensor-fusion.ai/vram-limit".to_string(), "".to_string());
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new());
+
+        assert!(result.is_ok());
+        let pod_info = result.unwrap();
+        assert!(!pod_info.has_annotations());
+        assert_eq!(pod_info.0.tflops_request, None);
+        assert_eq!(pod_info.0.tflops_limit, None);
+        assert_eq!(pod_info.0.vram_request, None);
+        assert_eq!(pod_info.0.vram_limit, None);
+    }
+
+    #[test]
+    fn from_pod_annotations_with_partial_empty_strings() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/tflops-request".to_string(),
+            "".to_string(),
+        );
+        annotations.insert("tensor-fusion.ai/tflops-limit".to_string(), "".to_string());
+        annotations.insert(
+            "tensor-fusion.ai/vram-request".to_string(),
+            "10Gi".to_string(),
+        );
+        annotations.insert(
+            "tensor-fusion.ai/vram-limit".to_string(),
+            "10Gi".to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(result.has_annotations());
+        assert_eq!(result.0.tflops_request, None);
+        assert_eq!(result.0.tflops_limit, None);
+        assert_eq!(result.0.vram_request, Some(10 * 1024 * 1024 * 1024));
+        assert_eq!(result.0.vram_limit, Some(10 * 1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn from_pod_annotations_with_empty_gpu_ids() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert("tensor-fusion.ai/gpu-ids".to_string(), "".to_string());
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(!result.has_annotations());
+        assert_eq!(result.0.gpu_uuids, None);
+    }
+
+    #[test]
+    fn from_pod_annotations_with_empty_container_gpus() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/container-gpus".to_string(),
+            "".to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(!result.has_annotations());
+        assert_eq!(result.0.container_gpu_uuids, None);
+    }
+
+    #[test]
+    fn from_pod_annotations_with_empty_inject_container() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/inject-container".to_string(),
+            "".to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new())
+                .unwrap();
+
+        assert!(!result.has_annotations());
+        assert_eq!(result.0.containers, None);
+    }
+
+    #[test]
+    fn from_pod_annotations_with_whitespace_only_values() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "tensor-fusion.ai/tflops-request".to_string(),
+            "   ".to_string(),
+        );
+        annotations.insert(
+            "tensor-fusion.ai/vram-limit".to_string(),
+            "\t\n".to_string(),
+        );
+
+        let result =
+            TensorFusionPodInfo::from_pod_annotations_labels(&annotations, &BTreeMap::new());
+
+        assert!(result.is_ok());
+        let pod_info = result.unwrap();
+        assert!(!pod_info.has_annotations());
+        assert_eq!(pod_info.0.tflops_request, None);
+        assert_eq!(pod_info.0.vram_limit, None);
     }
 }
