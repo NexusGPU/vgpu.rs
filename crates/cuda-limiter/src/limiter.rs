@@ -97,6 +97,7 @@ pub(crate) struct Limiter {
     /// GPU UUIDs
     gpu_idx_uuids: Vec<(usize, String)>,
     /// compute shard
+    #[allow(dead_code)]
     compute_shard: bool,
     /// isolation level
     isolation: Option<String>,
@@ -582,6 +583,7 @@ impl Limiter {
     }
 
     /// Check if the limiter is a compute shard
+    #[allow(dead_code)]
     pub(crate) fn is_compute_shard(&self) -> bool {
         self.compute_shard
     }
