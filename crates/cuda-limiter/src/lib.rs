@@ -5,7 +5,6 @@ use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -104,16 +103,6 @@ pub(crate) fn report_limiter_not_initialized() {
     }
 }
 
-pub(crate) fn mock_shm_path() -> Option<PathBuf> {
-    env::var("TF_SHM_FILE")
-        .map(PathBuf::from)
-        .map(|mut p| {
-            p.pop();
-            p
-        })
-        .ok()
-}
-
 fn remap_visible_devices(allocated_devices: &[String]) -> Result<String, String> {
     if let Ok(last_remapped) = env::var("TF_REMAPPED") {
         if let Ok(current) = env::var("CUDA_VISIBLE_DEVICES") {
@@ -194,49 +183,21 @@ fn init_limiter() {
             }
         };
 
-        let config = if mock_shm_path().is_none() {
-            let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
-                Some((ip, port)) => (ip, port),
-                None => {
-                    record_limiter_error(
-                        "HYPERVISOR_IP or HYPERVISOR_PORT not set; skipping limiter init"
-                            .to_string(),
-                    );
-                    return;
-                }
-            };
+        let (hypervisor_ip, hypervisor_port) = match config::get_hypervisor_config() {
+            Some((ip, port)) => (ip, port),
+            None => {
+                record_limiter_error(
+                    "HYPERVISOR_IP or HYPERVISOR_PORT not set; skipping limiter init".to_string(),
+                );
+                return;
+            }
+        };
 
-            // Get device indices from environment variable
-            let config = match config::get_worker_config(&hypervisor_ip, &hypervisor_port) {
-                Ok(config) => config,
-                Err(err) => {
-                    record_limiter_error(format!("failed to get device configs: {err}"));
-                    return;
-                }
-            };
-            config
-        } else {
-            // In mock/test mode, derive UUIDs from either CUDA_VISIBLE_DEVICES or list all devices
-            let uuids = match env::var("TF_VISIBLE_DEVICES") {
-                Ok(visible_devices) => visible_devices
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>(),
-                Err(_) => {
-                    record_limiter_error(
-                        "TF_VISIBLE_DEVICES not set in mock/test mode; skipping limiter init"
-                            .to_string(),
-                    );
-                    return;
-                }
-            };
-
-            config::PodConfig {
-                gpu_uuids: uuids,
-                compute_shard: false,
-                isolation: None,
-                auto_freeze: None,
+        let config = match config::get_worker_config(&hypervisor_ip, &hypervisor_port) {
+            Ok(config) => config,
+            Err(err) => {
+                record_limiter_error(format!("failed to get device configs: {err}"));
+                return;
             }
         };
 
