@@ -6,7 +6,7 @@ use notify::Config;
 use notify::Event;
 use notify::RecommendedWatcher;
 use notify::Watcher;
-use rand::Rng;
+use rand::RngExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
