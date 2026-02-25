@@ -27,7 +27,7 @@ struct GpuHardwareInfo {
 static GPU_HARDWARE_CACHE: LazyLock<DashMap<u32, GpuHardwareInfo>> = LazyLock::new(DashMap::new);
 
 /// Creates device configs from PodResourceInfo (pod metadata) for pod-level registration
-#[tracing::instrument(skip(nvml), fields(pod = %pod_info.pod_name, namespace = %pod_info.namespace, gpu_count = pod_info.gpu_uuids.as_ref().map(|v| v.len()).unwrap_or(0)))]
+#[tracing::instrument(skip(nvml), fields(pod = %pod_info.pod_name, namespace = %pod_info.namespace))]
 pub async fn create_device_configs_from_pod_resource_info(
     pod_info: &PodResourceInfo,
     nvml: &Nvml,
