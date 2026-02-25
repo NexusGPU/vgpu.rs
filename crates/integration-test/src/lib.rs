@@ -530,11 +530,13 @@ impl TestCoordinatorManager {
         F: Fn(u32) -> Fut,
         Fut: std::future::Future<Output = ()>,
     {
-        let device_uuid = get_gpu_uuid(self.gpu_index)?;
+        // Avoid logging or otherwise propagating the real GPU UUID, which may be sensitive.
+        // Instead, use a non-sensitive identifier derived from the GPU index.
+        let redacted_device_id = format!("gpu-{}", self.gpu_index);
         let (elapsed_ms, output) = run_cuda_and_measure(
             memory_bytes,
             self.gpu_index,
-            &device_uuid,
+            &redacted_device_id,
             iterations,
             is_limiter_enabled,
             post_start,
