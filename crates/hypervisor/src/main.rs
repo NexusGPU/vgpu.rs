@@ -28,6 +28,18 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Daemon(daemon_args) => cmd::run_daemon(*daemon_args).await,
+        Commands::Local(local_args) => {
+            // Initialize logging for local mode
+            if local_args.verbose {
+                std::env::set_var("TF_LOG_LEVEL", "debug");
+            } else {
+                std::env::set_var("TF_LOG_LEVEL", "info");
+            }
+            utils::logging::init();
+
+            let config = local_args.into();
+            cmd::run_local_mode(config).await
+        }
         Commands::MountShm(mount_shm_args) => cmd::run_mount_shm(mount_shm_args).await,
         Commands::ShowShm(show_shm_args) => cmd::run_show_shm(show_shm_args).await,
         Commands::ShowTuiWorkers(show_tui_workers_args) => {
