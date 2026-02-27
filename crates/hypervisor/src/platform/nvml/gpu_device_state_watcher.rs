@@ -1325,11 +1325,19 @@ mod tests {
             .extract_device_ids(&device_state, &resource_system_map)
             .unwrap();
 
-        assert_eq!(allocated.len(), 2, "time-slicing slices should be deduplicated to 2 physical GPUs");
+        assert_eq!(
+            allocated.len(),
+            2,
+            "time-slicing slices should be deduplicated to 2 physical GPUs"
+        );
         assert!(allocated.contains("gpu-aaa"));
         assert!(allocated.contains("gpu-bbb"));
 
-        assert_eq!(registered.len(), 2, "registered devices should also be deduplicated");
+        assert_eq!(
+            registered.len(),
+            2,
+            "registered devices should also be deduplicated"
+        );
         assert!(registered.contains("gpu-aaa"));
         assert!(registered.contains("gpu-bbb"));
     }
