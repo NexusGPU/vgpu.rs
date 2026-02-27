@@ -317,6 +317,11 @@ impl GpuDeviceStateWatcher {
         })
     }
 
+    /// For time-slicing, device IDs are "gpu-uuid::slice_index". GPU CRD names use only "gpu-uuid".
+    fn device_id_to_gpu_resource_name(device_id: &str) -> &str {
+        device_id.split("::").next().unwrap_or(device_id)
+    }
+
     // return (allocated_device_ids, registered_device_ids)
     fn extract_device_ids(
         &self,
@@ -332,7 +337,10 @@ impl GpuDeviceStateWatcher {
                 if resource_to_system_map.contains_key(&entry.resource_name) {
                     for device_list in entry.device_ids.values() {
                         for device_id in device_list {
-                            allocated_device_ids.insert(device_id.to_lowercase());
+                            allocated_device_ids.insert(
+                                Self::device_id_to_gpu_resource_name(&device_id.to_lowercase())
+                                    .to_string(),
+                            );
                         }
                     }
                 }
@@ -340,17 +348,26 @@ impl GpuDeviceStateWatcher {
         }
 
         if let Some(device_ids) = device_state.data.registered_devices.get("nvidia.com/gpu") {
-            registered_device_ids.extend(device_ids.iter().map(|id| id.to_lowercase()));
+            registered_device_ids.extend(
+                device_ids
+                    .iter()
+                    .map(|id| Self::device_id_to_gpu_resource_name(&id.to_lowercase()).to_string()),
+            );
         }
 
         Ok((allocated_device_ids, registered_device_ids))
     }
 
     fn log_device_allocation_details(&self, device_state: &KubeletDeviceState, device_id: &str) {
+        let device_id_lower = device_id.to_lowercase();
+        let normalized_id = Self::device_id_to_gpu_resource_name(&device_id_lower);
         if let Some(pod_device_entries) = &device_state.data.pod_device_entries {
             for entry in pod_device_entries {
                 for device_list in entry.device_ids.values() {
-                    if device_list.contains(&device_id.to_string()) {
+                    if device_list.iter().any(|d| {
+                        let lower = d.to_lowercase();
+                        Self::device_id_to_gpu_resource_name(&lower) == normalized_id
+                    }) {
                         info!(
                         "Device allocation details - PodUID: {}, ContainerName: {}, ResourceName: {}, DeviceID: {}",
                         entry.pod_uid, entry.container_name, entry.resource_name, device_id
@@ -488,13 +505,15 @@ impl GpuDeviceStateWatcher {
         device_state: &'a KubeletDeviceState,
         device_id: &str,
     ) -> Result<&'a str, Report<KubernetesError>> {
+        let device_id_lower = device_id.to_lowercase();
+        let normalized_id = Self::device_id_to_gpu_resource_name(&device_id_lower);
         if let Some(pod_device_entries) = &device_state.data.pod_device_entries {
             for entry in pod_device_entries {
                 for device_list in entry.device_ids.values() {
-                    if device_list
-                        .iter()
-                        .any(|d| d.to_lowercase() == device_id.to_lowercase())
-                    {
+                    if device_list.iter().any(|d| {
+                        let lower = d.to_lowercase();
+                        Self::device_id_to_gpu_resource_name(&lower) == normalized_id
+                    }) {
                         return Ok(&entry.resource_name);
                     }
                 }
@@ -555,8 +574,9 @@ impl GpuDeviceStateWatcher {
                 for device in &container.devices {
                     // Filter by resource_name that exists in create_resource_system_map()
                     if target_resource_names.contains(&device.resource_name) {
-                        allocated_devices
-                            .extend(device.device_ids.iter().map(|id| id.to_lowercase()));
+                        allocated_devices.extend(device.device_ids.iter().map(|id| {
+                            Self::device_id_to_gpu_resource_name(&id.to_lowercase()).to_string()
+                        }));
                         debug!(
                             "Found allocated devices for {}: {} devices in pod {}/{}, container {}",
                             device.resource_name,
@@ -1213,5 +1233,135 @@ mod tests {
         assert!(device_ids.0.contains("gpu-1"), "should contain GPU-1");
         assert!(device_ids.0.contains("gpu-2"), "should contain GPU-2");
         assert!(device_ids.0.contains("gpu-3"), "should contain GPU-3");
+    }
+
+    #[test]
+    fn test_device_id_to_gpu_resource_name() {
+        assert_eq!(
+            GpuDeviceStateWatcher::device_id_to_gpu_resource_name("gpu-xxx::3"),
+            "gpu-xxx"
+        );
+        assert_eq!(
+            GpuDeviceStateWatcher::device_id_to_gpu_resource_name("gpu-xxx::0"),
+            "gpu-xxx"
+        );
+        assert_eq!(
+            GpuDeviceStateWatcher::device_id_to_gpu_resource_name("gpu-uuid-with-dashes"),
+            "gpu-uuid-with-dashes"
+        );
+        assert_eq!(
+            GpuDeviceStateWatcher::device_id_to_gpu_resource_name("gpu-xxx::"),
+            "gpu-xxx"
+        );
+    }
+
+    #[test]
+    fn test_device_id_to_gpu_resource_name_time_slicing() {
+        assert_eq!(
+            GpuDeviceStateWatcher::device_id_to_gpu_resource_name(
+                "gpu-cb325440-1924-4c16-62d8-4a912469d26e::3"
+            ),
+            "gpu-cb325440-1924-4c16-62d8-4a912469d26e"
+        );
+        assert_eq!(
+            GpuDeviceStateWatcher::device_id_to_gpu_resource_name(
+                "gpu-d55a7b76-bee8-95ac-91fd-9853e7a11482::1"
+            ),
+            "gpu-d55a7b76-bee8-95ac-91fd-9853e7a11482"
+        );
+        assert_eq!(
+            GpuDeviceStateWatcher::device_id_to_gpu_resource_name(
+                "gpu-94589be7-da8f-9573-a5e3-5df5aab5dc14::0"
+            ),
+            "gpu-94589be7-da8f-9573-a5e3-5df5aab5dc14"
+        );
+    }
+
+    #[test]
+    fn test_extract_device_ids_with_time_slicing() {
+        let watcher = GpuDeviceStateWatcher::new("/test", KUBELET_DEVICE_STATE_PATH);
+
+        let mut device_ids = HashMap::new();
+        device_ids.insert(
+            "-1".to_string(),
+            vec![
+                "GPU-aaa::0".to_string(),
+                "GPU-aaa::1".to_string(),
+                "GPU-aaa::2".to_string(),
+                "GPU-bbb::0".to_string(),
+            ],
+        );
+
+        let pod_entry = PodDeviceEntry {
+            pod_uid: "pod-ts".to_string(),
+            container_name: "container-ts".to_string(),
+            resource_name: "nvidia.com/gpu".to_string(),
+            device_ids,
+            alloc_resp: "alloc-ts".to_string(),
+        };
+
+        let mut registered_devices = HashMap::new();
+        registered_devices.insert(
+            "nvidia.com/gpu".to_string(),
+            vec![
+                "GPU-aaa::0".to_string(),
+                "GPU-aaa::1".to_string(),
+                "GPU-aaa::2".to_string(),
+                "GPU-bbb::0".to_string(),
+                "GPU-bbb::1".to_string(),
+            ],
+        );
+
+        let device_state = KubeletDeviceState {
+            data: DeviceStateData {
+                pod_device_entries: Some(vec![pod_entry]),
+                registered_devices,
+            },
+            checksum: 99999,
+        };
+
+        let resource_system_map = GpuDeviceStateWatcher::create_resource_system_map();
+        let (allocated, registered) = watcher
+            .extract_device_ids(&device_state, &resource_system_map)
+            .unwrap();
+
+        assert_eq!(allocated.len(), 2, "time-slicing slices should be deduplicated to 2 physical GPUs");
+        assert!(allocated.contains("gpu-aaa"));
+        assert!(allocated.contains("gpu-bbb"));
+
+        assert_eq!(registered.len(), 2, "registered devices should also be deduplicated");
+        assert!(registered.contains("gpu-aaa"));
+        assert!(registered.contains("gpu-bbb"));
+    }
+
+    #[test]
+    fn test_find_resource_name_with_time_slicing() {
+        let watcher = GpuDeviceStateWatcher::new("/test", KUBELET_DEVICE_STATE_PATH);
+
+        let mut device_ids = HashMap::new();
+        device_ids.insert(
+            "-1".to_string(),
+            vec!["GPU-aaa::0".to_string(), "GPU-aaa::1".to_string()],
+        );
+
+        let pod_entry = PodDeviceEntry {
+            pod_uid: "pod-1".to_string(),
+            container_name: "c1".to_string(),
+            resource_name: "nvidia.com/gpu".to_string(),
+            device_ids,
+            alloc_resp: "alloc".to_string(),
+        };
+
+        let device_state = KubeletDeviceState {
+            data: DeviceStateData {
+                pod_device_entries: Some(vec![pod_entry]),
+                registered_devices: HashMap::new(),
+            },
+            checksum: 0,
+        };
+
+        let result = watcher.find_resource_name_for_device(&device_state, "gpu-aaa");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "nvidia.com/gpu");
     }
 }
