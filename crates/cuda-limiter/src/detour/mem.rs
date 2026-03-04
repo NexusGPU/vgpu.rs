@@ -314,7 +314,7 @@ pub(crate) unsafe fn cu_mem_get_info_v2_detour(free: *mut u64, total: *mut u64) 
             match limiter.get_pod_memory_usage(device_idx) {
                 Ok((used, mem_limit)) => {
                     *total = mem_limit;
-                    *free = mem_limit - used;
+                    *free = mem_limit.saturating_sub(used);
                     CUresult::CUDA_SUCCESS
                 }
                 Err(e @ Error::DeviceNotHealthy { .. }) => {
@@ -349,7 +349,7 @@ pub(crate) unsafe fn cu_mem_get_info_detour(free: *mut u64, total: *mut u64) -> 
             match limiter.get_pod_memory_usage(device_idx) {
                 Ok((used, mem_limit)) => {
                     *total = mem_limit;
-                    *free = mem_limit - used;
+                    *free = mem_limit.saturating_sub(used);
                     CUresult::CUDA_SUCCESS
                 }
                 Err(e @ Error::DeviceNotHealthy { .. }) => {
