@@ -258,7 +258,7 @@ jobs:
             type=raw,value=${{ needs.release.outputs.version }}_${{ matrix.arch }}
 
       - name: Setup buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to DockerHub
         uses: docker/login-action@v3
@@ -294,7 +294,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Create and push manifest for auto release
         if: github.event_name != 'workflow_dispatch'
