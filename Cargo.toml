@@ -41,7 +41,7 @@ clap = "4.6"
 once_cell = "1.21"
 kube = { version = "3.1", default-features = false }
 k8s-openapi = "0.27"
-tokio = "1.50"
+tokio = "1.51"
 tokio-stream = "0.1"
 error-stack = "0.7"
 futures = "0.3"
