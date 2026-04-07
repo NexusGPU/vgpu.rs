@@ -19,6 +19,6 @@ eventsource = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-similar-asserts = "1.5.0"
+similar-asserts = "2.0.0"
 test-log = { workspace = true }
 poem = { workspace = true, features = ["test"] }
