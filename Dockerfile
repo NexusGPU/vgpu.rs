@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 # Default path for the binary, can be overridden by build-arg
 ARG BINARY_PATH=target/release/hypervisor
