@@ -9,21 +9,37 @@ updates:
       interval: "weekly"
     assignees:
       - "0x5457"
+    groups:
+      all:
+        patterns:
+          - "*"
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "weekly"
     assignees:
       - "0x5457"
+    groups:
+      all:
+        patterns:
+          - "*"
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
     assignees:
       - "0x5457"
+    groups:
+      all:
+        patterns:
+          - "*"
   - package-ecosystem: "rust-toolchain"
     directory: "/"
     schedule:
       interval: "weekly"
     assignees:
       - "0x5457"
+    groups:
+      all:
+        patterns:
+          - "*"
