@@ -1,11 +1,39 @@
 use cudarc::driver::sys::CUdevice;
 use cudarc::driver::sys::CUresult;
 use cudarc::driver::sys::CUuuid;
-use cudarc::driver::sys::Lib;
 use libloading::Library;
 
 const PRIMARY_CUDA_LIB: &str = "libcuda.so.1";
 const FALLBACK_CUDA_LIB: &str = "libcuda.so";
+
+type CuCtxGetDevice = unsafe extern "C" fn(*mut CUdevice) -> CUresult;
+type CuDeviceGetUuidV2 = unsafe extern "C" fn(*mut CUuuid, CUdevice) -> CUresult;
+
+/// Handle to the CUDA driver library with the function pointers used by the
+/// limiter resolved up front.
+///
+/// cudarc no longer exposes a generated `Lib` struct for dynamic loading, and
+/// its built-in loader does not honor `TF_CUDA_LIB_PATH`, so we load the symbols
+/// we need ourselves (mirroring the checkpoint API loading logic).
+#[allow(non_snake_case)]
+pub struct Lib {
+    // Kept alive so the resolved function pointers remain valid.
+    _lib: Library,
+    pub cuCtxGetDevice: CuCtxGetDevice,
+    pub cuDeviceGetUuid_v2: CuDeviceGetUuidV2,
+}
+
+impl Lib {
+    unsafe fn from_library(lib: Library) -> Result<Self, libloading::Error> {
+        let cu_ctx_get_device = *lib.get::<CuCtxGetDevice>(b"cuCtxGetDevice\0")?;
+        let cu_device_get_uuid_v2 = *lib.get::<CuDeviceGetUuidV2>(b"cuDeviceGetUuid_v2\0")?;
+        Ok(Self {
+            cuCtxGetDevice: cu_ctx_get_device,
+            cuDeviceGetUuid_v2: cu_device_get_uuid_v2,
+            _lib: lib,
+        })
+    }
+}
 
 pub unsafe fn culib() -> &'static Lib {
     static LIB: std::sync::OnceLock<Lib> = std::sync::OnceLock::new();
