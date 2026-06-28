@@ -10,18 +10,15 @@ fn main() {
 }
 
 fn emit_git_variables() -> anyhow::Result<()> {
-    let mut builder = vergen_git2::Git2Builder::default();
-
-    builder.branch(true);
-    builder.commit_message(true);
-    builder.describe(true, true, None);
-    builder.sha(true);
-    builder.dirty(true);
-
-    let git2 = builder.build()?;
+    let git2 = vergen_git2::Git2::builder()
+        .branch(true)
+        .commit_message(true)
+        .describe(true, true, None)
+        .sha(true)
+        .dirty(true)
+        .build();
 
     vergen_git2::Emitter::default()
-        .fail_on_error()
         .add_instructions(&git2)?
         .emit()
 }
