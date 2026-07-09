@@ -413,7 +413,7 @@ pub(crate) async fn run_metrics<M, P, D, T>(
                             let vram_limit = pod_state.pod_info.vram_limit.unwrap_or(0) as f64;
                             let mut memory_percentage = 0.0;
 
-                            for (_pid, acc) in acc_map.iter() {
+                            for acc in acc_map.values() {
                                 memory_bytes += acc.memory_bytes / acc.count as u64;
                                 compute_percentage += acc.compute_percentage / acc.count as f64;
                                 compute_tflops += acc.compute_tflops / acc.count as f64;
@@ -462,7 +462,7 @@ pub(crate) async fn run_metrics<M, P, D, T>(
                             // Fallback: Pod not in pod_store (skip-hook process)
                             let mut memory_percentage = 0.0;
 
-                            for (_pid, acc) in acc_map.iter() {
+                            for acc in acc_map.values() {
                                 memory_bytes += acc.memory_bytes / acc.count as u64;
                                 compute_percentage += acc.compute_percentage / acc.count as f64;
                                 compute_tflops += acc.compute_tflops / acc.count as f64;
