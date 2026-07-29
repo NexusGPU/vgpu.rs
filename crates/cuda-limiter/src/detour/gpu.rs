@@ -315,10 +315,6 @@ pub(crate) unsafe extern "C" fn cu_init_detour(flags: c_uint) -> CUresult {
     static WORKER_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static WORKER_INIT_MUTEX: Mutex<()> = Mutex::new(());
 
-    if crate::mock_shm_path().is_some() {
-        WORKER_INITIALIZED.store(true, Ordering::Release);
-    }
-
     // Check if already initialized successfully
     if !WORKER_INITIALIZED.load(Ordering::Acquire) {
         // Use mutex to ensure only one thread attempts initialization at a time

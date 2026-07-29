@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use utils::version;
 
 use crate::config::daemon::DaemonArgs;
+use crate::config::local::LocalArgs;
 use crate::config::shm::{MountShmArgs, ShowShmArgs, ShowTuiWorkersArgs};
 
 #[derive(Parser)]
@@ -15,6 +16,8 @@ pub struct Cli {
 pub enum Commands {
     /// Run hypervisor daemon
     Daemon(Box<DaemonArgs>),
+    /// Run in local testing mode (lightweight ERL controller only)
+    Local(LocalArgs),
     /// Mount shared memory to host path
     #[command(name = "mount-shm")]
     MountShm(MountShmArgs),

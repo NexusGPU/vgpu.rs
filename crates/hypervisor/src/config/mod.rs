@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod daemon;
 pub mod gpu;
+pub mod local;
 pub mod shm;
 
 /// ERL (Elastic Rate Limiter) configuration passed from daemon CLI to the PID controller.
@@ -83,4 +84,5 @@ impl From<&daemon::DaemonArgs> for ErlConfig {
 pub use cli::*;
 pub use daemon::*;
 pub use gpu::*;
+pub use local::*;
 pub use shm::*;
